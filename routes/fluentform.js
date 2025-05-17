@@ -1,4 +1,5 @@
 require('dotenv').config();
+const procesarCompra = require('../services/procesarCompra');
 
 module.exports = async function (req, res) {
   const tokenCliente = req.headers['authorization'];
@@ -9,10 +10,14 @@ module.exports = async function (req, res) {
   }
 
   const datos = req.body;
-
   console.log('📦 Datos recibidos del formulario FluentForms:', datos);
 
-  // Aquí puedes llamar a procesarCompra(datos) si ya tienes esa función exportada,
-  // o bien copiar la lógica directamente aquí.
-  res.status(200).json({ ok: true, mensaje: 'Formulario recibido y token válido' });
+  try {
+    await procesarCompra(datos);
+    console.log('✅ Compra procesada correctamente desde /fluentform');
+    res.status(200).json({ ok: true, mensaje: 'Compra procesada correctamente' });
+  } catch (error) {
+    console.error('❌ Error procesando la compra desde /fluentform:', error);
+    res.status(500).json({ error: 'Error al procesar la compra' });
+  }
 };

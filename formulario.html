@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Formulario de pago</title>
+</head>
+<body>
+  <h2>Formulario de pago</h2>
+  <form id="pagoForm">
+    <input type="text" id="nombre" placeholder="Nombre" required><br>
+    <input type="text" id="apellidos" placeholder="Apellidos" required><br>
+    <input type="text" id="dni" placeholder="DNI" required><br>
+    <input type="email" id="email" placeholder="Email" required><br>
+    <input type="text" id="direccion" placeholder="Dirección" required><br>
+    <input type="text" id="ciudad" placeholder="Ciudad" required><br>
+    <input type="text" id="provincia" placeholder="Provincia" required><br>
+    <input type="text" id="cp" placeholder="Código Postal" required><br>
+    <button type="submit">Pagar</button>
+  </form>
+
+  <script>
+    document.getElementById("pagoForm").addEventListener("submit", async function(e) {
+      e.preventDefault();
+
+      const datos = {
+        nombre: document.getElementById("nombre").value,
+        apellidos: document.getElementById("apellidos").value,
+        dni: document.getElementById("dni").value,
+        email: document.getElementById("email").value,
+        direccion: document.getElementById("direccion").value,
+        ciudad: document.getElementById("ciudad").value,
+        provincia: document.getElementById("provincia").value,
+        cp: document.getElementById("cp").value
+      };
+
+      try {
+        const res = await fetch("http://localhost:3000/crear-sesion-pago", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(datos)
+        });
+
+        const resultado = await res.json();
+
+        if (resultado && resultado.url) {
+          window.location.href = resultado.url;
+        } else {
+          alert("Error al crear la sesión de pago.");
+          console.error(resultado);
+        }
+      } catch (err) {
+        console.error("Error en la solicitud:", err);
+        alert("No se pudo conectar con el servidor.");
+      }
+    });
+  </script>
+</body>
+</html>

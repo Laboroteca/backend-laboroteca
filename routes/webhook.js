@@ -72,9 +72,7 @@ async function procesarCompra(session) {
     await guardarEnGoogleSheets(datosCliente);
     console.log('✅ Guardado en Google Sheets');
 
-    console.log('🌍 → Enviando datos a Make...');
-    await axios.post('https://hook.eu2.make.com/6hgbop0ra38k23w5xlutdg1oo2pu1dke', datosCliente);
-    console.log('✅ Enviado correctamente a Make');
+    // Eliminado: envío a Make (ya no se utiliza)
 
     console.log('🧾 → Generando factura en FacturaCity...');
     const pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
@@ -90,18 +88,68 @@ async function procesarCompra(session) {
     });
     console.log('✅ Factura subida a Google Cloud Storage');
 
-    console.log('🔍 ENV SMTP:', {
-      MAIL_HOST: process.env.MAIL_HOST,
-      MAIL_PORT: process.env.MAIL_PORT,
-      MAIL_USER: process.env.MAIL_USER,
-      MAIL_PASS: process.env.MAIL_PASS ? '***' : undefined
-    });
-
     console.log('📧 → Enviando email con factura...');
     await enviarFacturaPorEmail(datosCliente, pdfBuffer);
     console.log('✅ Email enviado con éxito');
 
+    // 🚪 Activar acceso en MemberPress
+    console.log('🔐 → Activando acceso en MemberPress...');
+    await activarMembresiaEnMemberPress(email, datosCliente.producto);
+    console.log('✅ Acceso concedido en MemberPress');
+
   } catch (error) {
     console.error('❌ Error en el flujo de procesarCompra:', error);
+  }
+}
+
+async function activarMembresiaEnMemberPress(email, producto) {
+  const usuario = 'ignacio';
+  const claveApp = 'anKUsIXl31BsVZAaPSyepBRC';
+  const auth = Buffer.from(`${usuario}:${claveApp}`).toString('base64');
+
+  const PRODUCTO_MEMBERSHIP_MAP = {
+    'De cara a la jubilación': 7994,
+    // 'Otro producto': 1234,
+    // 'Nombre del siguiente': 5678,
+  };
+
+  const membershipId = PRODUCTO_MEMBERSHIP_MAP[producto];
+  if (!membershipId) {
+    console.warn('⚠️ Producto no tiene membresía asociada:', producto);
+    return;
+  }
+
+  try {
+    const buscarUsuario = await axios.get(
+      `https://www.laboroteca.es/wp-json/wp/v2/users?search=${encodeURIComponent(email)}`,
+      {
+        headers: {
+          Authorization: `Basic ${auth}`
+        }
+      }
+    );
+
+    if (!buscarUsuario.data.length) {
+      console.warn('⚠️ Usuario no encontrado en WordPress:', email);
+      return;
+    }
+
+    const userId = buscarUsuario.data[0].id;
+
+    await axios.post(
+      'https://www.laboroteca.es/wp-json/mp/v1/memberships/add-member',
+      {
+        user_id: userId,
+        membership_id: membershipId
+      },
+      {
+        headers: {
+          Authorization: `Basic ${auth}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+  } catch (err) {
+    console.error('❌ Error al activar la membresía en MemberPress:', err.message);
   }
 }

@@ -3,6 +3,13 @@ const router = express.Router();
 const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
+// 🧠 Mapa de productos y precios en céntimos de euro
+const PRECIO_PRODUCTO_MAP = {
+  'De cara a la jubilación': 2990,
+  'Curso IP Total': 7900,
+  'Pack libros': 4990
+};
+
 router.post('/create-session', async (req, res) => {
   try {
     const {
@@ -17,6 +24,13 @@ router.post('/create-session', async (req, res) => {
       nombreProducto
     } = req.body;
 
+    const precio = PRECIO_PRODUCTO_MAP[nombreProducto];
+
+    if (!precio) {
+      console.warn('⚠️ Producto no tiene precio configurado:', nombreProducto);
+      return res.status(400).json({ error: 'Producto no disponible para la venta.' });
+    }
+
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
       mode: 'payment',
@@ -24,9 +38,9 @@ router.post('/create-session', async (req, res) => {
         price_data: {
           currency: 'eur',
           product_data: {
-            name: `Libro "${nombreProducto}"`,
+            name: `${tipoProducto} "${nombreProducto}"`,
           },
-          unit_amount: 2990,
+          unit_amount: precio,
         },
         quantity: 1
       }],

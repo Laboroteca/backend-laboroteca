@@ -25,7 +25,8 @@ function normalizarProducto(str) {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '') // elimina acentos
     .normalize('NFC')
-    .trim();
+    .trim()
+    .toLowerCase();
 }
 
 // 🔐 Verificación del email en WordPress (usando ?email=)
@@ -45,7 +46,9 @@ async function verificarEmailEnWordPress(email) {
     );
 
     const usuarios = response.data;
-    const existe = usuarios.some(u => u.email === email);
+    const existe = usuarios.some(
+      u => (u.email || '').trim().toLowerCase() === email.trim().toLowerCase()
+    );
     return existe;
   } catch (error) {
     console.error('❌ Error verificando email en WordPress:', error.message);
@@ -166,9 +169,8 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   }
 });
 
-// ✅ Iniciar servidor
-const PORT = process.env.PORT || 3000;
+// ✅ Iniciar servidor (puerto obligatorio para Render)
+const PORT = process.env.PORT;
 app.listen(PORT, () => {
   console.log(`✅ Backend funcionando en http://localhost:${PORT}`);
 });
-

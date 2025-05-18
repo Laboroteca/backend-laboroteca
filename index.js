@@ -14,7 +14,7 @@ app.set('trust proxy', 1); // ✅ Soluciona error de X-Forwarded-For
 
 // 🧠 Mapa de productos y precios en céntimos de euro
 const PRECIO_PRODUCTO_MAP = {
-  'De cara a la jubilacion': 2990,
+  'De cara a la jubilación': 2990,
   'Curso IP Total': 7900,
   'Pack libros': 4990
 };
@@ -34,7 +34,11 @@ async function verificarEmailEnWordPress(email) {
         }
       }
     );
-    return response.data.length > 0;
+
+    const usuarios = response.data;
+    const existe = usuarios.some(u => u.email === email);
+
+    return existe;
   } catch (error) {
     console.error('❌ Error verificando email en WordPress:', error.message);
     return false;
@@ -52,13 +56,15 @@ const pagoLimiter = rateLimit({
 
 app.use(cors());
 app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static(__dirname));
 
+// 🖼 Página de prueba
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'formulario.html'));
 });
 
-// ✅ Webhook de Stripe
+// ✅ Webhook de Stripe (usa raw)
 const webhookHandler = require('./routes/webhook');
 app.post(
   '/webhook',
@@ -73,20 +79,23 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
 
   const {
     nombre,
+    Nombre,
     apellidos,
+    Apellidos,
     email,
     dni,
     direccion,
     ciudad,
     provincia,
     cp,
+    CP,
     tipoProducto
   } = datos;
 
   // ✅ Extrae y normaliza el nombre del producto con fallback
   const nombreProductoRaw =
     datos?.nombreProducto ||
-    datos?.form?.[0]?.['13']?.value || // ← Ajusta si usas un campo oculto en otra posición
+    datos?.form?.[0]?.['13']?.value ||
     '';
   const productoNormalizado = (nombreProductoRaw || '').normalize('NFC').trim();
 
@@ -124,18 +133,18 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
       customer_creation: 'always',
       customer_email: email,
       metadata: {
-        nombre,
-        apellidos,
+        nombre: nombre || Nombre,
+        apellidos: apellidos || Apellidos,
         email,
         dni,
         direccion,
         ciudad,
         provincia,
-        cp,
+        cp: cp || CP,
         tipoProducto,
         nombreProducto: productoNormalizado
       },
-      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre || '')}&producto=${encodeURIComponent(productoNormalizado || '')}`,
+      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre || Nombre || '')}&producto=${encodeURIComponent(productoNormalizado || '')}`,
       cancel_url: 'https://laboroteca.es/error'
     });
 

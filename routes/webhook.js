@@ -72,8 +72,6 @@ async function procesarCompra(session) {
     await guardarEnGoogleSheets(datosCliente);
     console.log('✅ Guardado en Google Sheets');
 
-    // Eliminado: envío a Make (ya no se utiliza)
-
     console.log('🧾 → Generando factura en FacturaCity...');
     const pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
     console.log(`✅ Factura generada. Tamaño PDF: ${pdfBuffer.length} bytes`);
@@ -92,7 +90,6 @@ async function procesarCompra(session) {
     await enviarFacturaPorEmail(datosCliente, pdfBuffer);
     console.log('✅ Email enviado con éxito');
 
-    // 🚪 Activar acceso en MemberPress
     console.log('🔐 → Activando acceso en MemberPress...');
     await activarMembresiaEnMemberPress(email, datosCliente.producto);
     console.log('✅ Acceso concedido en MemberPress');
@@ -102,20 +99,31 @@ async function procesarCompra(session) {
   }
 }
 
-async function activarMembresiaEnMemberPress(email, producto) {
+async function activarMembresiaEnMemberPress(email, productoCrudo) {
   const usuario = 'ignacio';
   const claveApp = 'anKUsIXl31BsVZAaPSyepBRC';
   const auth = Buffer.from(`${usuario}:${claveApp}`).toString('base64');
 
+  function normalizarProducto(nombre) {
+    const mapa = {
+      'De cara a la jubilación': 'libro_jubilacion',
+      'Pack libros': 'libro_doble',
+      'Curso IP Total': 'curso_ip_total'
+    };
+    return mapa[nombre] || null;
+  }
+
+  const productoNormalizado = normalizarProducto(productoCrudo);
+
   const PRODUCTO_MEMBERSHIP_MAP = {
-    'De cara a la jubilación': 7994,
-    // 'Otro producto': 1234,
-    // 'Nombre del siguiente': 5678,
+    libro_jubilacion: 7994,
+    libro_doble: 8420,
+    curso_ip_total: 8650
   };
 
-  const membershipId = PRODUCTO_MEMBERSHIP_MAP[producto];
+  const membershipId = PRODUCTO_MEMBERSHIP_MAP[productoNormalizado];
   if (!membershipId) {
-    console.warn('⚠️ Producto no tiene membresía asociada:', producto);
+    console.warn(`⚠️ Producto sin membresía asociada: ${productoCrudo} → ${productoNormalizado}`);
     return;
   }
 
@@ -129,12 +137,15 @@ async function activarMembresiaEnMemberPress(email, producto) {
       }
     );
 
-    if (!buscarUsuario.data.length) {
-      console.warn('⚠️ Usuario no encontrado en WordPress:', email);
+    const usuarios = buscarUsuario.data;
+    const user = usuarios.find(u => u.email === email);
+
+    if (!user) {
+      console.warn('⚠️ Usuario no encontrado en WordPress con email exacto:', email);
       return;
     }
 
-    const userId = buscarUsuario.data[0].id;
+    const userId = user.id;
 
     await axios.post(
       'https://www.laboroteca.es/wp-json/mp/v1/memberships/add-member',
@@ -149,6 +160,9 @@ async function activarMembresiaEnMemberPress(email, producto) {
         }
       }
     );
+
+    console.log(`🔓 Membresía ${membershipId} activada para usuario ${userId}`);
+
   } catch (err) {
     console.error('❌ Error al activar la membresía en MemberPress:', err.message);
   }

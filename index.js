@@ -29,7 +29,7 @@ function normalizarProducto(str) {
     .toLowerCase();
 }
 
-// 🔐 Verificación del email en WordPress (usando ?email=)
+// 🔐 Verificación del email en WordPress (usando ?search= + comprobación manual)
 async function verificarEmailEnWordPress(email) {
   const usuario = 'ignacio';
   const claveApp = 'anKUsIXl31BsVZAaPSyepBRC';
@@ -37,7 +37,7 @@ async function verificarEmailEnWordPress(email) {
 
   try {
     const response = await axios.get(
-      `https://laboroteca.es/wp-json/wp/v2/users?email=${encodeURIComponent(email)}`,
+      `https://laboroteca.es/wp-json/wp/v2/users?search=${encodeURIComponent(email)}`,
       {
         headers: {
           Authorization: `Basic ${auth}`

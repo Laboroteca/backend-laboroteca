@@ -29,14 +29,14 @@ function normalizarProducto(str) {
     .toLowerCase();
 }
 
-// 🔐 Verificación de email exacto en WordPress
+// 🔐 Verificación exacta del email en WordPress
 async function verificarEmailEnWordPress(email) {
   const usuario = 'ignacio';
   const claveApp = 'anKUsIXl31BsVZAaPSyepBRC';
   const auth = Buffer.from(`${usuario}:${claveApp}`).toString('base64');
 
   try {
-    const url = `https://laboroteca.es/wp-json/wp/v2/users?search=${encodeURIComponent(email)}`;
+    const url = `https://laboroteca.es/wp-json/wp/v2/users?email=${encodeURIComponent(email)}`;
     console.log('🔍 Llamada API WordPress:', url);
     const response = await axios.get(url, {
       headers: { Authorization: `Basic ${auth}` }
@@ -54,7 +54,7 @@ async function verificarEmailEnWordPress(email) {
   }
 }
 
-// 🆕 Limitador
+// 🆕 Limitador de peticiones
 const pagoLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
@@ -66,11 +66,12 @@ app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static(__dirname));
 
+// Página formulario
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'formulario.html'));
 });
 
-// Webhook
+// Webhook de Stripe
 const webhookHandler = require('./routes/webhook');
 app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => webhookHandler(req, res));
 
@@ -156,7 +157,7 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   }
 });
 
-// Puerto para Render
+// Iniciar servidor
 const PORT = process.env.PORT;
 app.listen(PORT, () => {
   console.log(`✅ Backend funcionando en http://localhost:${PORT}`);

@@ -15,6 +15,7 @@ router.post('/create-session', async (req, res) => {
     const {
       nombre,
       apellidos,
+      email, // ⬅️ añadido
       dni,
       direccion,
       ciudad,
@@ -23,6 +24,14 @@ router.post('/create-session', async (req, res) => {
       tipoProducto,
       nombreProducto
     } = req.body;
+
+    // Comprobación simple del email (solo para depuración)
+    if (!email || typeof email !== 'string' || !email.includes('@')) {
+      console.warn('⚠️ Email no válido o ausente:', email);
+      // NO devolvemos error, seguimos
+    } else {
+      console.log('📩 Email recibido:', email);
+    }
 
     const precio = PRECIO_PRODUCTO_MAP[nombreProducto];
 
@@ -49,6 +58,7 @@ router.post('/create-session', async (req, res) => {
       metadata: {
         nombre,
         apellidos,
+        email,
         dni,
         direccion,
         ciudad,
@@ -59,11 +69,13 @@ router.post('/create-session', async (req, res) => {
       }
     });
 
+    console.log('✅ Sesión de Stripe creada:', session.url);
     res.json({ url: session.url });
+
   } catch (error) {
     console.error('❌ Error al crear la sesión:', error.message);
     res.status(500).send('Error al crear la sesión');
   }
 });
 
-module.exports = router;
+module.exports = router

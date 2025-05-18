@@ -7,14 +7,21 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const cors = require('cors');
 const path = require('path');
 const axios = require('axios');
-const rateLimit = require('express-rate-limit'); // 🆕 Rate limiting
+const rateLimit = require('express-rate-limit');
 
 const app = express();
 
-// 🔐 Función para verificar si el email está registrado en WordPress
+// 🧠 Mapa de productos y precios en céntimos de euro
+const PRECIO_PRODUCTO_MAP = {
+  'De cara a la jubilación': 2990,
+  'Curso IP Total': 7900,
+  'Pack libros': 4990
+};
+
+// 🔐 Verificación del email en WordPress (con Application Passwords)
 async function verificarEmailEnWordPress(email) {
-  const usuario = 'ignacio'; // ← Tu usuario WP
-  const claveApp = 'anKUsIXl31BsVZAaPSyepBRC'; // ← Tu clave (sin espacios)
+  const usuario = 'ignacio';
+  const claveApp = 'anKUsIXl31BsVZAaPSyepBRC';
   const auth = Buffer.from(`${usuario}:${claveApp}`).toString('base64');
 
   try {
@@ -33,7 +40,7 @@ async function verificarEmailEnWordPress(email) {
   }
 }
 
-// 🆕 Limitador: 5 intentos cada 15 minutos por IP
+// 🆕 Limitador de peticiones
 const pagoLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
@@ -42,10 +49,15 @@ const pagoLimiter = rateLimit({
   }
 });
 
-// ✅ 1. Habilitar CORS
 app.use(cors());
+app.use(bodyParser.json());
+app.use(express.static(__dirname));
 
-// ✅ 2. Webhook de Stripe
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'formulario.html'));
+});
+
+// ✅ Webhook de Stripe
 const webhookHandler = require('./routes/webhook');
 app.post(
   '/webhook',
@@ -53,25 +65,38 @@ app.post(
   (req, res) => webhookHandler(req, res)
 );
 
-// ✅ 3. bodyParser
-app.use(bodyParser.json());
-
-// ✅ 4. Servir formulario estático (solo en local)
-app.use(express.static(__dirname));
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'formulario.html'));
-});
-
-// ✅ 5. Crear sesión de pago con verificación de email y limitador
+// ✅ Crear sesión de pago
 app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   const datos = req.body;
   console.log('📦 Datos recibidos del formulario:', datos);
 
-  // 🔐 Verificar si el email está registrado en WordPress
-  const emailValido = await verificarEmailEnWordPress(datos.email);
+  const {
+    nombre,
+    apellidos,
+    email,
+    dni,
+    direccion,
+    ciudad,
+    provincia,
+    cp,
+    tipoProducto,
+    nombreProducto
+  } = datos;
+
+  const precio = PRECIO_PRODUCTO_MAP[nombreProducto];
+
+  if (!precio) {
+    console.warn('⚠️ Producto sin precio:', nombreProducto);
+    return res.status(400).json({ error: 'Producto no disponible para la venta.' });
+  }
+
+  // 🔐 Verificación de email con tolerancia
+  const emailValido = await verificarEmailEnWordPress(email);
   if (!emailValido) {
-    console.warn('🚫 Email no registrado en WordPress:', datos.email);
-    return res.status(403).json({ error: 'Este email no está registrado. Debes crear una cuenta primero.' });
+    console.warn('🚫 Email NO registrado en WordPress (se permite continuar):', email);
+    // NO cortamos la ejecución
+  } else {
+    console.log('✅ Email verificado en WordPress:', email);
   }
 
   try {
@@ -80,24 +105,31 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
       mode: 'payment',
       line_items: [
         {
-          price: 'price_1RMG0mEe6Cd77jenTtn9xlB7',
+          price_data: {
+            currency: 'eur',
+            product_data: {
+              name: `${tipoProducto} "${nombreProducto}"`
+            },
+            unit_amount: precio
+          },
           quantity: 1
         }
       ],
       customer_creation: 'always',
-      customer_email: datos.email,
+      customer_email: email,
       metadata: {
-        nombre: datos.nombre || '',
-        apellidos: datos.apellidos || '',
-        dni: datos.dni || '',
-        direccion: datos.direccion || '',
-        ciudad: datos.ciudad || '',
-        provincia: datos.provincia || '',
-        cp: datos.cp || '',
-        tipoProducto: 'libro',
-        nombreProducto: 'De cara a la jubilación'
+        nombre,
+        apellidos,
+        email,
+        dni,
+        direccion,
+        ciudad,
+        provincia,
+        cp,
+        tipoProducto,
+        nombreProducto
       },
-      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(datos.nombre || '')}&producto=${encodeURIComponent('De cara a la jubilación')}`,
+      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre || '')}&producto=${encodeURIComponent(nombreProducto || '')}`,
       cancel_url: 'https://laboroteca.es/error'
     });
 
@@ -110,7 +142,7 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   }
 });
 
-// ✅ 6. Iniciar servidor
+// ✅ Iniciar servidor
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Backend funcionando en http://localhost:${PORT}`);

@@ -29,29 +29,10 @@ function normalizarProducto(str) {
     .toLowerCase();
 }
 
-// 🔐 Verificación exacta del email en WordPress
+// ❌ Verificación de email desactivada temporalmente
 async function verificarEmailEnWordPress(email) {
-  const usuario = 'ignacio';
-  const claveApp = 'anKUsIXl31BsVZAaPSyepBRC';
-  const auth = Buffer.from(`${usuario}:${claveApp}`).toString('base64');
-
-  try {
-    const url = `https://laboroteca.es/wp-json/wp/v2/users?email=${encodeURIComponent(email)}`;
-    console.log('🔍 Llamada API WordPress:', url);
-    const response = await axios.get(url, {
-      headers: { Authorization: `Basic ${auth}` }
-    });
-
-    const usuarios = response.data;
-    console.log('📋 Usuarios devueltos:', usuarios.map(u => u.email));
-    const existe = usuarios.some(
-      u => (u.email || '').trim().toLowerCase() === email.trim().toLowerCase()
-    );
-    return existe;
-  } catch (error) {
-    console.error('❌ Error verificando email en WordPress:', error.message);
-    return false;
-  }
+  console.log('🔓 Verificación de email desactivada. Email recibido:', email);
+  return true;
 }
 
 // 🆕 Limitador de peticiones

@@ -18,7 +18,7 @@ const PRECIO_PRODUCTO_MAP = {
   'Pack libros': 4990
 };
 
-// 🔐 Verificación del email en WordPress (con Application Passwords)
+// 🔐 Verificación del email en WordPress
 async function verificarEmailEnWordPress(email) {
   const usuario = 'ignacio';
   const claveApp = 'anKUsIXl31BsVZAaPSyepBRC';
@@ -83,7 +83,7 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
     nombreProducto
   } = datos;
 
-  // ✨ Normaliza el nombre del producto para evitar errores por tildes o espacios
+  // ✨ Normaliza el nombre del producto
   const productoNormalizado = (nombreProducto || '').normalize('NFC').trim();
   const precio = PRECIO_PRODUCTO_MAP[productoNormalizado];
 
@@ -92,7 +92,7 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
     return res.status(400).json({ error: 'Producto no disponible para la venta.' });
   }
 
-  // 🔐 Verificación estricta: no continúa si no está registrado
+  // 🔐 Verificación estricta del email
   const emailValido = await verificarEmailEnWordPress(email);
   if (!emailValido) {
     console.warn('🚫 Email no registrado en WordPress:', email);

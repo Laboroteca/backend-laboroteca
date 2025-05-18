@@ -10,7 +10,7 @@ const axios = require('axios');
 const rateLimit = require('express-rate-limit');
 
 const app = express();
-app.set('trust proxy', 1); // ✅ Soluciona error de X-Forwarded-For
+app.set('trust proxy', 1);
 
 // 🧠 Mapa de productos y precios en céntimos de euro
 const PRECIO_PRODUCTO_MAP = {
@@ -19,33 +19,31 @@ const PRECIO_PRODUCTO_MAP = {
   'Pack libros': 4990
 };
 
-// 🧼 Normaliza producto eliminando espacios, tildes y homogeneizando formato
+// 🧼 Normaliza producto
 function normalizarProducto(str) {
   return (str || '')
     .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '') // elimina acentos
+    .replace(/[\u0300-\u036f]/g, '')
     .normalize('NFC')
     .trim()
     .toLowerCase();
 }
 
-// 🔐 Verificación del email en WordPress (usando ?search= + comprobación manual)
+// 🔐 Verificación de email exacto en WordPress
 async function verificarEmailEnWordPress(email) {
   const usuario = 'ignacio';
   const claveApp = 'anKUsIXl31BsVZAaPSyepBRC';
   const auth = Buffer.from(`${usuario}:${claveApp}`).toString('base64');
 
   try {
-    const response = await axios.get(
-      `https://laboroteca.es/wp-json/wp/v2/users?search=${encodeURIComponent(email)}`,
-      {
-        headers: {
-          Authorization: `Basic ${auth}`
-        }
-      }
-    );
+    const url = `https://laboroteca.es/wp-json/wp/v2/users?search=${encodeURIComponent(email)}`;
+    console.log('🔍 Llamada API WordPress:', url);
+    const response = await axios.get(url, {
+      headers: { Authorization: `Basic ${auth}` }
+    });
 
     const usuarios = response.data;
+    console.log('📋 Usuarios devueltos:', usuarios.map(u => u.email));
     const existe = usuarios.some(
       u => (u.email || '').trim().toLowerCase() === email.trim().toLowerCase()
     );
@@ -56,13 +54,11 @@ async function verificarEmailEnWordPress(email) {
   }
 }
 
-// 🆕 Limitador de peticiones
+// 🆕 Limitador
 const pagoLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
-  message: {
-    error: 'Demasiados intentos. Por favor, inténtalo más tarde.'
-  }
+  message: { error: 'Demasiados intentos. Inténtalo más tarde.' }
 });
 
 app.use(cors());
@@ -70,19 +66,18 @@ app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static(__dirname));
 
-// 🖼 Página de prueba
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'formulario.html'));
 });
 
-// ✅ Webhook de Stripe
+// Webhook
 const webhookHandler = require('./routes/webhook');
 app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => webhookHandler(req, res));
 
-// ✅ Crear sesión de pago
+// Crear sesión de pago
 app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   const datos = req.body;
-  console.log('📦 Datos recibidos del formulario:', datos);
+  console.log('📦 DATOS FORMULARIO:', JSON.stringify(datos, null, 2));
 
   const {
     nombre,
@@ -99,31 +94,26 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
     tipoProducto
   } = datos;
 
-  // ✅ Extrae y normaliza el nombre del producto con fallback y limpieza
-  const nombreProductoRaw =
-    datos?.nombreProducto ||
-    datos?.form?.[0]?.['13']?.value ||
-    '';
+  const nombreProductoRaw = datos?.nombreProducto || '';
   const productoNormalizado = normalizarProducto(nombreProductoRaw);
   console.log('🔎 nombreProducto normalizado:', productoNormalizado);
 
-  // Buscar nombre exacto del mapa original
   const claveProducto = Object.keys(PRECIO_PRODUCTO_MAP).find(p =>
     normalizarProducto(p) === productoNormalizado
   );
 
   if (!claveProducto) {
-    console.warn('⚠️ Producto sin precio o mal escrito:', productoNormalizado);
-    return res.status(400).json({ error: 'Producto no disponible para la venta.' });
+    console.warn('⚠️ Producto inválido:', productoNormalizado);
+    return res.status(400).json({ error: 'Producto no disponible.' });
   }
 
   const precio = PRECIO_PRODUCTO_MAP[claveProducto];
 
-  // 🔐 Verificación estricta del email
+  console.log('🔐 Email recibido:', email.trim().toLowerCase());
   const emailValido = await verificarEmailEnWordPress(email);
   if (!emailValido) {
-    console.warn('🚫 Email no registrado en WordPress:', email);
-    return res.status(403).json({ error: 'Este email no está registrado. Debes crear una cuenta primero.' });
+    console.warn('🚫 Email no encontrado en WordPress:', email);
+    return res.status(403).json({ error: 'Este email no está registrado. Crea una cuenta primero.' });
   }
 
   try {
@@ -134,9 +124,7 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
         {
           price_data: {
             currency: 'eur',
-            product_data: {
-              name: `${tipoProducto} "${claveProducto}"`
-            },
+            product_data: { name: `${tipoProducto} "${claveProducto}"` },
             unit_amount: precio
           },
           quantity: 1
@@ -160,16 +148,15 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
       cancel_url: 'https://laboroteca.es/error'
     });
 
-    console.log('🧾 Sesión Stripe creada:', session.id);
+    console.log('✅ Sesión Stripe creada:', session.id);
     res.json({ url: session.url });
-
   } catch (error) {
-    console.error('❌ Error creando sesión de pago:', error.message);
+    console.error('❌ Error en Stripe:', error.message);
     res.status(500).json({ error: 'Error al crear la sesión de pago' });
   }
 });
 
-// ✅ Iniciar servidor (puerto obligatorio para Render)
+// Puerto para Render
 const PORT = process.env.PORT;
 app.listen(PORT, () => {
   console.log(`✅ Backend funcionando en http://localhost:${PORT}`);

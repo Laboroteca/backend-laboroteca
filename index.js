@@ -10,6 +10,7 @@ const axios = require('axios');
 const rateLimit = require('express-rate-limit');
 
 const app = express();
+app.set('trust proxy', 1); // ✅ Soluciona error de X-Forwarded-For
 
 // 🧠 Mapa de productos y precios en céntimos de euro
 const PRECIO_PRODUCTO_MAP = {
@@ -79,13 +80,18 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
     ciudad,
     provincia,
     cp,
-    tipoProducto,
-    nombreProducto
+    tipoProducto
   } = datos;
 
-  // ✨ Normaliza el nombre del producto
-  const productoNormalizado = (nombreProducto || '').normalize('NFC').trim();
+  // ✅ Extrae y normaliza el nombre del producto con fallback
+  const nombreProductoRaw =
+    datos?.nombreProducto ||
+    datos?.form?.[0]?.['13']?.value || // ← Ajusta si usas un campo oculto en otra posición
+    '';
+  const productoNormalizado = (nombreProductoRaw || '').normalize('NFC').trim();
+
   const precio = PRECIO_PRODUCTO_MAP[productoNormalizado];
+  console.log('🔎 nombreProducto normalizado:', productoNormalizado);
 
   if (!PRECIO_PRODUCTO_MAP.hasOwnProperty(productoNormalizado)) {
     console.warn('⚠️ Producto sin precio o mal escrito:', productoNormalizado);

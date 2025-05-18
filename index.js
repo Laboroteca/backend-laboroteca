@@ -83,10 +83,12 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
     nombreProducto
   } = datos;
 
-  const precio = PRECIO_PRODUCTO_MAP[nombreProducto];
+  // ✨ Normaliza el nombre del producto para evitar errores por tildes o espacios
+  const productoNormalizado = (nombreProducto || '').normalize('NFC').trim();
+  const precio = PRECIO_PRODUCTO_MAP[productoNormalizado];
 
-  if (!precio) {
-    console.warn('⚠️ Producto sin precio:', nombreProducto);
+  if (!PRECIO_PRODUCTO_MAP.hasOwnProperty(productoNormalizado)) {
+    console.warn('⚠️ Producto sin precio o mal escrito:', productoNormalizado);
     return res.status(400).json({ error: 'Producto no disponible para la venta.' });
   }
 
@@ -95,8 +97,6 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   if (!emailValido) {
     console.warn('🚫 Email no registrado en WordPress:', email);
     return res.status(403).json({ error: 'Este email no está registrado. Debes crear una cuenta primero.' });
-  } else {
-    console.log('✅ Email verificado en WordPress:', email);
   }
 
   try {
@@ -108,7 +108,7 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
           price_data: {
             currency: 'eur',
             product_data: {
-              name: `${tipoProducto} "${nombreProducto}"`
+              name: `${tipoProducto} "${productoNormalizado}"`
             },
             unit_amount: precio
           },
@@ -127,9 +127,9 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
         provincia,
         cp,
         tipoProducto,
-        nombreProducto
+        nombreProducto: productoNormalizado
       },
-      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre || '')}&producto=${encodeURIComponent(nombreProducto || '')}`,
+      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre || '')}&producto=${encodeURIComponent(productoNormalizado || '')}`,
       cancel_url: 'https://laboroteca.es/error'
     });
 

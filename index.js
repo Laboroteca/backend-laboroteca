@@ -19,7 +19,16 @@ const PRECIO_PRODUCTO_MAP = {
   'Pack libros': 4990
 };
 
-// 🔐 Verificación del email en WordPress
+// 🧼 Normaliza producto eliminando espacios, tildes y homogeneizando formato
+function normalizarProducto(str) {
+  return (str || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '') // elimina acentos
+    .normalize('NFC')
+    .trim();
+}
+
+// 🔐 Verificación del email en WordPress (usando ?email=)
 async function verificarEmailEnWordPress(email) {
   const usuario = 'ignacio';
   const claveApp = 'anKUsIXl31BsVZAaPSyepBRC';
@@ -27,17 +36,16 @@ async function verificarEmailEnWordPress(email) {
 
   try {
     const response = await axios.get(
-      `https://laboroteca.es/wp-json/wp/v2/users?search=${encodeURIComponent(email)}`,
+      `https://laboroteca.es/wp-json/wp/v2/users?email=${encodeURIComponent(email)}`,
       {
         headers: {
-          'Authorization': `Basic ${auth}`
+          Authorization: `Basic ${auth}`
         }
       }
     );
 
     const usuarios = response.data;
     const existe = usuarios.some(u => u.email === email);
-
     return existe;
   } catch (error) {
     console.error('❌ Error verificando email en WordPress:', error.message);
@@ -64,13 +72,9 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'formulario.html'));
 });
 
-// ✅ Webhook de Stripe (usa raw)
+// ✅ Webhook de Stripe
 const webhookHandler = require('./routes/webhook');
-app.post(
-  '/webhook',
-  express.raw({ type: 'application/json' }),
-  (req, res) => webhookHandler(req, res)
-);
+app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => webhookHandler(req, res));
 
 // ✅ Crear sesión de pago
 app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
@@ -92,20 +96,25 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
     tipoProducto
   } = datos;
 
-  // ✅ Extrae y normaliza el nombre del producto con fallback
+  // ✅ Extrae y normaliza el nombre del producto con fallback y limpieza
   const nombreProductoRaw =
     datos?.nombreProducto ||
     datos?.form?.[0]?.['13']?.value ||
     '';
-  const productoNormalizado = (nombreProductoRaw || '').normalize('NFC').trim();
-
-  const precio = PRECIO_PRODUCTO_MAP[productoNormalizado];
+  const productoNormalizado = normalizarProducto(nombreProductoRaw);
   console.log('🔎 nombreProducto normalizado:', productoNormalizado);
 
-  if (!PRECIO_PRODUCTO_MAP.hasOwnProperty(productoNormalizado)) {
+  // Buscar nombre exacto del mapa original
+  const claveProducto = Object.keys(PRECIO_PRODUCTO_MAP).find(p =>
+    normalizarProducto(p) === productoNormalizado
+  );
+
+  if (!claveProducto) {
     console.warn('⚠️ Producto sin precio o mal escrito:', productoNormalizado);
     return res.status(400).json({ error: 'Producto no disponible para la venta.' });
   }
+
+  const precio = PRECIO_PRODUCTO_MAP[claveProducto];
 
   // 🔐 Verificación estricta del email
   const emailValido = await verificarEmailEnWordPress(email);
@@ -123,7 +132,7 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
           price_data: {
             currency: 'eur',
             product_data: {
-              name: `${tipoProducto} "${productoNormalizado}"`
+              name: `${tipoProducto} "${claveProducto}"`
             },
             unit_amount: precio
           },
@@ -142,9 +151,9 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
         provincia,
         cp: cp || CP,
         tipoProducto,
-        nombreProducto: productoNormalizado
+        nombreProducto: claveProducto
       },
-      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre || Nombre || '')}&producto=${encodeURIComponent(productoNormalizado || '')}`,
+      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre || Nombre || '')}&producto=${encodeURIComponent(claveProducto || '')}`,
       cancel_url: 'https://laboroteca.es/error'
     });
 
@@ -162,3 +171,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Backend funcionando en http://localhost:${PORT}`);
 });
+

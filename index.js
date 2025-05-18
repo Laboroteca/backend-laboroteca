@@ -90,11 +90,11 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
     return res.status(400).json({ error: 'Producto no disponible para la venta.' });
   }
 
-  // 🔐 Verificación de email con tolerancia
+  // 🔐 Verificación estricta: no continúa si no está registrado
   const emailValido = await verificarEmailEnWordPress(email);
   if (!emailValido) {
-    console.warn('🚫 Email NO registrado en WordPress (se permite continuar):', email);
-    // NO cortamos la ejecución
+    console.warn('🚫 Email no registrado en WordPress:', email);
+    return res.status(403).json({ error: 'Este email no está registrado. Debes crear una cuenta primero.' });
   } else {
     console.log('✅ Email verificado en WordPress:', email);
   }

@@ -13,7 +13,7 @@ const app = express();
 
 // 🧠 Mapa de productos y precios en céntimos de euro
 const PRECIO_PRODUCTO_MAP = {
-  'De cara a la jubilación': 2990,
+  'De cara a la jubilacion': 2990,
   'Curso IP Total': 7900,
   'Pack libros': 4990
 };

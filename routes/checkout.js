@@ -16,12 +16,12 @@ const PRECIO_PRODUCTO_MAP = {
   'Pack libros': 4990
 };
 
-// 🔄 Normaliza el body
+// 🔄 Normaliza el body recibido
 function extraerDatos(body) {
   return body.email ? body : Object.values(body)[0];
 }
 
-// 🧠 Normaliza producto
+// 🧠 Convierte nombre de producto a formato interno
 function normalizarProducto(nombre) {
   const mapa = {
     'De cara a la jubilación': 'libro_jubilacion',
@@ -31,7 +31,7 @@ function normalizarProducto(nombre) {
   return mapa[nombre] || null;
 }
 
-// 🔐 Verifica usuario en WP
+// 🔐 Comprueba si el email está registrado en WordPress
 async function emailRegistradoEnWordPress(email) {
   const auth = Buffer.from(`${WP_USER}:${WP_APP_PASSWORD}`).toString('base64');
   const response = await fetch(`${WP_URL}/wp-json/wp/v2/users?search=${email}`, {
@@ -47,7 +47,7 @@ async function emailRegistradoEnWordPress(email) {
   return users.some(user => user.email === email);
 }
 
-// 📦 Ruta de creación de sesión
+// 📦 Endpoint para crear la sesión de Stripe
 router.post('/create-session', async (req, res) => {
   try {
     const datos = extraerDatos(req.body);
@@ -65,9 +65,7 @@ router.post('/create-session', async (req, res) => {
     } = datos;
 
     console.log('📦 Datos recibidos del formulario:', datos);
-    console.log('🔎 nombreProducto normalizado:', nombreProducto);
 
-    // Verificación
     const registrado = await emailRegistradoEnWordPress(email);
     if (!registrado) {
       console.warn('🚫 Email no registrado en WordPress:', email);
@@ -79,6 +77,8 @@ router.post('/create-session', async (req, res) => {
       console.warn('⚠️ Producto sin precio configurado:', nombreProducto);
       return res.status(400).json({ error: 'Producto no disponible para la venta.' });
     }
+
+    const productoNormalizado = normalizarProducto(nombreProducto);
 
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
@@ -106,7 +106,7 @@ router.post('/create-session', async (req, res) => {
         provincia,
         cp,
         tipoProducto,
-        nombreProducto: normalizarProducto(nombreProducto)
+        nombreProducto: productoNormalizado
       }
     });
 
@@ -115,7 +115,7 @@ router.post('/create-session', async (req, res) => {
 
   } catch (error) {
     console.error('❌ Error al crear la sesión:', error.message);
-    res.status(500).send('Error al crear la sesión');
+    res.status(500).json({ error: 'Error al crear la sesión' });
   }
 });
 

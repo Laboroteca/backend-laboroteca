@@ -25,8 +25,6 @@ module.exports = async function (req, res) {
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
-  res.status(200).json({ received: true });
-
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
     console.log('✅ Evento checkout.session.completed recibido');
@@ -38,9 +36,15 @@ module.exports = async function (req, res) {
 
     try {
       await procesarCompra(session);
+      return res.status(200).json({ received: true });
     } catch (err) {
       console.error('❌ Error ejecutando procesarCompra():', err);
+      return res.status(500).json({ error: 'Error procesando la compra' });
     }
+
+  } else {
+    console.log(`ℹ️ Evento no manejado: ${event.type}`);
+    return res.status(200).json({ received: true });
   }
 };
 
@@ -96,6 +100,7 @@ async function procesarCompra(session) {
 
   } catch (error) {
     console.error('❌ Error en el flujo de procesarCompra:', error);
+    throw error; // relanzamos para que lo capture el webhook
   }
 }
 
@@ -131,9 +136,7 @@ async function activarMembresiaEnMemberPress(email, productoCrudo) {
     const buscarUsuario = await axios.get(
       `https://www.laboroteca.es/wp-json/wp/v2/users?search=${encodeURIComponent(email)}`,
       {
-        headers: {
-          Authorization: `Basic ${auth}`
-        }
+        headers: { Authorization: `Basic ${auth}` }
       }
     );
 

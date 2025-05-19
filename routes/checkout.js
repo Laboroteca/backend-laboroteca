@@ -2,10 +2,10 @@ const express = require('express');
 const router = express.Router();
 const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
-const fetch = require('node-fetch'); // Asegúrate de tenerlo instalado
+const fetch = require('node-fetch');
 
 // 🌐 API WordPress
-const WP_URL = process.env.WP_URL; // e.g. https://laboroteca.es
+const WP_URL = process.env.WP_URL;
 const WP_USER = process.env.WP_USER;
 const WP_APP_PASSWORD = process.env.WP_APP_PASSWORD;
 
@@ -16,12 +16,12 @@ const PRECIO_PRODUCTO_MAP = {
   'Pack libros': 4990
 };
 
-// 🔄 Normaliza el body (en caso de estructura anidada como { "0": { ... } })
+// 🔄 Normaliza el body
 function extraerDatos(body) {
   return body.email ? body : Object.values(body)[0];
 }
 
-// 🧠 Normaliza el nombre del producto (interno, si quisieras usarlo en metadatos o rutas)
+// 🧠 Normaliza producto
 function normalizarProducto(nombre) {
   const mapa = {
     'De cara a la jubilación': 'libro_jubilacion',
@@ -31,14 +31,11 @@ function normalizarProducto(nombre) {
   return mapa[nombre] || null;
 }
 
-// 🔐 Verifica si el email está registrado en WordPress
+// 🔐 Verifica usuario en WP
 async function emailRegistradoEnWordPress(email) {
   const auth = Buffer.from(`${WP_USER}:${WP_APP_PASSWORD}`).toString('base64');
-
   const response = await fetch(`${WP_URL}/wp-json/wp/v2/users?search=${email}`, {
-    headers: {
-      Authorization: `Basic ${auth}`
-    }
+    headers: { Authorization: `Basic ${auth}` }
   });
 
   if (!response.ok) {
@@ -50,6 +47,7 @@ async function emailRegistradoEnWordPress(email) {
   return users.some(user => user.email === email);
 }
 
+// 📦 Ruta de creación de sesión
 router.post('/create-session', async (req, res) => {
   try {
     const datos = extraerDatos(req.body);
@@ -69,7 +67,7 @@ router.post('/create-session', async (req, res) => {
     console.log('📦 Datos recibidos del formulario:', datos);
     console.log('🔎 nombreProducto normalizado:', nombreProducto);
 
-    // 🚫 Verificación estricta del email
+    // Verificación
     const registrado = await emailRegistradoEnWordPress(email);
     if (!registrado) {
       console.warn('🚫 Email no registrado en WordPress:', email);
@@ -78,13 +76,14 @@ router.post('/create-session', async (req, res) => {
 
     const precio = PRECIO_PRODUCTO_MAP[nombreProducto];
     if (!precio) {
-      console.warn('⚠️ Producto no tiene precio configurado:', nombreProducto);
+      console.warn('⚠️ Producto sin precio configurado:', nombreProducto);
       return res.status(400).json({ error: 'Producto no disponible para la venta.' });
     }
 
     const session = await stripe.checkout.sessions.create({
-      payment_method_types: ['card'],
       mode: 'payment',
+      payment_method_types: ['card'],
+      customer_email: email,
       line_items: [{
         price_data: {
           currency: 'eur',

@@ -73,12 +73,12 @@ router.post('/create-session', async (req, res) => {
     }
 
     const precio = PRECIO_PRODUCTO_MAP[nombreProducto];
-    if (!precio) {
-      console.warn('⚠️ Producto sin precio configurado:', nombreProducto);
+    const productoNormalizado = normalizarProducto(nombreProducto);
+
+    if (!productoNormalizado || !precio) {
+      console.warn('⚠️ Producto inválido o sin precio configurado:', nombreProducto);
       return res.status(400).json({ error: 'Producto no disponible para la venta.' });
     }
-
-    const productoNormalizado = normalizarProducto(nombreProducto);
 
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
@@ -94,7 +94,7 @@ router.post('/create-session', async (req, res) => {
         },
         quantity: 1
       }],
-      success_url: 'https://laboroteca.es/success',
+      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(nombreProducto)}`,
       cancel_url: 'https://laboroteca.es/cancel',
       metadata: {
         nombre,

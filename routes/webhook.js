@@ -50,8 +50,8 @@ module.exports = async function (req, res) {
 
 async function procesarCompra(session) {
   const metadata = session.metadata || {};
-  const email = session.customer_details?.email || '';
-  const name = session.customer_details?.name || '';
+  const email = session.customer_details?.email || metadata.email || '';
+  const name = session.customer_details?.name || `${metadata.nombre || ''} ${metadata.apellidos || ''}`.trim();
   const amountTotal = session.amount_total || 0;
 
   const datosCliente = {

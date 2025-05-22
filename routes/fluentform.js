@@ -12,8 +12,29 @@ module.exports = async function (req, res) {
   const datos = req.body;
   console.log('📦 Datos recibidos del formulario FluentForms:', datos);
 
+  // Reorganizar los datos como si fueran una sesión de Stripe
+  const session = {
+    customer_details: {
+      email: datos.email,
+      name: `${datos.nombre || ''} ${datos.apellidos || ''}`.trim()
+    },
+    amount_total: Math.round(parseFloat(datos.importe || 0) * 100),
+    metadata: {
+      nombre: datos.nombre || '',
+      apellidos: datos.apellidos || '',
+      dni: datos.dni || '',
+      direccion: datos.direccion || '',
+      ciudad: datos.ciudad || '',
+      provincia: datos.provincia || '',
+      cp: datos.cp || '',
+      tipoProducto: datos.tipoProducto || '',
+      nombreProducto: datos.nombreProducto || '',
+      email: datos.email || ''
+    }
+  };
+
   try {
-    await procesarCompra(datos);
+    await procesarCompra(session);
     console.log('✅ Compra procesada correctamente desde /fluentform');
     res.status(200).json({ ok: true, mensaje: 'Compra procesada correctamente' });
   } catch (error) {

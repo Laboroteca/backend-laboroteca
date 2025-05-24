@@ -1,13 +1,19 @@
 const { google } = require('googleapis');
-const path = require('path');
 
-// Autenticación con Google
+// Lee el contenido de las credenciales desde la variable de entorno
+const credentialsJSON = process.env.GOOGLE_CREDENTIALS_JSON;
+
+if (!credentialsJSON) {
+  throw new Error('❌ Falta la variable de entorno GOOGLE_CREDENTIALS_JSON con las credenciales de Google');
+}
+
+// Crea el auth usando el contenido del JSON
 const auth = new google.auth.GoogleAuth({
-  keyFile: path.join(__dirname, '../google/credenciales-sheets.json'),
+  credentials: JSON.parse(credentialsJSON),
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
 
-// ID de tu hoja de cálculo (lo sacas de la URL)
+// ID de la hoja (de la URL)
 const spreadsheetId = '1ShSiaz_TtODbVkczI1mfqTBj5nHb3xSEywyB0E6BL9I';
 
 async function guardarEnGoogleSheets(datos) {

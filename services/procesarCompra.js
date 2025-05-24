@@ -1,76 +1,67 @@
-const generarPDF = require('./pdf');
-const subirFacturaGCS = require('./gcs');
-const registrarEnSheets = require('./googleSheets');
-const enviarEmail = require('./email');
+const { crearFacturaEnFacturaCity } = require('./facturaCity');
+const { guardarEnGoogleSheets } = require('./googleSheets');
+const { enviarFacturaPorEmail } = require('./email');
+const { subirFactura } = require('./gcs');
 
 module.exports = async function procesarCompra(datos) {
   try {
-    const {
-      names: { Nombre, Apellidos },
-      email,
-      dni,
-      address_1: {
-        Dirección: direccion,
-        Municipio: ciudad,
-        Provincia: provincia,
-        'Código postal': cp
-      },
-      'Membresía Libro "De cara a la jubilación" (Acceso vitalicio)': tipoProducto = 'Libro',
-    } = datos;
+    const nombre = datos.nombre || datos.Nombre || '';
+    const apellidos = datos.apellidos || datos.Apellidos || '';
+    const email = datos.email || '';
+    const dni = datos.dni || '';
+    const direccion = datos.direccion || datos['Dirección'] || '';
+    const ciudad = datos.ciudad || datos['Municipio'] || '';
+    const provincia = datos.provincia || datos['Provincia'] || '';
+    const cp = datos.cp || datos['Código postal'] || '';
+    const producto = datos.nombreProducto || 'producto_desconocido';
+    const tipoProducto = datos.tipoProducto || 'Otro';
+    const importe = parseFloat((datos.importe || '22.90').toString().replace(',', '.'));
 
-    const nombreCompleto = `${Nombre} ${Apellidos}`;
-    const fecha = new Date().toLocaleDateString('es-ES');
-    const producto = 'Libro "De cara a la jubilación"';
-    const importe = '22,90 €';
-
-    // 1. Generar PDF de factura
-    const facturaBuffer = await generarPDF({
-      nombreCompleto,
-      email,
+    const datosCliente = {
+      nombre,
+      apellidos,
       dni,
+      importe,
+      email,
       direccion,
       ciudad,
-      provincia,
       cp,
+      provincia,
       producto,
-      importe,
-      fecha,
+      tipoProducto
+    };
+
+    console.log('📦 Datos finales de facturación:\n', JSON.stringify(datosCliente, null, 2));
+
+    // 1. Guardar en Google Sheets
+    console.log('📄 → Guardando en Google Sheets...');
+    await guardarEnGoogleSheets(datosCliente);
+    console.log('✅ Guardado en Sheets');
+
+    // 2. Generar factura en PDF (vía FacturaCity)
+    console.log('🧾 → Generando factura...');
+    const pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
+    console.log(`✅ Factura PDF generada (${pdfBuffer.length} bytes)`);
+
+    // 3. Subir a Google Cloud Storage
+    const nombreArchivo = `facturas/${email}/${Date.now()}-${producto}.pdf`;
+    console.log('☁️ → Subiendo a GCS:', nombreArchivo);
+    await subirFactura(nombreArchivo, pdfBuffer, {
+      email,
+      nombreProducto: producto,
+      tipoProducto,
+      importe
     });
+    console.log('✅ Subido a GCS');
 
-    // 2. Subir a Google Cloud Storage
-    const nombreArchivo = `${dni}_${Date.now()}.pdf`;
-    const urlDescarga = await subirFacturaGCS(nombreArchivo, facturaBuffer);
+    // 4. Enviar por email
+    console.log('📧 → Enviando email con la factura...');
+    await enviarFacturaPorEmail(datosCliente, pdfBuffer);
+    console.log('✅ Email enviado');
 
-    // 3. Registrar en Google Sheets
-    await registrarEnSheets({
-      Nombre: Nombre,
-      Apellidos: Apellidos,
-      DNI: dni,
-      Importe: importe,
-      Fecha: fecha,
-      Email: email,
-      Dirección: direccion,
-      Ciudad: ciudad,
-      CP: cp,
-      Provincia: provincia,
-    });
-
-    // 4. Enviar email al cliente con factura
-    await enviarEmail({
-      to: email,
-      subject: '✅ Confirmación de compra en Laboroteca',
-      text: `Hola ${Nombre}, adjuntamos la factura de tu compra del libro.`,
-      attachments: [
-        {
-          filename: 'Factura-Laboroteca.pdf',
-          content: facturaBuffer,
-        },
-      ],
-    });
-
-    console.log(`✅ Compra procesada con éxito para ${nombreCompleto}`);
+    console.log(`✅ Compra procesada con éxito para ${nombre} ${apellidos}`);
   } catch (error) {
-    console.error('❌ Error al procesar la compra:', error);
-    throw error; // Para que el controlador lo capture y devuelva 500
+    console.error('❌ Error en procesarCompra:', error);
+    throw error;
   }
 };

@@ -1,3 +1,8 @@
+// 🔁 Requiere dotenv si no es producción
+if (process.env.NODE_ENV !== 'production') {
+  require('dotenv').config();
+}
+
 const express = require('express');
 const router = express.Router();
 const Stripe = require('stripe');
@@ -9,93 +14,109 @@ const WP_URL = process.env.WP_URL;
 const WP_USER = process.env.WP_USER;
 const WP_APP_PASSWORD = process.env.WP_APP_PASSWORD;
 
-// 🧠 Mapa de productos y precios
-const PRECIO_PRODUCTO_MAP = {
-  'De cara a la jubilación': 2990,
-  'Curso IP Total': 7900,
-  'Pack libros': 4990
+// 📚 Mapa de productos
+const PRODUCTOS = {
+  'de cara a la jubilacion': {
+    nombre: 'De cara a la jubilación',
+    price_id: 'price_1RMG0mEe6Cd77jenTtn9xlB7',
+    slug: 'libro_jubilacion'
+  },
+  'curso ip total': {
+    nombre: 'Curso IP Total',
+    price_id: 'price_XXXXXXX', // Sustituye por el real
+    slug: 'curso_ip_total'
+  },
+  'pack libros': {
+    nombre: 'Pack libros',
+    price_id: 'price_XXXXXXX', // Sustituye por el real
+    slug: 'libro_doble'
+  }
 };
 
-// 🔄 Normaliza el body recibido
-function extraerDatos(body) {
-  return body.email ? body : Object.values(body)[0];
+// 🔄 Normaliza nombre de producto
+function normalizar(str) {
+  return (str || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .normalize('NFC')
+    .trim()
+    .toLowerCase();
 }
 
-// 🧠 Convierte nombre de producto a formato interno
-function normalizarProducto(nombre) {
-  const mapa = {
-    'De cara a la jubilación': 'libro_jubilacion',
-    'Pack libros': 'libro_doble',
-    'Curso IP Total': 'curso_ip_total'
-  };
-  return mapa[nombre] || null;
-}
-
-// 🔐 Comprueba si el email está registrado en WordPress
+// 🔐 Verifica si el email existe en WP
 async function emailRegistradoEnWordPress(email) {
   const auth = Buffer.from(`${WP_USER}:${WP_APP_PASSWORD}`).toString('base64');
-  const response = await fetch(`${WP_URL}/wp-json/wp/v2/users?search=${email}`, {
-    headers: { Authorization: `Basic ${auth}` }
-  });
+  try {
+    const response = await fetch(`${WP_URL}/wp-json/wp/v2/users?search=${email}`, {
+      headers: { Authorization: `Basic ${auth}` }
+    });
 
-  if (!response.ok) {
-    console.error('❌ Error consultando WordPress:', await response.text());
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('❌ Error consultando WordPress:', errorText);
+      return false;
+    }
+
+    const users = await response.json();
+    return users.some(user => user.email.toLowerCase() === email.toLowerCase());
+  } catch (err) {
+    console.error('❌ Error de red al consultar WordPress:', err.message);
     return false;
   }
-
-  const users = await response.json();
-  return users.some(user => user.email === email);
 }
 
-// 📦 Endpoint para crear la sesión de Stripe
+// 📦 Endpoint crear sesión Stripe
 router.post('/create-session', async (req, res) => {
   try {
-    const datos = extraerDatos(req.body);
-    const {
-      nombre,
-      apellidos,
-      email,
-      dni,
-      direccion,
-      ciudad,
-      provincia,
-      cp,
-      tipoProducto,
-      nombreProducto
-    } = datos;
+    const datos = req.body.email ? req.body : Object.values(req.body)[0];
 
-    console.log('📦 Datos recibidos del formulario:', datos);
+    const nombre = datos.nombre || datos.Nombre || '';
+    const apellidos = datos.apellidos || datos.Apellidos || '';
+    const email = datos.email || '';
+    const dni = datos.dni || '';
+    const direccion = datos.direccion || '';
+    const ciudad = datos.ciudad || '';
+    const provincia = datos.provincia || '';
+    const cp = datos.cp || '';
+    const tipoProducto = datos.tipoProducto || '';
+    const nombreProducto = datos.nombreProducto || '';
+
+    console.log('📩 Solicitud recibida:', {
+      nombre, apellidos, email, dni, direccion,
+      ciudad, provincia, cp, tipoProducto, nombreProducto
+    });
+
+    if (!email || !nombre || !nombreProducto || !tipoProducto) {
+      console.warn('⚠️ Faltan campos obligatorios.');
+      return res.status(400).json({ error: 'Faltan campos obligatorios.' });
+    }
 
     const registrado = await emailRegistradoEnWordPress(email);
     if (!registrado) {
-      console.warn('🚫 Email no registrado en WordPress:', email);
+      console.warn('🚫 Email no registrado en WP:', email);
       return res.status(403).json({ error: 'El email no está registrado como usuario.' });
     }
 
-    const precio = PRECIO_PRODUCTO_MAP[nombreProducto];
-    const productoNormalizado = normalizarProducto(nombreProducto);
+    const clave = normalizar(nombreProducto);
+    const producto = PRODUCTOS[clave];
 
-    if (!productoNormalizado || !precio) {
-      console.warn('⚠️ Producto inválido o sin precio configurado:', nombreProducto);
-      return res.status(400).json({ error: 'Producto no disponible para la venta.' });
+    if (!producto) {
+      console.warn('⚠️ Producto inválido:', clave);
+      return res.status(400).json({ error: 'Producto no disponible.' });
     }
 
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
       payment_method_types: ['card'],
       customer_email: email,
-      line_items: [{
-        price_data: {
-          currency: 'eur',
-          product_data: {
-            name: `${tipoProducto} "${nombreProducto}"`,
-          },
-          unit_amount: precio,
-        },
-        quantity: 1
-      }],
-      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(nombreProducto)}`,
-      cancel_url: 'https://laboroteca.es/cancel',
+      line_items: [
+        {
+          price: producto.price_id,
+          quantity: 1
+        }
+      ],
+      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(producto.nombre)}`,
+      cancel_url: 'https://laboroteca.es/error',
       metadata: {
         nombre,
         apellidos,
@@ -106,16 +127,15 @@ router.post('/create-session', async (req, res) => {
         provincia,
         cp,
         tipoProducto,
-        nombreProducto: productoNormalizado
+        nombreProducto: producto.slug
       }
     });
 
-    console.log('✅ Sesión de Stripe creada:', session.url);
+    console.log('✅ Sesión Stripe creada:', session.url);
     res.json({ url: session.url });
-
-  } catch (error) {
-    console.error('❌ Error al crear la sesión:', error.message);
-    res.status(500).json({ error: 'Error al crear la sesión' });
+  } catch (err) {
+    console.error('❌ Error creando sesión de pago:', err.message);
+    res.status(500).json({ error: 'Error interno al crear la sesión' });
   }
 });
 

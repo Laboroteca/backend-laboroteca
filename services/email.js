@@ -1,6 +1,5 @@
-require('dotenv').config(); // 🔐 Asegura que siempre se cargue el .env
-
-const nodemailer = require('nodemailer');
+require('dotenv').config(); // 🔐 Carga segura de variables
+const fetch = require('node-fetch');
 
 async function enviarFacturaPorEmail(datos, pdfBuffer) {
   try {
@@ -8,34 +7,21 @@ async function enviarFacturaPorEmail(datos, pdfBuffer) {
     console.log('📎 Tamaño del PDF recibido:', pdfBuffer?.length || 0);
     console.log('🧾 Datos del cliente recibidos:', JSON.stringify(datos, null, 2));
 
-    if (!pdfBuffer) {
-      console.warn('⚠️ No se recibió ningún buffer de PDF');
-      throw new Error('PDF nulo o indefinido');
+    if (!pdfBuffer || !Buffer.isBuffer(pdfBuffer)) {
+      console.warn('⚠️ El PDF recibido no es válido');
+      throw new Error('El PDF no es un buffer válido');
     }
 
     if (pdfBuffer.length < 5000) {
       console.warn('⚠️ PDF demasiado pequeño. Posible error. Email no enviado.');
-      throw new Error('PDF demasiado pequeño');
+      throw new Error('El PDF es demasiado pequeño para ser válido');
     }
 
-    // ✅ Protege el campo importe
     const importeTexto = datos.importe
       ? `${Number(datos.importe).toFixed(2)} €`
       : 'importe no disponible';
 
-    const transporter = nodemailer.createTransport({
-      host: process.env.MAIL_HOST,
-      port: parseInt(process.env.MAIL_PORT),
-      secure: true,
-      auth: {
-        user: process.env.MAIL_USER,
-        pass: process.env.MAIL_PASS
-      },
-      logger: true,
-      debug: true
-    });
-
-    const html = `
+    const html_body = `
       <div style="font-family: Arial, sans-serif; font-size: 16px; color: #333;">
         <p>Hola ${datos.nombre},</p>
         <p>Gracias por tu compra. Adjuntamos en este correo la factura correspondiente al producto:</p>
@@ -48,14 +34,14 @@ async function enviarFacturaPorEmail(datos, pdfBuffer) {
 
         <hr style="margin-top: 40px; margin-bottom: 10px;" />
         <div style="font-size: 12px; color: #777; line-height: 1.5;">
-          En cumplimiento de lo previsto por el Reglamento (UE) 2016/679, del Parlamento Europeo y del Consejo, de 27 de abril de 2016, relativo a la protección de las personas físicas en lo que respecta al tratamiento de datos personales (Reglamento Europeo de Protección de Datos), le informamos que su dirección de correo electrónico forma parte de la base de datos de Ignacio Solsona Fernández-Pedrera, DNI 20481042W, con domicilio en calle Enmedio nº 22, piso 3, puerta E, Castellón de la Plana, CP 12001.<br /><br />
-          Su dirección de correo electrónico se utiliza con la finalidad de prestarle servicios jurídicos y la base jurídica para tal utilización es el consentimiento otorgado por usted para el uso de sus datos con esta finalidad. Usted tiene derecho a retirar este consentimiento en cualquier momento.<br /><br />
-          De acuerdo con el artículo 13 del Reglamento Europeo de Protección de Datos, le informamos que usted tiene derecho a ejercer en relación a sus datos personales los derechos de acceso, rectificación, supresión, portabilidad, limitación del tratamiento, así como a oponerse a dicho tratamiento o al uso de sus datos para la elaboración de decisiones individuales automatizadas incluida la elaboración de perfiles, contactando con la siguiente dirección de correo electrónico: ignacio.solsona@icacs.com. Igualmente le informamos que usted tiene derecho a presentar una reclamación ante la autoridad de control competente en caso de que considere que se ha vulnerado algún derecho en relación a la protección de sus datos personales.
+          En cumplimiento del Reglamento (UE) 2016/679, le informamos que su dirección de correo electrónico forma parte de la base de datos de Ignacio Solsona Fernández-Pedrera, DNI 20481042W, con domicilio en calle Enmedio nº 22, piso 3, puerta E, Castellón de la Plana, CP 12001.<br /><br />
+          Su dirección se utiliza con la finalidad de prestarle servicios jurídicos. Usted tiene derecho a retirar su consentimiento en cualquier momento.<br /><br />
+          Puede ejercer sus derechos de acceso, rectificación, supresión, portabilidad, limitación y oposición contactando con: ignacio.solsona@icacs.com. También puede presentar una reclamación ante la autoridad de control competente.
         </div>
       </div>
     `;
 
-    const text = `
+    const text_body = `
 Hola ${datos.nombre},
 
 Gracias por tu compra. Adjuntamos en este correo la factura correspondiente al producto:
@@ -68,39 +54,45 @@ Un afectuoso saludo,
 Ignacio Solsona
 
 ------------------------------------------------------------
-En cumplimiento del Reglamento (UE) 2016/679 (RGPD), le informamos que su dirección de correo electrónico forma parte de la base de datos de Ignacio Solsona Fernández-Pedrera, DNI 20481042W, con domicilio en calle Enmedio nº 22, piso 3, puerta E, Castellón de la Plana, CP 12001.
+En cumplimiento del Reglamento (UE) 2016/679 (RGPD), su email forma parte de la base de datos de Ignacio Solsona Fernández-Pedrera, DNI 20481042W, con domicilio en calle Enmedio nº 22, piso 3, puerta E, Castellón de la Plana, CP 12001.
 
-Su dirección se utiliza para prestarle servicios jurídicos. Puede retirar su consentimiento en cualquier momento y ejercer sus derechos de acceso, rectificación, supresión, portabilidad, limitación del tratamiento y oposición contactando con: ignacio.solsona@icacs.com
-También puede presentar reclamación ante la autoridad de control competente si considera vulnerados sus derechos.
+Puede ejercer sus derechos en: ignacio.solsona@icacs.com
+También puede reclamar ante la autoridad de control si lo considera necesario.
 `;
 
-    const mailOptions = {
-      from: `"Laboroteca" <${process.env.MAIL_USER}>`,
-      to: datos.email,
-      subject: 'Confirmación de tu compra en Laboroteca',
-      text,
-      html,
-      attachments: [
-        {
-          filename: `Factura - ${datos.producto}.pdf`,
-          content: pdfBuffer,
-          contentType: 'application/pdf'
-        }
-      ]
-    };
+    const response = await fetch(process.env.SMTP2GO_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        api_key: process.env.SMTP2GO_API_KEY,
+        to: [datos.email],
+        sender: process.env.SMTP2GO_FROM_EMAIL,
+        from_name: process.env.SMTP2GO_FROM_NAME,
+        subject: 'Confirmación de tu compra en Laboroteca',
+        html_body,
+        text_body,
+        attachments: [
+          {
+            filename: `Factura - ${datos.producto}.pdf`,
+            fileblob: pdfBuffer.toString('base64'),
+            mimetype: 'application/pdf'
+          }
+        ]
+      })
+    });
 
-    console.log('✅ Email se enviará desde:', process.env.MAIL_USER);
-    console.log('📤 Enviando a:', datos.email);
+    const resultado = await response.json();
+    if (!resultado.success) {
+      console.error('❌ Error desde SMTP2GO:', resultado);
+      throw new Error('Error al enviar email con SMTP2GO');
+    }
 
-    const info = await transporter.sendMail(mailOptions);
-
-    console.log('✅ Email enviado con éxito ✅');
-    console.log('📨 Message ID:', info.messageId);
-    console.log('📫 Respuesta completa:', info);
+    console.log('✅ Email enviado con éxito vía SMTP2GO');
     return 'OK';
   } catch (error) {
-    console.error('❌ Error al enviar el email:');
-    console.error(error);
+    console.error('❌ Error al enviar el email:', error);
     throw error;
   }
 }

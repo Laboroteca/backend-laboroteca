@@ -1,25 +1,7 @@
 const { Storage } = require('@google-cloud/storage');
-const path = require('path');
 
-// Cargar credenciales desde base64 o archivo físico
-let credentials;
-if (process.env.GOOGLE_CREDENTIALS_JSON_BASE64) {
-  try {
-    credentials = JSON.parse(
-      Buffer.from(process.env.GOOGLE_CREDENTIALS_JSON_BASE64, 'base64').toString('utf8')
-    );
-    console.log('🔐 Credenciales GCS cargadas desde variable de entorno');
-  } catch (err) {
-    console.error('❌ Error al parsear GOOGLE_CREDENTIALS_JSON_BASE64:', err);
-    throw err;
-  }
-} else {
-  credentials = require(path.join(__dirname, '../google/credenciales-sheets.json'));
-  console.log('📄 Credenciales GCS cargadas desde archivo físico');
-}
-
-// Inicializar almacenamiento
-const storage = new Storage({ credentials });
+// Si estás en Railway con integración a Google Cloud activada, no hace falta pasar credenciales manualmente.
+const storage = new Storage(); 
 const BUCKET_NAME = 'laboroteca-facturas';
 
 /**

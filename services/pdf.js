@@ -1,39 +1,53 @@
 const PDFDocument = require('pdfkit');
 
+/**
+ * Genera una factura PDF en buffer a partir de los datos del cliente
+ * @param {Object} datos - Datos del cliente y la factura
+ * @returns {Promise<Buffer>} - Buffer del PDF generado
+ */
 function generarFacturaPDF(datos) {
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ size: 'A4', margin: 50 });
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
 
-    let buffers = [];
-    doc.on('data', buffers.push.bind(buffers));
-    doc.on('end', () => {
-      const pdfBuffer = Buffer.concat(buffers);
-      resolve(pdfBuffer);
-    });
+      const buffers = [];
+      doc.on('data', (chunk) => buffers.push(chunk));
+      doc.on('end', () => {
+        const pdfBuffer = Buffer.concat(buffers);
+        resolve(pdfBuffer);
+      });
 
-    doc
-      .fontSize(16)
-      .text('Factura', { align: 'center' })
-      .moveDown();
+      // Encabezado
+      doc
+        .fontSize(20)
+        .text('Factura', { align: 'center', underline: true })
+        .moveDown(1.5);
 
-    doc
-      .fontSize(12)
-      .text(`Nombre: ${datos.nombre} ${datos.apellidos}`)
-      .text(`DNI: ${datos.dni}`)
-      .text(`Email: ${datos.email}`)
-      .text(`Dirección: ${datos.direccion}, ${datos.cp} ${datos.ciudad} (${datos.provincia})`)
-      .moveDown();
+      // Datos del cliente
+      doc
+        .fontSize(12)
+        .text(`Nombre: ${datos.nombre || ''} ${datos.apellidos || ''}`)
+        .text(`DNI: ${datos.dni || ''}`)
+        .text(`Email: ${datos.email || ''}`)
+        .text(`Dirección: ${datos.direccion || ''}, ${datos.cp || ''} ${datos.ciudad || ''} (${datos.provincia || ''})`)
+        .moveDown();
 
-    doc
-      .text(`Producto: ${datos.producto}`)
-      .text(`Importe: ${datos.importe.toFixed(2)} €`, { align: 'right' });
+      // Detalles de la factura
+      doc
+        .text(`Producto adquirido: ${datos.producto || ''}`)
+        .text(`Importe total: ${Number(datos.importe || 0).toFixed(2)} €`, { align: 'right' })
+        .moveDown();
 
-    doc
-      .moveDown()
-      .fontSize(10)
-      .text('Laboroteca - www.laboroteca.es', { align: 'center' });
+      // Pie
+      doc
+        .fontSize(10)
+        .fillColor('gray')
+        .text('Laboroteca – www.laboroteca.es', { align: 'center' });
 
-    doc.end();
+      doc.end();
+    } catch (err) {
+      reject(err);
+    }
   });
 }
 

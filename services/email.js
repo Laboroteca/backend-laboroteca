@@ -60,11 +60,9 @@ Puede ejercer sus derechos en: ignacio.solsona@icacs.com
 También puede reclamar ante la autoridad de control si lo considera necesario.
 `;
 
-    const response = await fetch(process.env.SMTP2GO_API_URL, {
+    const response = await fetch('https://api.smtp2go.com/v3/email/send', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         api_key: process.env.SMTP2GO_API_KEY,
         to: [datos.email],
@@ -83,19 +81,9 @@ También puede reclamar ante la autoridad de control si lo considera necesario.
       })
     });
 
-    let resultado;
-    try {
-      resultado = await response.json();
-      console.log('📬 Respuesta SMTP2GO:', JSON.stringify(resultado, null, 2));
-    } catch (e) {
-      console.error('❌ Error parseando respuesta SMTP2GO:', e);
-      const raw = await response.text();
-      console.error('📦 Respuesta cruda:', raw);
-      throw new Error('No se pudo parsear respuesta SMTP2GO');
-    }
-
+    const resultado = await response.json();
     if (!resultado.success) {
-      console.error('❌ Error desde SMTP2GO:', resultado);
+      console.error('❌ Error desde SMTP2GO:', JSON.stringify(resultado, null, 2));
       throw new Error('Error al enviar email con SMTP2GO');
     }
 

@@ -1,7 +1,13 @@
 const { Storage } = require('@google-cloud/storage');
 
-// Si estás en Railway con integración a Google Cloud activada, no hace falta pasar credenciales manualmente.
-const storage = new Storage(); 
+// Carga y decodifica las credenciales desde la variable de entorno
+const credentialsJSON = JSON.parse(
+  Buffer.from(process.env.GCP_CREDENTIALS_BASE64, 'base64').toString('utf-8')
+);
+
+// Inicializa el cliente de Storage con las credenciales
+const storage = new Storage({ credentials: credentialsJSON });
+
 const BUCKET_NAME = 'laboroteca-facturas';
 
 /**

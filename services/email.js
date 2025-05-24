@@ -83,7 +83,17 @@ También puede reclamar ante la autoridad de control si lo considera necesario.
       })
     });
 
-    const resultado = await response.json();
+    let resultado;
+    try {
+      resultado = await response.json();
+      console.log('📬 Respuesta SMTP2GO:', JSON.stringify(resultado, null, 2));
+    } catch (e) {
+      console.error('❌ Error parseando respuesta SMTP2GO:', e);
+      const raw = await response.text();
+      console.error('📦 Respuesta cruda:', raw);
+      throw new Error('No se pudo parsear respuesta SMTP2GO');
+    }
+
     if (!resultado.success) {
       console.error('❌ Error desde SMTP2GO:', resultado);
       throw new Error('Error al enviar email con SMTP2GO');

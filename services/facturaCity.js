@@ -27,22 +27,18 @@ async function crearFacturaEnFacturaCity(datosCliente) {
     const precioBase = (precioTotalConIVA / 1.21).toFixed(2);
     console.log('💶 Precio base sin IVA:', precioBase, '→ Total con IVA:', precioTotalConIVA.toFixed(2));
 
-    // 👇 Dirección compuesta para mejorar presentación en FacturaCity
-    const direccion2 = `${datosCliente.cp || ''} ${datosCliente.ciudad || ''}, ${datosCliente.provincia || ''}`.trim();
-
     const cliente = {
       nombre: `${datosCliente.nombre} ${datosCliente.apellidos}`,
-      cifnif: datosCliente.dni,
-      direccion: datosCliente.direccion || 'Dirección no facilitada',
-      direccion2: direccion2 || '',
-      ciudad: datosCliente.ciudad || 'Ciudad no indicada',
-      provincia: datosCliente.provincia || 'Provincia no indicada',
-      cp: datosCliente.cp || '00000',
-      email: datosCliente.email,
-      pais: 'ES',
-      tipoidfiscal: 'NIF',
       razonsocial: `${datosCliente.nombre} ${datosCliente.apellidos}`,
       personafisica: '1',
+      tipoidfiscal: 'NIF',
+      cifnif: datosCliente.dni,
+      direccion: datosCliente.direccion || 'Dirección no facilitada',
+      codpostal: datosCliente.cp || '',
+      ciudad: datosCliente.ciudad || '',
+      provincia: datosCliente.provincia || '',
+      pais: 'ES',
+      email: datosCliente.email,
       regimeniva: 'General'
     };
 

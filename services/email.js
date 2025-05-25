@@ -73,7 +73,7 @@ También puede reclamar ante la autoridad de control si lo considera necesario.
         text_body,
         attachments: [
           {
-            filename: `Factura - ${datos.producto}.pdf`,
+            filename: 'Factura Laboroteca.pdf',
             fileblob: pdfBuffer.toString('base64'),
             mimetype: 'application/pdf'
           }

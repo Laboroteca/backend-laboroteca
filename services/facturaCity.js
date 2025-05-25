@@ -53,12 +53,12 @@ async function crearFacturaEnFacturaCity(datosCliente) {
     if (!codcliente) throw new Error('❌ No se pudo obtener codcliente');
     console.log(`✅ Cliente creado: ${codcliente}`);
 
-    // 🏠 Añadir dirección de facturación
+    // 🏠 Crear dirección separada para que aparezca en ficha
     try {
       const direccionFact = {
         codcliente,
         descripcion: `${datosCliente.nombre} ${datosCliente.apellidos}`,
-        direccion: datosCliente.direccion || '',
+        direccion: datosCliente.direccion || 'Dirección no facilitada',
         codpostal: datosCliente.cp || '',
         ciudad: datosCliente.ciudad || '',
         provincia: datosCliente.provincia || '',
@@ -68,7 +68,7 @@ async function crearFacturaEnFacturaCity(datosCliente) {
         email: datosCliente.email
       };
 
-      const direccionResp = await axios.post(`${API_BASE}/direccionescliente`, qs.stringify(direccionFact), {
+      const direccionResp = await axios.post(`${API_BASE}/clientes_direcciones`, qs.stringify(direccionFact), {
         headers: {
           Token: FACTURACITY_API_KEY,
           'Content-Type': 'application/x-www-form-urlencoded'

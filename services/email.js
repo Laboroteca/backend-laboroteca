@@ -82,7 +82,8 @@ También puede reclamar ante la autoridad de control si lo considera necesario.
     });
 
     const resultado = await response.json();
-    if (!resultado.success) {
+
+    if (!resultado.success || resultado.data?.succeeded !== 1) {
       console.error('❌ Error desde SMTP2GO:', JSON.stringify(resultado, null, 2));
       throw new Error('Error al enviar email con SMTP2GO');
     }

@@ -9,8 +9,9 @@ const { guardarEnGoogleSheets } = require('../services/googleSheets');
 const { crearFacturaEnFacturaCity } = require('../services/facturaCity');
 const { enviarFacturaPorEmail } = require('../services/email');
 const { subirFactura } = require('../services/gcs');
-// const { activarMembresiaEnMemberPress } = require('../services/memberpress'); // ← Recordatorio: activar cuando pasemos a Live
-const axios = require('axios');
+// const { activarMembresiaEnMemberPress } = require('../services/memberpress');
+
+const processedEvents = new Set(); // 🧠 Protección contra duplicados
 
 module.exports = async function (req, res) {
   console.log('🔥 LLEGÓ AL WEBHOOK');
@@ -28,6 +29,13 @@ module.exports = async function (req, res) {
 
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
+
+    // ⛔️ Verificar si ya se procesó
+    if (processedEvents.has(session.id)) {
+      console.warn(`⚠️ Evento ${session.id} ya fue procesado. Ignorando duplicado.`);
+      return res.status(200).json({ received: true, duplicate: true });
+    }
+    processedEvents.add(session.id);
 
     console.log('✅ Evento recibido: checkout.session.completed');
     console.log('📧 Email:', session.customer_details?.email);
@@ -64,7 +72,7 @@ async function procesarCompra(session) {
     provincia: m.provincia || '',
     cp: m.cp || '',
     producto: m.nombreProducto || 'producto_desconocido',
-    tipoProducto: m.tipoProducto || null
+    tipoProducto: m.tipoProducto || 'Otro'
   };
 
   console.log('🧾 Datos del cliente a procesar:\n', JSON.stringify(datosCliente, null, 2));
@@ -89,27 +97,17 @@ async function procesarCompra(session) {
     console.log('✅ Subido a GCS');
 
     console.log('📧 → Enviando email con la factura...');
-    try {
-      await enviarFacturaPorEmail(datosCliente, pdfBuffer);
-      console.log('✅ Email enviado');
-    } catch (emailError) {
-      console.error('❌ Error enviando email:');
-      console.error(emailError);
-    }
+    await enviarFacturaPorEmail(datosCliente, pdfBuffer);
+    console.log('✅ Email enviado');
 
-    // 🚫❌ ACTIVACIÓN DE MEMBRESÍA DESACTIVADA TEMPORALMENTE ❌🚫
-    // 🧠 RECORDATORIO CENUTRIO: ACTÍVALO EN PRODUCCIÓN (LIVE MODE STRIPE)
+    // 🛑 Si activas MemberPress, recuerda descomentar:
     /*
     console.log('🔐 → Activando acceso en MemberPress...');
     await activarMembresiaEnMemberPress(email, datosCliente.producto);
     console.log('✅ Acceso activado');
     */
-
   } catch (error) {
     console.error('❌ Error en procesarCompra:', error);
     throw error;
   }
 }
-
-// 🔔 Cuando se active, vuelve a incluir esta función y su require arriba.
-// async function activarMembresiaEnMemberPress(email, productoSlug) { ... }

@@ -56,8 +56,17 @@ module.exports = async function procesarCompra(datos) {
 
     // 4. Enviar por email
     console.log('📧 → Enviando email con la factura...');
-    await enviarFacturaPorEmail(datosCliente, pdfBuffer);
-    console.log('✅ Email enviado');
+    try {
+      const resultado = await enviarFacturaPorEmail(datosCliente, pdfBuffer);
+      if (resultado === 'OK') {
+        console.log('✅ Email enviado');
+      } else {
+        console.warn('⚠️ Email enviado pero respuesta inesperada:', resultado);
+      }
+    } catch (emailErr) {
+      console.error('❌ Error enviando email:');
+      console.error(emailErr);
+    }
 
     console.log(`✅ Compra procesada con éxito para ${nombre} ${apellidos}`);
   } catch (error) {

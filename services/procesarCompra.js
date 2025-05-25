@@ -31,32 +31,48 @@ module.exports = async function procesarCompra(datos) {
       tipoProducto
     };
 
+    console.time(`🕒 Compra ${email}`);
+
     console.log('📦 Datos finales de facturación:\n', JSON.stringify(datosCliente, null, 2));
 
     // 1. Guardar en Google Sheets
-    console.log('📄 → Guardando en Google Sheets...');
-    await guardarEnGoogleSheets(datosCliente);
-    console.log('✅ Guardado en Sheets');
+    try {
+      console.log('📄 → Guardando en Google Sheets...');
+      await guardarEnGoogleSheets(datosCliente);
+      console.log('✅ Guardado en Sheets');
+    } catch (sheetsErr) {
+      console.error('❌ Error guardando en Google Sheets:', sheetsErr);
+    }
 
     // 2. Generar factura en PDF (vía FacturaCity)
-    console.log('🧾 → Generando factura...');
-    const pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
-    console.log(`✅ Factura PDF generada (${pdfBuffer.length} bytes)`);
+    let pdfBuffer;
+    try {
+      console.log('🧾 → Generando factura...');
+      pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
+      console.log(`✅ Factura PDF generada (${pdfBuffer.length} bytes)`);
+    } catch (facturaErr) {
+      console.error('❌ Error generando la factura:', facturaErr);
+      throw facturaErr;
+    }
 
     // 3. Subir a Google Cloud Storage
-    const nombreArchivo = `facturas/${email}/${Date.now()}-${producto}.pdf`;
-    console.log('☁️ → Subiendo a GCS:', nombreArchivo);
-    await subirFactura(nombreArchivo, pdfBuffer, {
-      email,
-      nombreProducto: producto,
-      tipoProducto,
-      importe
-    });
-    console.log('✅ Subido a GCS');
+    try {
+      const nombreArchivo = `facturas/${email}/Factura Laboroteca.pdf`;
+      console.log('☁️ → Subiendo a GCS:', nombreArchivo);
+      await subirFactura(nombreArchivo, pdfBuffer, {
+        email,
+        nombreProducto: producto,
+        tipoProducto,
+        importe
+      });
+      console.log('✅ Subido a GCS');
+    } catch (gcsErr) {
+      console.error('❌ Error subiendo a GCS:', gcsErr);
+    }
 
     // 4. Enviar por email
-    console.log('📧 → Enviando email con la factura...');
     try {
+      console.log('📧 → Enviando email con la factura...');
       const resultado = await enviarFacturaPorEmail(datosCliente, pdfBuffer);
       if (resultado === 'OK') {
         console.log('✅ Email enviado');
@@ -64,11 +80,11 @@ module.exports = async function procesarCompra(datos) {
         console.warn('⚠️ Email enviado pero respuesta inesperada:', resultado);
       }
     } catch (emailErr) {
-      console.error('❌ Error enviando email:');
-      console.error(emailErr);
+      console.error('❌ Error enviando email:', emailErr);
     }
 
     console.log(`✅ Compra procesada con éxito para ${nombre} ${apellidos}`);
+    console.timeEnd(`🕒 Compra ${email}`);
   } catch (error) {
     console.error('❌ Error en procesarCompra:', error);
     throw error;

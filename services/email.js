@@ -68,7 +68,7 @@ También puede reclamar ante la autoridad de control si lo considera necesario.
         to: [datos.email],
         sender: process.env.SMTP2GO_FROM_EMAIL,
         from_name: process.env.SMTP2GO_FROM_NAME,
-        subject: 'Confirmación de tu compra en Laboroteca',
+        subject: 'Factura de tu compra en Laboroteca',
         html_body,
         text_body,
         attachments: [

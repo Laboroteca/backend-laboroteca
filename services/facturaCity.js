@@ -83,7 +83,7 @@ async function crearFacturaEnFacturaCity(datosCliente) {
     const lineas = [
       {
         referencia: 'LIBRO001',
-        descripcion: datosCliente.producto,
+        descripcion: `Libro ${datosCliente.producto}. Edición digital. Membresía vitalicia.`,
         cantidad: 1,
         pvpunitario: precioBase,
         codimpuesto: 'IVA21'
@@ -97,7 +97,11 @@ async function crearFacturaEnFacturaCity(datosCliente) {
       fecha: obtenerFechaHoy(),
       codserie: 'A',
       nombrecliente: `${datosCliente.nombre} ${datosCliente.apellidos}`,
-      cifnif: datosCliente.dni
+      cifnif: datosCliente.dni,
+      direccion: datosCliente.direccion || '',
+      ciudad: datosCliente.ciudad || '',
+      provincia: datosCliente.provincia || '',
+      codpostal: datosCliente.cp || ''
     };
 
     const facturaResp = await axios.post(`${API_BASE}/crearFacturaCliente`, qs.stringify(factura), {

@@ -27,7 +27,9 @@ async function crearFacturaEnFacturaCity(datosCliente) {
     const precioBase = (precioTotalConIVA / 1.21).toFixed(2);
     console.log('💶 Precio base sin IVA:', precioBase, '→ Total con IVA:', precioTotalConIVA.toFixed(2));
 
-    // 1. Crear cliente
+    // Prevenir duplicados (lógica externa sugerida)
+    // IMPORTANTE: Se debe controlar desde el flujo principal que esta función solo se llame una vez por pago confirmado
+
     const cliente = {
       nombre: `${datosCliente.nombre} ${datosCliente.apellidos}`,
       razonsocial: `${datosCliente.nombre} ${datosCliente.apellidos}`,
@@ -54,47 +56,15 @@ async function crearFacturaEnFacturaCity(datosCliente) {
     if (!codcliente) throw new Error('❌ No se pudo obtener codcliente');
     console.log(`✅ Cliente creado: ${codcliente}`);
 
-    // 2. Crear dirección de facturación vinculada
-    let idcontactofact = null;
-    try {
-      const direccionFact = {
-        codcliente,
-        descripcion: 'Dirección de facturación',
-        direccion: datosCliente.direccion || '',
-        codpostal: datosCliente.cp || '',
-        ciudad: datosCliente.ciudad || '',
-        provincia: datosCliente.provincia || '',
-        pais: 'España',
-        nombre: datosCliente.nombre,
-        apellidos: datosCliente.apellidos,
-        email: datosCliente.email
-      };
-
-      const direccionResp = await axios.post(`${API_BASE}/direccionescliente`, qs.stringify(direccionFact), {
-        headers: {
-          Token: FACTURACITY_API_KEY,
-          'Content-Type': 'application/x-www-form-urlencoded'
-        }
-      });
-
-      idcontactofact = direccionResp.data?.data?.idcontacto;
-      if (idcontactofact) {
-        console.log(`🏠 Dirección añadida con ID contacto: ${idcontactofact}`);
-      } else {
-        console.warn('⚠️ Dirección creada pero no se obtuvo idcontacto');
+    const lineas = [
+      {
+        referencia: 'LIBRO001',
+        descripcion: datosCliente.producto,
+        cantidad: 1,
+        pvpunitario: precioBase,
+        codimpuesto: 'IVA21'
       }
-    } catch (direccionErr) {
-      console.warn('⚠️ No se pudo añadir la dirección de facturación:', direccionErr.message);
-    }
-
-    // 3. Crear factura
-    const lineas = [{
-      referencia: 'LIBRO001',
-      descripcion: datosCliente.producto,
-      cantidad: 1,
-      pvpunitario: precioBase,
-      codimpuesto: 'IVA21'
-    }];
+    ];
 
     const factura = {
       codcliente,
@@ -103,8 +73,7 @@ async function crearFacturaEnFacturaCity(datosCliente) {
       fecha: obtenerFechaHoy(),
       codserie: 'A',
       nombrecliente: `${datosCliente.nombre} ${datosCliente.apellidos}`,
-      cifnif: datosCliente.dni,
-      ...(idcontactofact ? { idcontactofact } : {})
+      cifnif: datosCliente.dni
     };
 
     const facturaResp = await axios.post(`${API_BASE}/crearFacturaCliente`, qs.stringify(factura), {
@@ -120,7 +89,6 @@ async function crearFacturaEnFacturaCity(datosCliente) {
     if (!idfactura) throw new Error('❌ No se recibió idfactura');
     console.log(`🧾 Factura creada con ID ${idfactura}`);
 
-    // 4. Descargar PDF
     const pdfUrl = `${API_BASE}/exportarFacturaCliente/${idfactura}?lang=es_ES`;
     const pdfResponse = await axios.get(pdfUrl, {
       headers: { Token: FACTURACITY_API_KEY },
@@ -131,7 +99,6 @@ async function crearFacturaEnFacturaCity(datosCliente) {
     console.log(`📦 PDF generado (${pdfSize} bytes)`);
 
     return pdfResponse.data;
-
   } catch (error) {
     if (error.response) {
       console.error('❌ Error al crear factura en FacturaCity:');

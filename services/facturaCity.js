@@ -53,7 +53,7 @@ async function crearFacturaEnFacturaCity(datosCliente) {
     if (!codcliente) throw new Error('❌ No se pudo obtener codcliente');
     console.log(`✅ Cliente creado: ${codcliente}`);
 
-    // 📍 Añadir dirección asociada al cliente
+    // 🏠 Añadir dirección
     try {
       const direccionFiscal = {
         codcliente,
@@ -68,7 +68,7 @@ async function crearFacturaEnFacturaCity(datosCliente) {
         email: datosCliente.email
       };
 
-      const direccionResp = await axios.post(`${API_BASE}/direccionescliente`, qs.stringify(direccionFiscal), {
+      await axios.post(`${API_BASE}/direccionescliente`, qs.stringify(direccionFiscal), {
         headers: {
           Token: FACTURACITY_API_KEY,
           'Content-Type': 'application/x-www-form-urlencoded'
@@ -80,10 +80,12 @@ async function crearFacturaEnFacturaCity(datosCliente) {
       console.warn('⚠️ No se pudo añadir dirección fiscal:', err.message);
     }
 
+    const descripcion = datosCliente.descripcionProducto || datosCliente.producto;
+
     const lineas = [
       {
         referencia: 'LIBRO001',
-        descripcion: `Libro ${datosCliente.producto}. Edición digital. Membresía vitalicia.`,
+        descripcion,
         cantidad: 1,
         pvpunitario: precioBase,
         codimpuesto: 'IVA21'

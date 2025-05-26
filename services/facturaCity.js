@@ -27,9 +27,6 @@ async function crearFacturaEnFacturaCity(datosCliente) {
     const precioBase = (precioTotalConIVA / 1.21).toFixed(2);
     console.log('💶 Precio base sin IVA:', precioBase, '→ Total con IVA:', precioTotalConIVA.toFixed(2));
 
-    // Prevenir duplicados (lógica externa sugerida)
-    // IMPORTANTE: Se debe controlar desde el flujo principal que esta función solo se llame una vez por pago confirmado
-
     const cliente = {
       nombre: `${datosCliente.nombre} ${datosCliente.apellidos}`,
       razonsocial: `${datosCliente.nombre} ${datosCliente.apellidos}`,
@@ -55,6 +52,33 @@ async function crearFacturaEnFacturaCity(datosCliente) {
     const codcliente = clienteResp.data?.data?.codcliente;
     if (!codcliente) throw new Error('❌ No se pudo obtener codcliente');
     console.log(`✅ Cliente creado: ${codcliente}`);
+
+    // 📍 Añadir dirección asociada al cliente
+    try {
+      const direccionFiscal = {
+        codcliente,
+        descripcion: `${datosCliente.nombre} ${datosCliente.apellidos}`,
+        direccion: datosCliente.direccion || '',
+        codpostal: datosCliente.cp || '',
+        ciudad: datosCliente.ciudad || '',
+        provincia: datosCliente.provincia || '',
+        pais: 'España',
+        nombre: datosCliente.nombre,
+        apellidos: datosCliente.apellidos,
+        email: datosCliente.email
+      };
+
+      const direccionResp = await axios.post(`${API_BASE}/direccionescliente`, qs.stringify(direccionFiscal), {
+        headers: {
+          Token: FACTURACITY_API_KEY,
+          'Content-Type': 'application/x-www-form-urlencoded'
+        }
+      });
+
+      console.log('🏠 Dirección fiscal registrada correctamente');
+    } catch (err) {
+      console.warn('⚠️ No se pudo añadir dirección fiscal:', err.message);
+    }
 
     const lineas = [
       {

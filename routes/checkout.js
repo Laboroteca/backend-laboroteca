@@ -19,17 +19,20 @@ const PRODUCTOS = {
   'de cara a la jubilacion': {
     nombre: 'De cara a la jubilación',
     price_id: 'price_1RMG0mEe6Cd77jenTtn9xlB7',
-    slug: 'libro_jubilacion'
+    slug: 'libro_jubilacion',
+    descripcion: 'Libro De cara a la jubilación. Edición digital. Membresía vitalicia.'
   },
   'curso ip total': {
     nombre: 'Curso IP Total',
     price_id: 'price_XXXXXXX', // Sustituye por el real
-    slug: 'curso_ip_total'
+    slug: 'curso_ip_total',
+    descripcion: 'Curso online de Incapacidad Permanente Total. Acceso inmediato y materiales descargables.'
   },
   'pack libros': {
     nombre: 'Pack libros',
     price_id: 'price_XXXXXXX', // Sustituye por el real
-    slug: 'libro_doble'
+    slug: 'libro_doble',
+    descripcion: 'Pack: "De cara a la jubilación" + "Jubilación anticipada". Edición digital. Membresía vitalicia.'
   }
 };
 
@@ -81,28 +84,23 @@ router.post('/create-session', async (req, res) => {
     const tipoProducto = datos.tipoProducto || '';
     const nombreProducto = datos.nombreProducto || '';
 
+    const clave = normalizar(nombreProducto);
+    const producto = PRODUCTOS[clave];
+
     console.log('📩 Solicitud recibida:', {
       nombre, apellidos, email, dni, direccion,
       ciudad, provincia, cp, tipoProducto, nombreProducto
     });
 
-    if (!email || !nombre || !nombreProducto || !tipoProducto) {
-      console.warn('⚠️ Faltan campos obligatorios.');
-      return res.status(400).json({ error: 'Faltan campos obligatorios.' });
+    if (!email || !nombre || !nombreProducto || !tipoProducto || !producto) {
+      console.warn('⚠️ Faltan datos o producto inválido.');
+      return res.status(400).json({ error: 'Faltan datos obligatorios o producto no válido.' });
     }
 
     const registrado = await emailRegistradoEnWordPress(email);
     if (!registrado) {
       console.warn('🚫 Email no registrado en WP:', email);
       return res.status(403).json({ error: 'El email no está registrado como usuario.' });
-    }
-
-    const clave = normalizar(nombreProducto);
-    const producto = PRODUCTOS[clave];
-
-    if (!producto) {
-      console.warn('⚠️ Producto inválido:', clave);
-      return res.status(400).json({ error: 'Producto no disponible.' });
     }
 
     const session = await stripe.checkout.sessions.create({
@@ -127,7 +125,8 @@ router.post('/create-session', async (req, res) => {
         provincia,
         cp,
         tipoProducto,
-        nombreProducto: producto.slug
+        nombreProducto: producto.slug,
+        descripcionProducto: producto.descripcion
       }
     });
 

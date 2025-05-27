@@ -30,7 +30,6 @@ module.exports = async function (req, res) {
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
 
-    // ⛔️ Verificar si ya se procesó
     if (processedEvents.has(session.id)) {
       console.warn(`⚠️ Evento ${session.id} ya fue procesado. Ignorando duplicado.`);
       return res.status(200).json({ received: true, duplicate: true });
@@ -71,7 +70,7 @@ async function procesarCompra(session) {
     ciudad: m.ciudad || '',
     provincia: m.provincia || '',
     cp: m.cp || '',
-    producto: m.nombreProducto || 'producto_desconocido',
+    producto: m.descripcionProducto || m.nombreProducto || 'producto_desconocido',
     tipoProducto: m.tipoProducto || 'Otro'
   };
 

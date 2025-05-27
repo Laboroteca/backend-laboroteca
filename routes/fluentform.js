@@ -26,18 +26,19 @@ module.exports = async function (req, res) {
   const cp = datos.cp || '';
   const tipoProducto = datos.tipoProducto || '';
   const nombreProducto = datos.nombreProducto || '';
+  const descripcionProducto = datos.descripcionProducto || ''; // 👈 Nuevo campo
   const importe = parseFloat((datos.importe || '0').toString().replace(',', '.'));
 
   // 🧪 Validación
-  if (!email || !nombre || !tipoProducto || !nombreProducto || !importe) {
+  if (!email || !nombre || !tipoProducto || (!nombreProducto && !descripcionProducto) || !importe) {
     console.warn('⚠️ Campos requeridos faltantes:', {
-      email, nombre, tipoProducto, nombreProducto, importe
+      email, nombre, tipoProducto, nombreProducto, descripcionProducto, importe
     });
     return res.status(400).json({ error: 'Faltan datos requeridos.' });
   }
 
   // 🧾 Simular objeto "session" de Stripe
-  const sessionId = `${email}-${nombreProducto}-${importe}`;
+  const sessionId = `${email}-${nombreProducto || descripcionProducto}-${importe}`;
   if (processedSessions.has(sessionId)) {
     console.warn(`⚠️ Sesión ya procesada: ${sessionId}`);
     return res.status(200).json({ ok: true, mensaje: 'Duplicado ignorado' });
@@ -60,7 +61,8 @@ module.exports = async function (req, res) {
       provincia,
       cp,
       tipoProducto,
-      nombreProducto
+      nombreProducto,
+      descripcionProducto // 👈 Añadido a metadata
     }
   };
 

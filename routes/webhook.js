@@ -5,7 +5,8 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
-const firestore = require('../firebase'); // Ya es firestore directamente
+const admin = require('../firebase'); // ← Exporta admin completo
+const firestore = admin.firestore();  // ← Ya tiene runTransaction
 
 const { guardarEnGoogleSheets } = require('../services/googleSheets');
 const { crearFacturaEnFacturaCity } = require('../services/facturaCity');

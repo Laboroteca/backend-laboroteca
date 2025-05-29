@@ -5,13 +5,16 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
+const admin = require('firebase-admin');
+const firestore = admin.firestore();
+
 const { guardarEnGoogleSheets } = require('../services/googleSheets');
 const { crearFacturaEnFacturaCity } = require('../services/facturaCity');
 const { enviarFacturaPorEmail } = require('../services/email');
 const { subirFactura } = require('../services/gcs');
 // const { activarMembresiaEnMemberPress } = require('../services/memberpress');
 
-const processedEvents = new Set(); // 🧠 Protección contra duplicados
+const processedEvents = new Set(); // 🧠 Protección contra duplicados en memoria
 
 module.exports = async function (req, res) {
   console.log('🔥 LLEGÓ AL WEBHOOK');
@@ -29,12 +32,14 @@ module.exports = async function (req, res) {
 
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
+    const sessionId = session.id;
 
-    if (processedEvents.has(session.id)) {
-      console.warn(`⚠️ Evento ${session.id} ya fue procesado. Ignorando duplicado.`);
+    // 🧠 Protección en memoria (por si se repite durante el mismo proceso)
+    if (processedEvents.has(sessionId)) {
+      console.warn(`⚠️ Evento ${sessionId} ya fue procesado en memoria. Ignorando duplicado.`);
       return res.status(200).json({ received: true, duplicate: true });
     }
-    processedEvents.add(session.id);
+    processedEvents.add(sessionId);
 
     console.log('✅ Evento recibido: checkout.session.completed');
     console.log('📧 Email:', session.customer_details?.email);
@@ -42,10 +47,31 @@ module.exports = async function (req, res) {
     console.log('💰 Monto total:', session.amount_total);
 
     try {
-      await procesarCompra(session);
+      await firestore.runTransaction(async (t) => {
+        const docRef = firestore.collection('comprasProcesadas').doc(sessionId);
+        const docSnap = await t.get(docRef);
+
+        if (docSnap.exists) {
+          console.warn(`⚠️ La sesión ${sessionId} ya fue procesada (transacción). Ignorando duplicado.`);
+          return;
+        }
+
+        // Procesamos la compra
+        await procesarCompra(session);
+
+        // Guardamos registro en Firestore
+        await t.set(docRef, {
+          sessionId,
+          email: session.customer_email,
+          producto: session.metadata?.nombreProducto || 'desconocido',
+          fecha: new Date().toISOString(),
+          facturaGenerada: true
+        });
+      });
+
       return res.status(200).json({ received: true });
     } catch (err) {
-      console.error('❌ Error procesando compra:', err);
+      console.error('❌ Error procesando compra o guardando en Firestore:', err);
       return res.status(500).json({ error: 'Error procesando la compra' });
     }
   } else {
@@ -99,7 +125,6 @@ async function procesarCompra(session) {
     await enviarFacturaPorEmail(datosCliente, pdfBuffer);
     console.log('✅ Email enviado');
 
-    // 🛑 Si activas MemberPress, recuerda descomentar:
     /*
     console.log('🔐 → Activando acceso en MemberPress...');
     await activarMembresiaEnMemberPress(email, datosCliente.producto);

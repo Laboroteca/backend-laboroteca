@@ -5,7 +5,7 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
-const admin = require('firebase-admin');
+const admin = require('../firebase'); // ← CAMBIO CLAVE
 const firestore = admin.firestore();
 
 const { guardarEnGoogleSheets } = require('../services/googleSheets');
@@ -34,7 +34,6 @@ module.exports = async function (req, res) {
     const session = event.data.object;
     const sessionId = session.id;
 
-    // 🧠 Protección en memoria (por si se repite durante el mismo proceso)
     if (processedEvents.has(sessionId)) {
       console.warn(`⚠️ Evento ${sessionId} ya fue procesado en memoria. Ignorando duplicado.`);
       return res.status(200).json({ received: true, duplicate: true });
@@ -56,10 +55,8 @@ module.exports = async function (req, res) {
           return;
         }
 
-        // Procesamos la compra
         await procesarCompra(session);
 
-        // Guardamos registro en Firestore
         await t.set(docRef, {
           sessionId,
           email: session.customer_email,

@@ -5,7 +5,7 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
-const handleStripeEvent = require('../services/handleStripeEvent'); // ✅ función centralizada
+const handleStripeEvent = require('../services/handleStripeEvent'); // ✅ Función centralizada
 
 module.exports = async function (req, res) {
   console.log('🔥 LLEGÓ AL WEBHOOK');

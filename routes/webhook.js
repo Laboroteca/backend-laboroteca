@@ -5,8 +5,7 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
-const admin = require('../firebase'); // ← CAMBIO CLAVE
-const firestore = admin.firestore();
+const firestore = require('../firebase'); // Ya es firestore directamente
 
 const { guardarEnGoogleSheets } = require('../services/googleSheets');
 const { crearFacturaEnFacturaCity } = require('../services/facturaCity');
@@ -14,7 +13,7 @@ const { enviarFacturaPorEmail } = require('../services/email');
 const { subirFactura } = require('../services/gcs');
 // const { activarMembresiaEnMemberPress } = require('../services/memberpress');
 
-const processedEvents = new Set(); // 🧠 Protección contra duplicados en memoria
+const processedEvents = new Set();
 
 module.exports = async function (req, res) {
   console.log('🔥 LLEGÓ AL WEBHOOK');

@@ -66,8 +66,7 @@ También puede reclamar ante la autoridad de control si lo considera necesario.
       body: JSON.stringify({
         api_key: process.env.SMTP2GO_API_KEY,
         to: [datos.email],
-        sender: process.env.SMTP2GO_FROM_EMAIL,
-        from_name: process.env.SMTP2GO_FROM_NAME,
+        sender: `"Laboroteca" <${process.env.SMTP2GO_FROM_EMAIL}>`, // ✅ Nombre forzado
         subject: 'Factura de tu compra en Laboroteca',
         html_body,
         text_body,

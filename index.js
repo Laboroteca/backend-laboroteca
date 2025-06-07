@@ -143,7 +143,8 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
         provincia,
         cp,
         tipoProducto,
-        nombreProducto: producto.nombre
+        nombreProducto: producto.nombre,
+        descripcionProducto: `${tipoProducto} "${producto.nombre}"` // ✅ Añadido
       },
       success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(producto.nombre)}`,
       cancel_url: 'https://laboroteca.es/error'

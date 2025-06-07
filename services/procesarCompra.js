@@ -14,6 +14,7 @@ module.exports = async function procesarCompra(datos) {
     const provincia = datos.provincia || datos['Provincia'] || '';
     const cp = datos.cp || datos['Código postal'] || '';
     const producto = datos.nombreProducto || 'producto_desconocido';
+    const descripcionProducto = datos.descripcionProducto || '';
     const tipoProducto = datos.tipoProducto || 'Otro';
     const importe = parseFloat((datos.importe || '22.90').toString().replace(',', '.'));
 
@@ -28,6 +29,7 @@ module.exports = async function procesarCompra(datos) {
       cp,
       provincia,
       producto,
+      descripcionProducto,
       tipoProducto
     };
 

@@ -13,6 +13,7 @@ const datos = {
   ciudad: 'Madrid',
   provincia: 'Madrid',
   producto: 'Libro de prueba',
+  descripcionProducto: 'Libro de prueba (membresía vitalicia - edición digital)', // ✅ Añadido
   importe: 22.90
 };
 

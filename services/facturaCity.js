@@ -80,7 +80,8 @@ async function crearFacturaEnFacturaCity(datosCliente) {
       console.warn('⚠️ No se pudo añadir dirección fiscal:', err.message);
     }
 
-    const descripcion = datosCliente.descripcionProducto || datosCliente.producto;
+    // ✅ MODIFICACIÓN CLAVE AQUÍ
+    const descripcion = datosCliente.descripcionProducto || datosCliente.descripcion || datosCliente.producto;
 
     const lineas = [
       {

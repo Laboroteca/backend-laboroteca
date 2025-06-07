@@ -3,7 +3,7 @@ const { google } = require('googleapis');
 // ✅ Leer credenciales desde variable de entorno GCP_CREDENTIALS_BASE64
 const credentialsBase64 = process.env.GCP_CREDENTIALS_BASE64;
 
-if (!credentialsBase64) {
+if (!credentialsBaseBase64) {
   throw new Error('❌ Falta la variable de entorno GCP_CREDENTIALS_BASE64 con las credenciales de Google');
 }
 
@@ -30,7 +30,7 @@ async function guardarEnGoogleSheets(datos) {
       datos.nombre || '',
       datos.apellidos || '',
       datos.dni || '',
-      datos.descripcionProducto || '',
+      datos.descripcionProducto || datos.nombreProducto || '', // ✅ Usa nombreProducto si no hay descripción
       datos.importe || '',
       now,
       datos.email || '',

@@ -23,17 +23,20 @@ const PRODUCTOS = {
   'de cara a la jubilacion': {
     nombre: 'De cara a la jubilación',
     precio: 2990,
-    imagen: 'https://laboroteca.es/wp-content/uploads/2024/12/libro-jubilacion-portada-laboroteca.png'
+    imagen: 'https://laboroteca.es/wp-content/uploads/2024/12/libro-jubilacion-portada-laboroteca.png',
+    descripcion: 'Libro "De cara a la jubilación". Edición digital. Membresía vitalicia.'
   },
   'curso ip total': {
     nombre: 'Curso IP Total',
     precio: 7900,
-    imagen: 'https://laboroteca.es/wp-content/uploads/2024/12/curso-ip-total-portada.png'
+    imagen: 'https://laboroteca.es/wp-content/uploads/2024/12/curso-ip-total-portada.png',
+    descripcion: 'Curso online de Incapacidad Permanente Total. Acceso inmediato y materiales descargables.'
   },
   'pack libros': {
     nombre: 'Pack libros',
     precio: 4990,
-    imagen: 'https://laboroteca.es/wp-content/uploads/2024/12/pack-libros-laboroteca.png'
+    imagen: 'https://laboroteca.es/wp-content/uploads/2024/12/pack-libros-laboroteca.png',
+    descripcion: 'Pack: "De cara a la jubilación" + "Jubilación anticipada". Edición digital. Membresía vitalicia.'
   }
 };
 
@@ -144,7 +147,7 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
         cp,
         tipoProducto,
         nombreProducto: producto.nombre,
-        descripcionProducto: `${tipoProducto} "${producto.nombre}"` // ✅ Añadido
+        descripcionProducto: producto.descripcion || `${tipoProducto} "${producto.nombre}"`
       },
       success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(producto.nombre)}`,
       cancel_url: 'https://laboroteca.es/error'

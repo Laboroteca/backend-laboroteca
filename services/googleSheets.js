@@ -30,6 +30,7 @@ async function guardarEnGoogleSheets(datos) {
       datos.nombre || '',
       datos.apellidos || '',
       datos.dni || '',
+      datos.descripcionProducto || '',
       datos.importe || '',
       now,
       datos.email || '',

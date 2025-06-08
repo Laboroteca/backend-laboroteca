@@ -23,7 +23,7 @@ const PRODUCTOS = {
   'de cara a la jubilacion': {
     nombre: 'De cara a la jubilación',
     precio: 2990,
-    imagen: 'https://laboroteca.es/wp-content/uploads/2024/12/libro-jubilacion-portada-laboroteca.png',
+    imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/06/DE-CARA-A-LA-JUBILACION-IGNACIO-SOLSONA-ABOGADO-scaled.png',
     descripcion: 'Libro "De cara a la jubilación". Edición digital. Membresía vitalicia.'
   },
   'curso ip total': {
@@ -88,7 +88,6 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   const datos = req.body;
   console.log('📦 DATOS FORMULARIO:', JSON.stringify(datos, null, 2));
 
-  // Captura de campos con distintas mayúsculas/minúsculas
   const nombre = datos.nombre || datos.Nombre || '';
   const apellidos = datos.apellidos || datos.Apellidos || '';
   const email = datos.email || '';

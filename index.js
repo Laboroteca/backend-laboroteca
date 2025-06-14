@@ -1,4 +1,3 @@
-// Carga de variables de entorno (en local)
 if (process.env.NODE_ENV !== 'production') {
   require('dotenv').config();
 }
@@ -14,9 +13,12 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY || '');
 const cors = require('cors');
 const path = require('path');
 const rateLimit = require('express-rate-limit');
+const fs = require('fs').promises;
 
 const app = express();
 app.set('trust proxy', 1);
+
+const RUTA_CUPONES = path.join(__dirname, 'data/cupones.json');
 
 // 🧠 Mapa de productos
 const PRODUCTOS = {
@@ -98,6 +100,7 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   const cp = datos.cp || '';
   const tipoProducto = datos.tipoProducto || 'Producto';
   const nombreProducto = datos.nombreProducto || '';
+  const codigoDescuento = datos.codigoDescuento || ''; // 👈 cupón
 
   const key = normalizarProducto(nombreProducto);
   const producto = PRODUCTOS[key];
@@ -118,6 +121,26 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
     return res.status(403).json({ error: 'Este email no está registrado.' });
   }
 
+  let precioFinal = producto.precio;
+
+  // Validación de cupón
+  if (codigoDescuento) {
+    try {
+      const raw = await fs.readFile(RUTA_CUPONES, 'utf8');
+      const cupones = JSON.parse(raw);
+      const cupon = cupones.find(c => c.codigo === codigoDescuento && !c.usado);
+
+      if (cupon) {
+        precioFinal = Math.max(0, producto.precio - Math.round(cupon.valor * 100));
+        console.log(`🎟️ Cupón válido: -${cupon.valor} € → Total: ${precioFinal / 100} €`);
+      } else {
+        console.warn(`⚠️ Cupón no válido o ya usado: ${codigoDescuento}`);
+      }
+    } catch (error) {
+      console.error('❌ Error leyendo cupones.json:', error);
+    }
+  }
+
   try {
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
@@ -129,7 +152,7 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
             name: `${tipoProducto} "${producto.nombre}"`,
             images: [producto.imagen]
           },
-          unit_amount: producto.precio
+          unit_amount: precioFinal
         },
         quantity: 1
       }],
@@ -146,7 +169,8 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
         cp,
         tipoProducto,
         nombreProducto: producto.nombre,
-        descripcionProducto: producto.descripcion || `${tipoProducto} "${producto.nombre}"`
+        descripcionProducto: producto.descripcion || `${tipoProducto} "${producto.nombre}"`,
+        codigoDescuento // 👈 añadido
       },
       success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(producto.nombre)}`,
       cancel_url: 'https://laboroteca.es/error'

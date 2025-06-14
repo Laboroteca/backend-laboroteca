@@ -26,7 +26,8 @@ module.exports = async function (req, res) {
   const cp = datos.cp || '';
   const tipoProducto = datos.tipoProducto || '';
   const nombreProducto = datos.nombreProducto || '';
-  const descripcionProducto = datos.descripcionProducto || ''; // 👈 Nuevo campo
+  const descripcionProducto = datos.descripcionProducto || '';
+  const codigoDescuento = datos.codigoDescuento || ''; // 👈 Nuevo campo para cupón
   const importe = parseFloat((datos.importe || '0').toString().replace(',', '.'));
 
   // 🧪 Validación
@@ -62,7 +63,8 @@ module.exports = async function (req, res) {
       cp,
       tipoProducto,
       nombreProducto,
-      descripcionProducto // 👈 Añadido a metadata
+      descripcionProducto,
+      codigoDescuento // 👈 Añadido al metadata
     }
   };
 

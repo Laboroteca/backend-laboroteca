@@ -4,7 +4,11 @@ const { guardarEnGoogleSheets } = require('./googleSheets');
 const { crearFacturaEnFacturaCity } = require('./facturaCity');
 const { enviarFacturaPorEmail } = require('./email');
 const { subirFactura } = require('./gcs');
+const fs = require('fs').promises;
+const path = require('path');
 // const { activarMembresiaEnMemberPress } = require('./memberpress');
+
+const RUTA_CUPONES = path.join(__dirname, '../data/cupones.json');
 
 async function handleStripeEvent(event) {
   if (event.type !== 'checkout.session.completed') {
@@ -43,6 +47,8 @@ async function handleStripeEvent(event) {
     ciudad: m.ciudad || '',
     provincia: m.provincia || '',
     cp: m.cp || '',
+    nombreProducto: m.nombreProducto || '',
+    descripcionProducto: m.descripcionProducto || '',
     producto: m.descripcionProducto || m.nombreProducto || 'producto_desconocido',
     tipoProducto: m.tipoProducto || 'Otro'
   };
@@ -61,6 +67,26 @@ async function handleStripeEvent(event) {
   });
 
   await enviarFacturaPorEmail(datosCliente, pdfBuffer);
+
+  // ✅ MARCAR CUPÓN COMO USADO
+  const codigoDescuento = m.codigoDescuento || '';
+  if (codigoDescuento) {
+    try {
+      const raw = await fs.readFile(RUTA_CUPONES, 'utf8');
+      const cupones = JSON.parse(raw);
+      const index = cupones.findIndex(c => c.codigo === codigoDescuento && !c.usado);
+
+      if (index !== -1) {
+        cupones[index].usado = true;
+        await fs.writeFile(RUTA_CUPONES, JSON.stringify(cupones, null, 2));
+        console.log(`🎟️ Cupón ${codigoDescuento} marcado como usado`);
+      } else {
+        console.warn(`⚠️ Cupón no encontrado o ya usado: ${codigoDescuento}`);
+      }
+    } catch (err) {
+      console.error('❌ Error al actualizar cupones.json:', err);
+    }
+  }
 
   await docRef.set({
     sessionId,

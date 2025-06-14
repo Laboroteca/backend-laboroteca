@@ -1,0 +1,1202 @@
+[
+  {
+    "codigo": "4O2XT6MTZ3",
+    "valor": 29.9,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "KR3S6R9ZDJ",
+    "valor": 29.9,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "VTP5FCOBS8",
+    "valor": 29.9,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "G54LEAC6SR",
+    "valor": 29.9,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "1O3UGOT9JQ",
+    "valor": 29.9,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "DN5UNDF6JQ",
+    "valor": 29.9,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "3DS24I3MAP",
+    "valor": 29.9,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "XR00LYCKG8",
+    "valor": 29.9,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "O688FB8JB2",
+    "valor": 29.9,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "O4BI9C751R",
+    "valor": 29.9,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "IIAMDMOT7W",
+    "valor": 29.9,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "8VXBCMT3HV",
+    "valor": 29.9,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "NW0EJTH17M",
+    "valor": 29.9,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "H7EIW4V94D",
+    "valor": 29.9,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "X1QEL0UQV6",
+    "valor": 29.9,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "LDR34E7H21",
+    "valor": 29.9,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "ACANLC49P0",
+    "valor": 29.9,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "CPE38OH4MV",
+    "valor": 29.9,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "VQFQJVE6XQ",
+    "valor": 29.9,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "Q7QL9IEXJE",
+    "valor": 29.9,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "S6E8O3G7BO",
+    "valor": 20.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "EK54OPYBZW",
+    "valor": 20.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "BQI9EK5L9L",
+    "valor": 20.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "YOBO5YKMM5",
+    "valor": 20.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "DMFR18HUI7",
+    "valor": 20.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "NSDVJ6A7ZY",
+    "valor": 20.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "3935HZTGYO",
+    "valor": 20.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "WX96ZZISTG",
+    "valor": 20.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "VWWT8PGNU4",
+    "valor": 20.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "7JJSA67IAO",
+    "valor": 20.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "KLKJCRDLJI",
+    "valor": 20.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "GE9KL166I3",
+    "valor": 20.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "0K9NF138EZ",
+    "valor": 20.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "0M8QQQP8A8",
+    "valor": 20.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "A1GG1FMFA4",
+    "valor": 20.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "00610Q9PRH",
+    "valor": 20.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "JUX0B8N8BO",
+    "valor": 20.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "N2XLHS6G6N",
+    "valor": 20.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "XQMZQF0NBC",
+    "valor": 20.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "Q3STFURMST",
+    "valor": 20.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "USKIVSFUNX",
+    "valor": 20.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "QEDAYMYZSS",
+    "valor": 20.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "HCFRV307YY",
+    "valor": 20.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "MKA2WTHB8J",
+    "valor": 20.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "L8PCUNVTOJ",
+    "valor": 20.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "NZLF55PU2T",
+    "valor": 20.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "IBE25A4QEI",
+    "valor": 20.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "SIP257PE9K",
+    "valor": 20.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "VJ9CJP36BB",
+    "valor": 20.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "I9PO9H6KJ6",
+    "valor": 20.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "6C3XXDNH74",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "9R1FBIGU74",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "4MIYVUEC9T",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "2P40N0ER6J",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "UH55DYLMR4",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "X9WPLLDNPW",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "ZWWROMQZQU",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "YYDH90P2WL",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "HT69NSY08X",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "W77M5SLFP0",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "9AM498I628",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "T3LM1KZKZY",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "5O9Y0NWWN8",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "TQJBNRRRQ0",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "UA3R6HF34U",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "T5A0X5ODRK",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "2N6AO4GUL0",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "SOHSP565MY",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "6CHD1IE3VH",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "0806NRUIXW",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "0UNHPQH833",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "LX4NW3W4HX",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "CXVYTZ3JFK",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "IHQSSKF1H6",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "2MF0KYHOG7",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "GIWVD1LZ0T",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "TWI0L8V5LZ",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "0WNOHDFD0N",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "IEAMXFCLHQ",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "R0BLKB5UX6",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "H9NMN93GJV",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "8R3JZAFYQ3",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "32YJRK2MTS",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "W3OHTWYKN2",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "4GWCV3731Q",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "S1XM4NNQ7R",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "I16AP89OWS",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "Y433H8B426",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "M9ER7R0XOR",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "X3YB4HRKZU",
+    "valor": 15.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "4L9HTVC2H5",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "EC3FI0WS16",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "56H8VVECT2",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "R9ZZ1QWDLU",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "SAUJSUKBNX",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "P0G510VTH1",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "G0CRGE0YFK",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "Q450NLY0YU",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "1ZIVSXCW4T",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "Y2M86AQBHE",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "MOP34SSLAZ",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "D2PJUA3YW2",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "8T5T51N3VT",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "ZNJWP304K3",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "K2GWEIW579",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "J1K2JTZ8M9",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "86D41XKIDV",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "QSYCKA1AHZ",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "TK8BJ3UQ2X",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "7CEBBR20SK",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "YCHJC9HNFX",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "ZAARKKK0EW",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "N2D9N9H4KE",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "QPUJQOXCGI",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "3H5RK45RYI",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "Z1T2CZHG4M",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "YTZHCV8CFY",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "LYX68VO7LJ",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "O1LTFOF92P",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "FH5C0PZA7P",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "HL9BJJQVVU",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "XFNFFYB760",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "LXGI5XWVF4",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "62H9AK1RWZ",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "STHSHIBOG3",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "NRND36UKXS",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "THQ49NW317",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "KKUQE55TAM",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "M3FLG6W8ZG",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "JVUCSV0FT2",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "1G1KI6YCFI",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "WWE20DQ87J",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "0AXUND4479",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "XN1AK7D7Y9",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "SOGHEQ2ARH",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "8Z2MU04RGW",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "J4WX1UTO2S",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "G327PWLG23",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "JWWDP79VQH",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "BYN6KD0GH8",
+    "valor": 10.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "P8YBUU9H8Q",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "5VGFXQGJJP",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "KKBIMC038E",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "8VBMRD28YG",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "MGYCBUZM64",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "3IS6O31Q52",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "Y0MSO4O8NY",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "ASEI9WSFGE",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "293NKQZEYZ",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "V30GUBU33X",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "9E07WWXIQC",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "7PEKT779C2",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "PUOA2DF1G4",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "PEKH9SNW7O",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "I32GIGTCNQ",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "PK356O7NTY",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "AB0P9UJPCH",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "6TKNO0RA3F",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "NBSEOVE6QD",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "Q6EUWP54Y6",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "VLV1VEKMSB",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "M12KTZH9XD",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "CRXFM05MWT",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "H2WCHRDN7L",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "FJHARU9NHH",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "9QG3CLG3M5",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "0WJF3OTRR6",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "PO4Q5OD6EN",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "WPREAC6UZJ",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "BK3R9OQY9N",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "LGY6IBZFOR",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "7MXPYX1KAF",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "PDDRGAPQ2R",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "KBN22FIH76",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "KKJCKFBIFD",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "12ZK3X9KNB",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "6DZTWV0A89",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "6GFC78XRI5",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "RM696SPUH6",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "EBGIZSW3H6",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "8G71GJWBS5",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "SATCRQONOE",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "M39VE0LY7O",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "WQZJ21IFIK",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "A1GX8JUJOL",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "6QJXL4LTIU",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "9GDX6QEADI",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "QWGSOHL4JK",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "FFUBP7ZNQY",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "S6V52R0H6C",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "9B6BVHU7IF",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "2WGJWQKTRO",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "BLLK8N5PHT",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "37MR91XUVN",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "EGN1AAEZ0R",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "WGORH9Q0UU",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "SHCZXOYSRA",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "BVTCIQ7YV0",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "4RZW7DUECA",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  },
+  {
+    "codigo": "2NZI7IJ3T4",
+    "valor": 5.0,
+    "tipo": "fijo",
+    "usado": false
+  }
+]

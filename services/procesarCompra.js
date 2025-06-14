@@ -1,6 +1,6 @@
 const { crearFacturaEnFacturaCity } = require('./facturaCity');
 const { guardarEnGoogleSheets } = require('./googleSheets');
-const { enviarFacturaPorEmail, enviarConfirmacionGratisEmail } = require('./email');
+const { enviarFacturaPorEmail } = require('./email');
 const { subirFactura } = require('./gcs');
 
 module.exports = async function procesarCompra(datos) {
@@ -36,7 +36,7 @@ module.exports = async function procesarCompra(datos) {
     console.time(`🕒 Compra ${email}`);
     console.log('📦 Datos finales de facturación:\n', JSON.stringify(datosCliente, null, 2));
 
-    // Siempre se guarda en Sheets
+    // Guardar en Sheets
     try {
       console.log('📄 → Guardando en Google Sheets...');
       await guardarEnGoogleSheets(datosCliente);
@@ -45,16 +45,7 @@ module.exports = async function procesarCompra(datos) {
       console.error('❌ Error guardando en Google Sheets:', sheetsErr);
     }
 
-    // 🆓 Si importe 0, solo email sin factura
-    if (importe === 0) {
-      console.log('💥 Compra gratuita detectada. No se genera factura.');
-      await enviarConfirmacionGratisEmail(datosCliente);
-      console.log(`✅ Email sin factura enviado a ${email}`);
-      console.timeEnd(`🕒 Compra ${email}`);
-      return;
-    }
-
-    // 2. Generar factura
+    // Generar factura
     let pdfBuffer;
     try {
       console.log('🧾 → Generando factura...');
@@ -65,7 +56,7 @@ module.exports = async function procesarCompra(datos) {
       throw facturaErr;
     }
 
-    // 3. Subir a GCS
+    // Subir a GCS
     try {
       const nombreArchivo = `facturas/${email}/Factura Laboroteca.pdf`;
       console.log('☁️ → Subiendo a GCS:', nombreArchivo);
@@ -80,7 +71,7 @@ module.exports = async function procesarCompra(datos) {
       console.error('❌ Error subiendo a GCS:', gcsErr);
     }
 
-    // 4. Enviar email con factura
+    // Enviar email con la factura
     try {
       console.log('📧 → Enviando email con la factura...');
       const resultado = await enviarFacturaPorEmail(datosCliente, pdfBuffer);

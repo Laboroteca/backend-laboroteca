@@ -13,13 +13,10 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY || '');
 const cors = require('cors');
 const path = require('path');
 const rateLimit = require('express-rate-limit');
-const fs = require('fs').promises;
 const procesarCompra = require('./services/procesarCompra');
 
 const app = express();
 app.set('trust proxy', 1);
-
-const RUTA_CUPONES = path.join(__dirname, 'data/cupones.json');
 
 // 🧠 Mapa de productos
 const PRODUCTOS = {
@@ -98,7 +95,6 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   const cp = datos.cp || '';
   const tipoProducto = datos.tipoProducto || 'Producto';
   const nombreProducto = datos.nombreProducto || '';
-  const codigoDescuento = datos.codigoDescuento || '';
 
   const key = normalizarProducto(nombreProducto);
   const producto = PRODUCTOS[key];
@@ -119,68 +115,6 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
     return res.status(403).json({ error: 'Este email no está registrado.' });
   }
 
-  let precioFinal = producto.precio;
-  let cupon = null;
-
-  if (codigoDescuento) {
-    try {
-      const raw = await fs.readFile(RUTA_CUPONES, 'utf8');
-      const cupones = JSON.parse(raw);
-      cupon = cupones.find(c => c.codigo === codigoDescuento && !c.usado);
-
-      if (cupon) {
-        precioFinal = Math.max(0, producto.precio - Math.round(cupon.valor * 100));
-        console.log(`🎟️ Cupón válido: -${cupon.valor} € → Total: ${precioFinal / 100} €`);
-      } else {
-        console.warn(`⚠️ Cupón no válido o ya usado: ${codigoDescuento}`);
-      }
-    } catch (error) {
-      console.error('❌ Error leyendo cupones.json:', error);
-    }
-  }
-
-  if (precioFinal === 0 && cupon) {
-    console.log('💥 Cupón cubre el 100%. Activando acceso sin Stripe');
-
-    const fakeSession = {
-      id: `FREE-${Date.now()}`,
-      payment_status: 'paid',
-      customer_details: { email, name: `${nombre} ${apellidos}`.trim() },
-      amount_total: 0,
-      metadata: {
-        nombre,
-        apellidos,
-        email,
-        dni,
-        direccion,
-        ciudad,
-        provincia,
-        cp,
-        tipoProducto,
-        nombreProducto: producto.nombre,
-        descripcionProducto: producto.descripcion || `${tipoProducto} "${producto.nombre}"`,
-        codigoDescuento
-      }
-    };
-
-    // Marcar cupón como usado
-    try {
-      const raw = await fs.readFile(RUTA_CUPONES, 'utf8');
-      const cupones = JSON.parse(raw);
-      const index = cupones.findIndex(c => c.codigo === codigoDescuento && !c.usado);
-      if (index !== -1) {
-        cupones[index].usado = true;
-        await fs.writeFile(RUTA_CUPONES, JSON.stringify(cupones, null, 2));
-        console.log(`✔️ Cupón ${codigoDescuento} marcado como usado`);
-      }
-    } catch (err) {
-      console.error('❌ Error actualizando cupones.json:', err);
-    }
-
-    await procesarCompra(fakeSession);
-    return res.json({ url: 'GRATIS' });
-  }
-
   try {
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
@@ -192,7 +126,7 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
             name: `${tipoProducto} "${producto.nombre}"`,
             images: [producto.imagen]
           },
-          unit_amount: precioFinal
+          unit_amount: producto.precio
         },
         quantity: 1
       }],
@@ -209,8 +143,7 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
         cp,
         tipoProducto,
         nombreProducto: producto.nombre,
-        descripcionProducto: producto.descripcion || `${tipoProducto} "${producto.nombre}"`,
-        codigoDescuento
+        descripcionProducto: producto.descripcion || `${tipoProducto} "${producto.nombre}"`
       },
       success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(producto.nombre)}`,
       cancel_url: 'https://laboroteca.es/error'

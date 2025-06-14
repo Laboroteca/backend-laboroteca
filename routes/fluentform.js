@@ -27,7 +27,6 @@ module.exports = async function (req, res) {
   const tipoProducto = datos.tipoProducto || '';
   const nombreProducto = datos.nombreProducto || '';
   const descripcionProducto = datos.descripcionProducto || '';
-  const codigoDescuento = datos.codigoDescuento || ''; // 👈 Nuevo campo para cupón
   const importe = parseFloat((datos.importe || '0').toString().replace(',', '.'));
 
   // 🧪 Validación
@@ -63,8 +62,7 @@ module.exports = async function (req, res) {
       cp,
       tipoProducto,
       nombreProducto,
-      descripcionProducto,
-      codigoDescuento // 👈 Añadido al metadata
+      descripcionProducto
     }
   };
 

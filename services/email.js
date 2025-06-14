@@ -66,7 +66,7 @@ También puede reclamar ante la autoridad de control si lo considera necesario.
       body: JSON.stringify({
         api_key: process.env.SMTP2GO_API_KEY,
         to: [datos.email],
-        sender: `"Laboroteca" <${process.env.SMTP2GO_FROM_EMAIL}>`, // ✅ Nombre forzado
+        sender: `"Laboroteca" <${process.env.SMTP2GO_FROM_EMAIL}>`,
         subject: 'Factura de tu compra en Laboroteca',
         html_body,
         text_body,
@@ -95,4 +95,60 @@ También puede reclamar ante la autoridad de control si lo considera necesario.
   }
 }
 
-module.exports = { enviarFacturaPorEmail };
+async function enviarConfirmacionGratisEmail(datos) {
+  try {
+    console.log('📨 Enviando email sin factura a:', datos.email);
+
+    const html_body = `
+      <div style="font-family: Arial, sans-serif; font-size: 16px; color: #333;">
+        <p>Hola ${datos.nombre},</p>
+        <p>Tu acceso ha sido activado correctamente mediante código promocional.</p>
+        <p>Producto: <strong>${datos.producto}</strong></p>
+        <p>Puedes acceder desde <a href="https://laboroteca.es/mi-cuenta">www.laboroteca.es/mi-cuenta</a></p>
+        <p>Un saludo,<br>Ignacio Solsona</p>
+      </div>
+    `;
+
+    const text_body = `
+Hola ${datos.nombre},
+
+Tu acceso ha sido activado mediante código promocional.
+Producto: ${datos.producto}
+
+Puedes acceder desde: https://laboroteca.es/mi-cuenta
+
+Un saludo,
+Ignacio Solsona
+`;
+
+    const response = await fetch('https://api.smtp2go.com/v3/email/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        api_key: process.env.SMTP2GO_API_KEY,
+        to: [datos.email],
+        sender: `"Laboroteca" <${process.env.SMTP2GO_FROM_EMAIL}>`,
+        subject: 'Acceso activado en Laboroteca',
+        html_body,
+        text_body
+      })
+    });
+
+    const resultado = await response.json();
+
+    if (!resultado.success && resultado.data?.succeeded !== 1) {
+      throw new Error('Error SMTP2GO al enviar confirmación sin factura');
+    }
+
+    console.log('✅ Email gratuito enviado correctamente');
+    return 'OK';
+  } catch (err) {
+    console.error('❌ Error enviando email gratuito:', err);
+    throw err;
+  }
+}
+
+module.exports = {
+  enviarFacturaPorEmail,
+  enviarConfirmacionGratisEmail
+};

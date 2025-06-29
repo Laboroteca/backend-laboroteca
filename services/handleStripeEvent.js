@@ -4,9 +4,9 @@ const { guardarEnGoogleSheets } = require('./googleSheets');
 const { crearFacturaEnFacturaCity } = require('./facturaCity');
 const { enviarFacturaPorEmail } = require('./email');
 const { subirFactura } = require('./gcs');
+const { activarMembresiaClub } = require('./activarMembresiaClub');
 const fs = require('fs').promises;
 const path = require('path');
-// const { activarMembresiaEnMemberPress } = require('./memberpress');
 
 const RUTA_CUPONES = path.join(__dirname, '../data/cupones.json');
 
@@ -67,6 +67,15 @@ async function handleStripeEvent(event) {
   });
 
   await enviarFacturaPorEmail(datosCliente, pdfBuffer);
+
+  // ✅ Activar membresía si es Club Laboroteca
+  if (datosCliente.nombreProducto === 'El Club Laboroteca') {
+    try {
+      await activarMembresiaClub(email);
+    } catch (err) {
+      console.error('❌ Error al activar membresía del Club:', err);
+    }
+  }
 
   // ✅ MARCAR CUPÓN COMO USADO
   const codigoDescuento = m.codigoDescuento || '';

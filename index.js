@@ -60,7 +60,11 @@ const pagoLimiter = rateLimit({
   message: { error: 'Demasiados intentos. Inténtalo más tarde.' }
 });
 
-app.use(cors());
+app.use(cors({
+  origin: 'https://www.laboroteca.es',
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use((req, res, next) => {
   if (req.originalUrl === '/webhook') {
     express.raw({ type: 'application/json' })(req, res, next);

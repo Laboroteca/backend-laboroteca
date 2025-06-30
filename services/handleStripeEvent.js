@@ -1,13 +1,14 @@
 const admin = require('../firebase');
 const firestore = admin.firestore();
+
 const { guardarEnGoogleSheets } = require('./googleSheets');
 const { crearFacturaEnFacturaCity } = require('./facturaCity');
 const { enviarFacturaPorEmail } = require('./email');
 const { subirFactura } = require('./gcs');
 const { activarMembresiaClub } = require('./activarMembresiaClub');
+
 const fs = require('fs').promises;
 const path = require('path');
-
 const RUTA_CUPONES = path.join(__dirname, '../data/cupones.json');
 
 async function handleStripeEvent(event) {
@@ -25,9 +26,7 @@ async function handleStripeEvent(event) {
   }
 
   const docRef = firestore.collection('comprasProcesadas').doc(sessionId);
-  const alreadyProcessed = await docRef.get();
-
-  if (alreadyProcessed.exists) {
+  if ((await docRef.get()).exists) {
     console.warn(`⚠️ La sesión ${sessionId} ya fue procesada. Ignorando duplicado.`);
     return { duplicate: true };
   }
@@ -56,6 +55,7 @@ async function handleStripeEvent(event) {
   console.log('🧾 Procesando datos cliente:\n', JSON.stringify(datosCliente, null, 2));
 
   await guardarEnGoogleSheets(datosCliente);
+
   const pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
   const nombreArchivo = `facturas/${email}/${Date.now()}-${datosCliente.producto}.pdf`;
 
@@ -68,7 +68,6 @@ async function handleStripeEvent(event) {
 
   await enviarFacturaPorEmail(datosCliente, pdfBuffer);
 
-  // ✅ Activar membresía si es Club Laboroteca
   if (datosCliente.nombreProducto === 'El Club Laboroteca') {
     try {
       await activarMembresiaClub(email);
@@ -77,7 +76,6 @@ async function handleStripeEvent(event) {
     }
   }
 
-  // ✅ MARCAR CUPÓN COMO USADO
   const codigoDescuento = m.codigoDescuento || '';
   if (codigoDescuento) {
     try {

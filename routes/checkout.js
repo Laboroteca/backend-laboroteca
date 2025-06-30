@@ -1,6 +1,24 @@
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const { normalizar } = require('../utils/normalizar');
 const { emailRegistradoEnWordPress } = require('../utils/wordpress');
+const express = require('express');
+const router = express.Router();
+
+// 🧠 Mapa de productos
+const PRODUCTOS = {
+  'de cara a la jubilacion': {
+    nombre: 'De cara a la jubilación',
+    slug: 'de-cara-a-la-jubilacion',
+    descripcion: 'Libro digital con acceso vitalicio',
+    price_id: 'price_1RMG0mEe6Cd77jenTpudZVan'
+  },
+  'el club laboroteca': {
+    nombre: 'El Club Laboroteca',
+    slug: 'el-club-laboroteca',
+    descripcion: 'Suscripción mensual a El Club Laboroteca. Acceso a contenido exclusivo.',
+    price_id: 'price_1RfHeAEe6Cd77jenDw9UUPCp'
+  }
+};
 
 router.post('/create-session', async (req, res) => {
   try {
@@ -36,8 +54,10 @@ router.post('/create-session', async (req, res) => {
       return res.status(403).json({ error: 'El email no está registrado como usuario.' });
     }
 
+    const isSuscripcion = tipoProducto.toLowerCase().includes('suscrip');
+
     const session = await stripe.checkout.sessions.create({
-      mode: 'payment',
+      mode: isSuscripcion ? 'subscription' : 'payment',
       payment_method_types: ['card'],
       customer_email: email,
       line_items: [{
@@ -69,3 +89,6 @@ router.post('/create-session', async (req, res) => {
     res.status(500).json({ error: 'Error interno al crear la sesión' });
   }
 });
+
+module.exports = router;
+

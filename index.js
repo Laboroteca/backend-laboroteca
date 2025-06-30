@@ -14,12 +14,11 @@ const cors = require('cors');
 const path = require('path');
 const rateLimit = require('express-rate-limit');
 const procesarCompra = require('./services/procesarCompra');
-const { activarMembresiaClub } = require('./services/activarMembresiaClub'); // ← asegurado que exista y esté correcto
+const { activarMembresiaClub } = require('./services/activarMembresiaClub');
 
 const app = express();
 app.set('trust proxy', 1);
 
-// Mapa de productos
 const PRODUCTOS = {
   'de cara a la jubilacion': {
     nombre: 'De cara a la jubilación',
@@ -73,7 +72,6 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// Body parser condicional para Stripe webhook
 app.use((req, res, next) => {
   if (req.originalUrl === '/webhook') {
     express.raw({ type: 'application/json' })(req, res, next);
@@ -191,7 +189,7 @@ app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
       mode: 'subscription',
-      customer_creation: 'always',
+      // OJO: NO pongas customer_creation aquí
       customer_email: email,
       line_items: [{
         price_data: {

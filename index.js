@@ -15,6 +15,7 @@ const path = require('path');
 const rateLimit = require('express-rate-limit');
 const procesarCompra = require('./services/procesarCompra');
 const { activarMembresiaClub } = require('./services/activarMembresiaClub');
+const desactivarMembresiaClubHandler = require('./routes/desactivarMembresiaClub'); // ← NUEVO
 
 const app = express();
 app.set('trust proxy', 1);
@@ -189,7 +190,6 @@ app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
       mode: 'subscription',
-      // OJO: NO pongas customer_creation aquí
       customer_email: email,
       line_items: [{
         price_data: {
@@ -241,6 +241,9 @@ app.post('/activar-membresia-club', async (req, res) => {
     return res.status(500).json({ error: 'Error al activar la membresía' });
   }
 });
+
+// Desactivar membresía manual (BAJA)
+app.post('/desactivar-membresia-club', desactivarMembresiaClubHandler);
 
 // Lanzar servidor
 const PORT = process.env.PORT || 3000;

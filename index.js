@@ -16,9 +16,7 @@ const rateLimit = require('express-rate-limit');
 
 const procesarCompra = require('./services/procesarCompra');
 const { activarMembresiaClub } = require('./services/activarMembresiaClub');
-const desactivarMembresiaClubHandler = require('./routes/desactivarMembresiaClub');
-
-// --- NUEVO: Endpoint para sincronizar con MemberPress ---
+const { desactivarMembresiaClub } = require('./services/desactivarMembresiaClub');
 const { syncMemberpressClub } = require('./services/syncMemberpressClub');
 
 const app = express();
@@ -77,7 +75,6 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// Stripe raw para /webhook
 app.use((req, res, next) => {
   if (req.originalUrl === '/webhook') {
     express.raw({ type: 'application/json' })(req, res, next);
@@ -88,16 +85,13 @@ app.use((req, res, next) => {
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static(__dirname));
 
-// Página test (opcional)
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'formulario.html'));
 });
 
-// Webhook Stripe
 const webhookHandler = require('./routes/webhook');
 app.post('/webhook', webhookHandler);
 
-// Endpoint pago único (compra de libro, etc)
 app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   const datos = req.body;
   console.log('📦 DATOS FORMULARIO:', JSON.stringify(datos, null, 2));
@@ -164,7 +158,6 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   }
 });
 
-// Endpoint suscripción mensual (Club Laboroteca)
 app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
   const datos = req.body;
   console.log('📦 DATOS SUSCRIPCIÓN CLUB:', JSON.stringify(datos, null, 2));
@@ -231,14 +224,13 @@ app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
   }
 });
 
-// Activar membresía manual (no necesitas tocar esto)
 app.post('/activar-membresia-club', async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'Falta el email' });
 
   try {
     await activarMembresiaClub(email);
-    await syncMemberpressClub({ email, accion: 'activar' }); // Sincroniza con MemberPress
+    await syncMemberpressClub({ email, accion: 'activar' });
     return res.json({ ok: true });
   } catch (error) {
     console.error('❌ Error activar membresía:', error.message);
@@ -246,16 +238,25 @@ app.post('/activar-membresia-club', async (req, res) => {
   }
 });
 
-// Desactivar membresía manual (BAJA)
-app.post('/desactivar-membresia-club', desactivarMembresiaClubHandler);
+app.post('/desactivar-membresia-club', async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ error: 'Falta el email' });
 
-// --- NUEVO: Endpoint para crear portal Stripe del cliente (para botón cambiar tarjeta) ---
+  try {
+    await desactivarMembresiaClub(email);
+    await syncMemberpressClub({ email, accion: 'desactivar', membership_id: 10663 });
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error('❌ Error desactivar membresía:', error.message);
+    return res.status(500).json({ error: 'Error al desactivar la membresía' });
+  }
+});
+
 app.post('/crear-portal-cliente', async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'Falta el email' });
 
   try {
-    // Buscar el customer en Stripe por email
     const customers = await stripe.customers.list({ email, limit: 1 });
     if (!customers.data.length) return res.status(404).json({ error: 'No existe cliente Stripe para este email.' });
 

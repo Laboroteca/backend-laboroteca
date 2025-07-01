@@ -1,4 +1,3 @@
-// services/email.js
 require('dotenv').config();
 const fetch = require('node-fetch');
 
@@ -15,12 +14,11 @@ async function enviarEmailPersonalizado({ to, subject, html, text, pdfBuffer = n
     api_key: process.env.SMTP2GO_API_KEY,
     to: destinatarios,
     sender: `"Laboroteca" <${process.env.SMTP2GO_FROM_EMAIL}>`,
-    subject: subject,
+    subject,
     html_body: html,
     text_body: text
   };
 
-  // Adjuntar PDF solo si existe
   if (pdfBuffer && Buffer.isBuffer(pdfBuffer) && pdfBuffer.length > 5000) {
     body.attachments = [{
       filename: 'Factura Laboroteca.pdf',
@@ -37,7 +35,7 @@ async function enviarEmailPersonalizado({ to, subject, html, text, pdfBuffer = n
 
   const resultado = await response.json();
 
-  if (!resultado.success && resultado.data?.succeeded !== 1) {
+  if (!resultado.success || resultado.data?.succeeded !== 1) {
     console.error('❌ Error desde SMTP2GO:', JSON.stringify(resultado, null, 2));
     throw new Error('Error al enviar email con SMTP2GO');
   }
@@ -46,9 +44,7 @@ async function enviarEmailPersonalizado({ to, subject, html, text, pdfBuffer = n
   return 'OK';
 }
 
-// FUNCIONES DE USO
-
-// ENVÍO DE FACTURA (como antes)
+// ✅ ENVÍO DE FACTURA CON PDF
 async function enviarFacturaPorEmail(datos, pdfBuffer) {
   const importeTexto = datos.importe ? `${Number(datos.importe).toFixed(2)} €` : 'importe no disponible';
   const nombre = datos.nombre || '';
@@ -89,14 +85,15 @@ En cumplimiento del Reglamento (UE) 2016/679 (RGPD), su email forma parte de la 
 
 Puede ejercer sus derechos en: ignacio.solsona@icacs.com
 También puede reclamar ante la autoridad de control si lo considera necesario.
-`,
+    `.trim(),
     pdfBuffer
   });
 }
 
-// ENVÍO AVISO IMPAGO (intentos 1 y 2, solo al usuario)
+// ✅ AVISO DE IMPAGO (INTENTO 1 O 2)
 async function enviarAvisoImpago(email, nombre, intento, enlacePago) {
   let subject, html, text;
+
   if (intento === 1) {
     subject = 'Primer aviso: fallo en el cobro de tu suscripción Club Laboroteca';
     html = `
@@ -105,7 +102,7 @@ async function enviarAvisoImpago(email, nombre, intento, enlacePago) {
       <p>Si quieres, puedes actualizar tu método de pago aquí:<br>
       <a href="${enlacePago}">${enlacePago}</a></p>
     `;
-    text = `Estimado/a ${nombre},\n\nTu pago de la membresía Club Laboroteca no se ha podido procesar. Lo intentaremos de nuevo en 2 días.\nPuedes actualizar tu método de pago aquí: ${enlacePago}`;
+    text = `Estimado/a ${nombre},\n\nTu pago no se ha podido procesar. Lo intentaremos de nuevo en 2 días.\nActualiza tu método de pago aquí: ${enlacePago}`;
   } else {
     subject = 'Segundo aviso: fallo en el cobro de tu suscripción Club Laboroteca';
     html = `
@@ -114,7 +111,7 @@ async function enviarAvisoImpago(email, nombre, intento, enlacePago) {
       <p>Si quieres, puedes actualizar tu método de pago aquí:<br>
       <a href="${enlacePago}">${enlacePago}</a></p>
     `;
-    text = `Estimado/a ${nombre},\n\nSegundo intento de cobro fallido. Si el próximo pago falla, lamentamos decirte que tendremos que cancelar tu suscripción.\nPuedes actualizar tu método de pago aquí: ${enlacePago}`;
+    text = `Estimado/a ${nombre},\n\nSegundo intento fallido. Si el próximo pago falla, se cancelará tu suscripción.\nActualizar método de pago: ${enlacePago}`;
   }
 
   return enviarEmailPersonalizado({
@@ -125,7 +122,7 @@ async function enviarAvisoImpago(email, nombre, intento, enlacePago) {
   });
 }
 
-// ENVÍO AVISO CANCELACIÓN (al usuario y a Ignacio)
+// ✅ AVISO DE CANCELACIÓN POR IMPAGO (a usuario y copia a Ignacio)
 async function enviarAvisoCancelacion(email, nombre, enlacePago) {
   const subject = 'Tu suscripción Club Laboroteca ha sido cancelada por impago';
   const html = `
@@ -134,7 +131,7 @@ async function enviarAvisoCancelacion(email, nombre, enlacePago) {
     <p>Si deseas reactivar la suscripción o actualizar tu método de pago, utiliza este enlace:<br>
     <a href="${enlacePago}">${enlacePago}</a></p>
   `;
-  const text = `Estimado/a ${nombre},\n\nTu suscripción ha sido cancelada por impago. Puedes reactivar en cualquier momento.\nActualizar método de pago: ${enlacePago}`;
+  const text = `Estimado/a ${nombre},\n\nTu suscripción ha sido cancelada por impago. Puedes reactivarla en cualquier momento.\nEnlace para reactivación: ${enlacePago}`;
 
   return enviarEmailPersonalizado({
     to: [email, 'laboroteca@gmail.com'],
@@ -145,8 +142,40 @@ async function enviarAvisoCancelacion(email, nombre, enlacePago) {
   });
 }
 
+// ✅ CONFIRMACIÓN DE BAJA VOLUNTARIA (al usuario + copia)
+async function enviarConfirmacionBajaClub(email, nombre = '') {
+  const subject = 'Confirmación de baja del Club Laboroteca';
+
+  const html = `
+    <p>Hola ${nombre},</p>
+    <p>Te confirmamos que se ha cursado correctamente tu baja del <strong>Club Laboroteca</strong>.</p>
+    <p>Puedes volver a hacerte miembro en cualquier momento, por el mismo precio y sin compromiso de permanencia.</p>
+    <p>Un saludo,<br>Laboroteca</p>
+  `;
+
+  const text = `
+Hola ${nombre},
+
+Te confirmamos que se ha cursado correctamente tu baja del Club Laboroteca.
+
+Puedes volver a hacerte miembro en cualquier momento, por el mismo precio y sin compromiso de permanencia.
+
+Un saludo,
+Laboroteca
+  `.trim();
+
+  return enviarEmailPersonalizado({
+    to: [email],
+    subject,
+    html,
+    text,
+    enviarACopy: true
+  });
+}
+
 module.exports = {
   enviarFacturaPorEmail,
   enviarAvisoImpago,
-  enviarAvisoCancelacion
+  enviarAvisoCancelacion,
+  enviarConfirmacionBajaClub
 };

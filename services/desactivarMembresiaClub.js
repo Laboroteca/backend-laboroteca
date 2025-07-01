@@ -1,7 +1,6 @@
-// services/desactivarMembresiaClub.js
-
 const admin = require('../firebase');
 const firestore = admin.firestore();
+const { enviarConfirmacionBajaClub } = require('./email'); // ✅ IMPORTANTE
 
 /**
  * Desactiva la membresía del Club Laboroteca para el email indicado.
@@ -14,6 +13,14 @@ async function desactivarMembresiaClub(email) {
 
   const ref = firestore.collection('usuariosClub').doc(email);
 
+  // 🔍 Recuperar el nombre si ya existe
+  let nombre = '';
+  const doc = await ref.get();
+  if (doc.exists && doc.data().nombre) {
+    nombre = doc.data().nombre;
+  }
+
+  // 🔧 Desactivar la membresía
   await ref.set({
     email,
     activo: false,
@@ -21,6 +28,9 @@ async function desactivarMembresiaClub(email) {
   }, { merge: true });
 
   console.log(`🚫 [CLUB] Membresía desactivada para: ${email}`);
+
+  // 📧 Enviar email de confirmación
+  await enviarConfirmacionBajaClub(email, nombre);
 }
 
 module.exports = { desactivarMembresiaClub };

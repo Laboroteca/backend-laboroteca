@@ -27,23 +27,24 @@ module.exports = async function (req, res) {
 
   try {
     let result;
+
     switch (event.type) {
       case 'checkout.session.completed':
         result = await handleStripeEvent(event);
         try {
           const session = event.data.object;
+          const email = session.metadata?.email || session.customer_details?.email;
+
           if (
-            session?.metadata?.nombreProducto === 'El Club Laboroteca' ||
-            (session?.display_items && session.display_items[0]?.custom?.name === 'El Club Laboroteca')
+            email &&
+            (session.metadata?.nombreProducto === 'el-club-laboroteca' ||
+              session?.display_items?.[0]?.custom?.name === 'El Club Laboroteca')
           ) {
-            const email = session.customer_details?.email || session.metadata?.email;
-            if (email) {
-              await syncMemberpressClub({
-                email,
-                accion: 'activar',
-                membership_id: MEMBERPRESS_CLUB_ID
-              });
-            }
+            await syncMemberpressClub({
+              email,
+              accion: 'activar',
+              membership_id: MEMBERPRESS_CLUB_ID
+            });
           }
         } catch (err) {
           console.error('❌ Error al activar en MemberPress:', err);
@@ -54,18 +55,18 @@ module.exports = async function (req, res) {
         result = await handleStripeEvent(event);
         try {
           const subscription = event.data.object;
-          const email = subscription?.metadata?.email || subscription?.customer_email;
+          const email = subscription.metadata?.email || subscription.customer_email;
+
           if (
-            subscription?.metadata?.nombreProducto === 'El Club Laboroteca' ||
-            (subscription?.items?.data?.[0]?.description || '').includes('Club Laboroteca')
+            email &&
+            (subscription.metadata?.nombreProducto === 'el-club-laboroteca' ||
+              subscription?.items?.data?.[0]?.description?.includes('Club Laboroteca'))
           ) {
-            if (email) {
-              await syncMemberpressClub({
-                email,
-                accion: 'desactivar',
-                membership_id: MEMBERPRESS_CLUB_ID
-              });
-            }
+            await syncMemberpressClub({
+              email,
+              accion: 'desactivar',
+              membership_id: MEMBERPRESS_CLUB_ID
+            });
           }
         } catch (err) {
           console.error('❌ Error al desactivar en MemberPress:', err);

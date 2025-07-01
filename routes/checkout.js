@@ -1,90 +1,94 @@
-require('dotenv').config();
-console.log('📦 WEBHOOK CARGADO');
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const { normalizar } = require('../utils/normalizar');
+const { emailRegistradoEnWordPress } = require('../utils/wordpress');
+const express = require('express');
+const router = express.Router();
 
-const Stripe = require('stripe');
-const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
-const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
-
-const handleStripeEvent = require('../services/handleStripeEvent');
-const { syncMemberpressClub } = require('../services/syncMemberpressClub');
-
-// ID de MemberPress para el Club Laboroteca
-const MEMBERPRESS_CLUB_ID = 10663;
-
-module.exports = async function (req, res) {
-  console.log('🔥 LLEGÓ AL WEBHOOK');
-
-  const sig = req.headers['stripe-signature'];
-  let event;
-
-  try {
-    event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
-    console.log(`🎯 Webhook verificado: ${event.type}`);
-  } catch (err) {
-    console.error('❌ Firma inválida del webhook:', err.message);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
-  }
-
-  try {
-    let result;
-    switch (event.type) {
-      case 'checkout.session.completed':
-        result = await handleStripeEvent(event);
-        try {
-          const session = event.data.object;
-          if (
-            session?.metadata?.nombreProducto === 'El Club Laboroteca' ||
-            (session?.display_items && session.display_items[0]?.custom?.name === 'El Club Laboroteca')
-          ) {
-            const email = session.customer_details?.email || session.metadata?.email;
-            if (email) {
-              await syncMemberpressClub({
-                email,
-                accion: 'activar',
-                membership_id: MEMBERPRESS_CLUB_ID
-              });
-            }
-          }
-        } catch (err) {
-          console.error('❌ Error al activar en MemberPress:', err);
-        }
-        return res.status(200).json({ received: true, ...result });
-
-      case 'customer.subscription.deleted':
-        result = await handleStripeEvent(event);
-        try {
-          const subscription = event.data.object;
-          const email = subscription?.metadata?.email || subscription?.customer_email;
-          if (
-            subscription?.metadata?.nombreProducto === 'El Club Laboroteca' ||
-            (subscription?.items?.data?.[0]?.description || '').includes('Club Laboroteca')
-          ) {
-            if (email) {
-              await syncMemberpressClub({
-                email,
-                accion: 'desactivar',
-                membership_id: MEMBERPRESS_CLUB_ID
-              });
-            }
-          }
-        } catch (err) {
-          console.error('❌ Error al desactivar en MemberPress:', err);
-        }
-        return res.status(200).json({ received: true, ...result });
-
-      case 'invoice.paid':
-      case 'customer.subscription.created':
-      case 'customer.subscription.updated':
-      case 'payment_intent.succeeded':
-        result = await handleStripeEvent(event);
-        return res.status(200).json({ received: true, ...result });
-
-      default:
-        console.log(`ℹ️ Evento no manejado: ${event.type}`);
-        return res.status(200).json({ received: true });
-    }
-  } catch (error) {
-    console.error('❌ Error al manejar evento Stripe:', error);
-    return res.status(500).json({ error: 'Error al manejar evento Stripe' });
+// 🧠 Mapa de productos
+const PRODUCTOS = {
+  'de cara a la jubilacion': {
+    nombre: 'De cara a la jubilación',
+    slug: 'de-cara-a-la-jubilacion',
+    descripcion: 'Libro digital con acceso vitalicio',
+    price_id: 'price_1RMG0mEe6Cd77jenTpudZVan'
+  },
+  'el club laboroteca': {
+    nombre: 'El Club Laboroteca',
+    slug: 'el-club-laboroteca',
+    descripcion: 'Suscripción mensual a El Club Laboroteca. Acceso a contenido exclusivo.',
+    price_id: 'price_1RfHeAEe6Cd77jenDw9UUPCp'
   }
 };
+
+router.post('/create-session', async (req, res) => {
+  try {
+    const datos = req.body.email ? req.body : Object.values(req.body)[0];
+
+    const nombre = datos.nombre || datos.Nombre || '';
+    const apellidos = datos.apellidos || datos.Apellidos || '';
+    const email = datos.email || '';
+    const dni = datos.dni || '';
+    const direccion = datos.direccion || '';
+    const ciudad = datos.ciudad || '';
+    const provincia = datos.provincia || '';
+    const cp = datos.cp || '';
+    const tipoProducto = datos.tipoProducto || '';
+    const nombreProducto = datos.nombreProducto || '';
+
+    const clave = normalizar(nombreProducto);
+    const producto = PRODUCTOS[clave];
+
+    console.log('📩 Solicitud recibida:', {
+      nombre, apellidos, email, dni, direccion,
+      ciudad, provincia, cp, tipoProducto, nombreProducto
+    });
+
+    if (!email || !nombre || !nombreProducto || !tipoProducto || !producto) {
+      console.warn('⚠️ Faltan datos o producto inválido.');
+      return res.status(400).json({ error: 'Faltan datos obligatorios o producto no válido.' });
+    }
+
+    const registrado = await emailRegistradoEnWordPress(email);
+    if (!registrado) {
+      console.warn('🚫 Email no registrado en WP:', email);
+      return res.status(403).json({ error: 'El email no está registrado como usuario.' });
+    }
+
+    const isSuscripcion = tipoProducto.toLowerCase().includes('suscrip');
+
+    const session = await stripe.checkout.sessions.create({
+      mode: isSuscripcion ? 'subscription' : 'payment',
+      payment_method_types: ['card'],
+      customer_email: email,
+      line_items: [{
+        price: producto.price_id,
+        quantity: 1
+      }],
+      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(producto.nombre)}`,
+      cancel_url: 'https://laboroteca.es/error',
+      metadata: {
+        nombre,
+        apellidos,
+        email,
+        dni,
+        direccion,
+        ciudad,
+        provincia,
+        cp,
+        tipoProducto,
+        nombreProducto: producto.slug,
+        descripcionProducto: producto.descripcion
+      }
+    });
+
+    console.log('✅ Sesión Stripe creada:', session.url);
+    res.json({ url: session.url });
+
+  } catch (err) {
+    console.error('❌ Error creando sesión de pago:', err.message);
+    res.status(500).json({ error: 'Error interno al crear la sesión' });
+  }
+});
+
+module.exports = router;
+

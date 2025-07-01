@@ -15,7 +15,7 @@ const path = require('path');
 const rateLimit = require('express-rate-limit');
 const procesarCompra = require('./services/procesarCompra');
 const { activarMembresiaClub } = require('./services/activarMembresiaClub');
-const desactivarMembresiaClubHandler = require('./routes/desactivarMembresiaClub'); // ← NUEVO
+const desactivarMembresiaClubHandler = require('./routes/desactivarMembresiaClub'); // NUEVO
 
 const app = express();
 app.set('trust proxy', 1);
@@ -73,6 +73,7 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
+// Stripe raw para /webhook
 app.use((req, res, next) => {
   if (req.originalUrl === '/webhook') {
     express.raw({ type: 'application/json' })(req, res, next);
@@ -83,7 +84,7 @@ app.use((req, res, next) => {
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static(__dirname));
 
-// Página test
+// Página test (opcional)
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'formulario.html'));
 });
@@ -108,7 +109,6 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   if (!producto) {
     return res.status(400).json({ error: 'Producto no disponible.' });
   }
-
   if (!nombre || !email) {
     return res.status(400).json({ error: 'Faltan campos obligatorios.' });
   }
@@ -160,7 +160,7 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   }
 });
 
-// Endpoint suscripción mensual
+// Endpoint suscripción mensual (Club Laboroteca)
 app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
   const datos = req.body;
   console.log('📦 DATOS SUSCRIPCIÓN CLUB:', JSON.stringify(datos, null, 2));
@@ -176,7 +176,6 @@ app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
   if (!producto) {
     return res.status(400).json({ error: 'Producto no disponible.' });
   }
-
   if (!nombre || !email) {
     return res.status(400).json({ error: 'Faltan campos obligatorios.' });
   }
@@ -245,7 +244,9 @@ app.post('/activar-membresia-club', async (req, res) => {
 // Desactivar membresía manual (BAJA)
 app.post('/desactivar-membresia-club', desactivarMembresiaClubHandler);
 
-// Lanzar servidor
+// ----------- POSIBLE FUTURO ENDPOINT CAMBIO DE TARJETA -------------
+// app.post('/cambiar-tarjeta', cambiarTarjetaHandler);
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Backend funcionando en http://localhost:${PORT}`);

@@ -1,7 +1,12 @@
 // services/activarMembresiaClub.js
+
 const admin = require('../firebase');
 const firestore = admin.firestore();
 
+/**
+ * Activa la membresía del club para el email dado.
+ * Marca como activo y actualiza la fecha de alta.
+ */
 async function activarMembresiaClub(email) {
   if (!email) throw new Error('Email vacío');
 

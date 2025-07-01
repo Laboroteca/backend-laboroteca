@@ -1,3 +1,6 @@
+// routes/activarMembresiaClub.js
+
+const { activarMembresiaClub } = require('../services/activarMembresiaClub');
 const express = require('express');
 const router = express.Router();
 
@@ -9,18 +12,10 @@ router.post('/', async (req, res) => {
   }
 
   try {
-    const admin = require('../firebase');
-    const firestore = admin.firestore();
+    await activarMembresiaClub(email);
 
-    const ref = firestore.collection('usuariosClub').doc(email);
+    // Aquí puedes añadir lógica adicional si en el futuro quieres notificar por email, etc.
 
-    await ref.set({
-      email,
-      activo: true,
-      fechaAlta: new Date().toISOString()
-    }, { merge: true });
-
-    console.log(`✅ Membresía del Club activada para ${email}`);
     return res.json({ ok: true });
   } catch (error) {
     console.error('❌ Error al activar la membresía:', error.message);

@@ -8,6 +8,9 @@ const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
 const handleStripeEvent = require('../services/handleStripeEvent');
 const { syncMemberpressClub } = require('../services/syncMemberpressClub');
 
+// ID de MemberPress para el Club Laboroteca
+const MEMBERPRESS_CLUB_ID = 10663;
+
 module.exports = async function (req, res) {
   console.log('🔥 LLEGÓ AL WEBHOOK');
 
@@ -34,7 +37,13 @@ module.exports = async function (req, res) {
             (session?.display_items && session.display_items[0]?.custom?.name === 'El Club Laboroteca')
           ) {
             const email = session.customer_details?.email || session.metadata?.email;
-            if (email) await syncMemberpressClub({ email, accion: 'activar' });
+            if (email) {
+              await syncMemberpressClub({
+                email,
+                accion: 'activar',
+                membership_id: MEMBERPRESS_CLUB_ID
+              });
+            }
           }
         } catch (err) {
           console.error('❌ Error al activar en MemberPress:', err);
@@ -50,7 +59,13 @@ module.exports = async function (req, res) {
             subscription?.metadata?.nombreProducto === 'El Club Laboroteca' ||
             (subscription?.items?.data?.[0]?.description || '').includes('Club Laboroteca')
           ) {
-            if (email) await syncMemberpressClub({ email, accion: 'desactivar' });
+            if (email) {
+              await syncMemberpressClub({
+                email,
+                accion: 'desactivar',
+                membership_id: MEMBERPRESS_CLUB_ID
+              });
+            }
           }
         } catch (err) {
           console.error('❌ Error al desactivar en MemberPress:', err);

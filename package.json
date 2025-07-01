@@ -3,9 +3,13 @@
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
+  "type": "commonjs",
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js"
+  },
+  "engines": {
+    "node": "18.x"
   },
   "keywords": [],
   "author": "",

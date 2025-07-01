@@ -13,9 +13,13 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY || '');
 const cors = require('cors');
 const path = require('path');
 const rateLimit = require('express-rate-limit');
+
 const procesarCompra = require('./services/procesarCompra');
 const { activarMembresiaClub } = require('./services/activarMembresiaClub');
-const desactivarMembresiaClubHandler = require('./routes/desactivarMembresiaClub'); // NUEVO
+const desactivarMembresiaClubHandler = require('./routes/desactivarMembresiaClub');
+
+// --- NUEVO: Endpoint para sincronizar con MemberPress ---
+const { syncMemberpressClub } = require('./services/syncMemberpressClub');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -93,7 +97,7 @@ app.get('/', (req, res) => {
 const webhookHandler = require('./routes/webhook');
 app.post('/webhook', webhookHandler);
 
-// Endpoint pago único
+// Endpoint pago único (compra de libro, etc)
 app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   const datos = req.body;
   console.log('📦 DATOS FORMULARIO:', JSON.stringify(datos, null, 2));
@@ -227,13 +231,14 @@ app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
   }
 });
 
-// Activar membresía manual
+// Activar membresía manual (no necesitas tocar esto)
 app.post('/activar-membresia-club', async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'Falta el email' });
 
   try {
     await activarMembresiaClub(email);
+    await syncMemberpressClub({ email, accion: 'activar' }); // Sincroniza con MemberPress
     return res.json({ ok: true });
   } catch (error) {
     console.error('❌ Error activar membresía:', error.message);
@@ -244,8 +249,27 @@ app.post('/activar-membresia-club', async (req, res) => {
 // Desactivar membresía manual (BAJA)
 app.post('/desactivar-membresia-club', desactivarMembresiaClubHandler);
 
-// ----------- POSIBLE FUTURO ENDPOINT CAMBIO DE TARJETA -------------
-// app.post('/cambiar-tarjeta', cambiarTarjetaHandler);
+// --- NUEVO: Endpoint para crear portal Stripe del cliente (para botón cambiar tarjeta) ---
+app.post('/crear-portal-cliente', async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ error: 'Falta el email' });
+
+  try {
+    // Buscar el customer en Stripe por email
+    const customers = await stripe.customers.list({ email, limit: 1 });
+    if (!customers.data.length) return res.status(404).json({ error: 'No existe cliente Stripe para este email.' });
+
+    const customerId = customers.data[0].id;
+    const session = await stripe.billingPortal.sessions.create({
+      customer: customerId,
+      return_url: 'https://www.laboroteca.es/mi-cuenta'
+    });
+    return res.json({ url: session.url });
+  } catch (error) {
+    console.error('❌ Error creando portal cliente Stripe:', error);
+    return res.status(500).json({ error: 'No se pudo crear el portal de cliente Stripe' });
+  }
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {

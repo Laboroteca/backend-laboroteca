@@ -7,6 +7,7 @@ const { enviarFacturaPorEmail } = require('./email');
 const { subirFactura } = require('./gcs');
 const { activarMembresiaClub } = require('./activarMembresiaClub');
 const { desactivarMembresiaClub } = require('./desactivarMembresiaClub');
+const { syncMemberpressClub } = require('./syncMemberpressClub'); // NUEVO: importar el sync
 const fs = require('fs').promises;
 const path = require('path');
 const Stripe = require('stripe');
@@ -81,6 +82,7 @@ async function handleStripeEvent(event) {
     if (datosCliente.nombreProducto === 'El Club Laboroteca') {
       try {
         await activarMembresiaClub(email);
+        await syncMemberpressClub({ email, accion: 'activar' }); // ACTIVA en MemberPress
       } catch (err) {
         console.error('❌ Error al activar membresía del Club:', err);
       }
@@ -171,6 +173,7 @@ async function handleStripeEvent(event) {
         try {
           await stripe.subscriptions.del(subscriptionId);
           await desactivarMembresiaClub(email);
+          await syncMemberpressClub({ email, accion: 'desactivar' }); // DESACTIVA en MemberPress
 
           // Envía aviso de cancelación al usuario y a Ignacio
           await enviarEmailAvisoImpago({
@@ -206,6 +209,7 @@ async function handleStripeEvent(event) {
     ) {
       try {
         await desactivarMembresiaClub(customerEmail);
+        await syncMemberpressClub({ email: customerEmail, accion: 'desactivar' }); // DESACTIVA en MemberPress
         console.log(`✅ Membresía del Club desactivada para ${customerEmail}`);
       } catch (err) {
         console.error('❌ Error al desactivar membresía del Club:', err);

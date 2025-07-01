@@ -7,7 +7,7 @@ const { enviarFacturaPorEmail } = require('./email');
 const { subirFactura } = require('./gcs');
 const { activarMembresiaClub } = require('./activarMembresiaClub');
 const { desactivarMembresiaClub } = require('./desactivarMembresiaClub');
-const { syncMemberpressClub } = require('./syncMemberpressClub'); // NUEVO: importar el sync
+const { syncMemberpressClub } = require('./syncMemberpressClub');
 const fs = require('fs').promises;
 const path = require('path');
 const Stripe = require('stripe');
@@ -15,7 +15,13 @@ const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const RUTA_CUPONES = path.join(__dirname, '../data/cupones.json');
 
-// Utils para emails de impago
+// Cambia aquí los IDs de MemberPress para cada producto
+const MEMBERPRESS_IDS = {
+  'El Club Laboroteca': 10663,
+  'De cara a la jubilación': 7994
+  // Puedes añadir más: 'Nombre exacto del producto': ID
+};
+
 function plantillaImpago(n, nombre, link) {
   if (n === 1) return `Estimado ${nombre}. Tu pago de la membresía Club Laboroteca no se ha podido procesar. Lo intentaremos de nuevo en 2 días.<br><br>Puedes actualizar tu método de pago aquí: <a href="${link}">Actualizar tarjeta</a>`;
   if (n === 2) return `Estimado ${nombre}. Tu pago de la membresía Club Laboroteca no se ha podido procesar. Segundo intento de cobro fallido. Si el próximo pago falla, lamentamos decirte que tendremos que cancelar tu suscripción.<br><br>Puedes actualizar tu método de pago aquí: <a href="${link}">Actualizar tarjeta</a>`;
@@ -79,12 +85,27 @@ async function handleStripeEvent(event) {
 
     await enviarFacturaPorEmail(datosCliente, pdfBuffer);
 
+    // --- ACTIVAR MEMBRESÍA EN WORDPRESS SEGÚN PRODUCTO ---
+    const productId = MEMBERPRESS_IDS[datosCliente.nombreProducto];
+    if (productId && email) {
+      try {
+        await syncMemberpressClub({
+          email,
+          accion: 'activar',
+          membership_id: productId
+        });
+        console.log(`✅ Sincronizado alta de ${datosCliente.nombreProducto} en MemberPress (${productId})`);
+      } catch (err) {
+        console.error(`❌ Error al activar en MemberPress [${productId}]:`, err);
+      }
+    }
+
+    // Antiguo flujo Firestore (si lo mantienes)
     if (datosCliente.nombreProducto === 'El Club Laboroteca') {
       try {
         await activarMembresiaClub(email);
-        await syncMemberpressClub({ email, accion: 'activar' }); // ACTIVA en MemberPress
       } catch (err) {
-        console.error('❌ Error al activar membresía del Club:', err);
+        console.error('❌ Error al activar membresía del Club en Firestore:', err);
       }
     }
 
@@ -127,7 +148,6 @@ async function handleStripeEvent(event) {
     const name = invoice.customer_name || '';
     const nombreProducto = invoice.lines?.data?.[0]?.description || '';
 
-    // El enlace para actualizar tarjeta
     let updateUrl = '';
     try {
       const portalSession = await stripe.billingPortal.sessions.create({
@@ -140,7 +160,6 @@ async function handleStripeEvent(event) {
       updateUrl = 'https://www.laboroteca.es/mi-cuenta';
     }
 
-    // Guarda cuántos fallos lleva esta suscripción
     const ref = firestore.collection('suscripcionesImpago').doc(subscriptionId);
     let fallos = 0;
     const doc = await ref.get();
@@ -156,7 +175,6 @@ async function handleStripeEvent(event) {
       fecha: new Date().toISOString()
     }, { merge: true });
 
-    // Enviar aviso al usuario (1er y 2º intento) — solo para el Club
     if (nombreProducto.includes('Club Laboroteca')) {
       const { enviarEmailAvisoImpago } = require('./emailAvisos');
 
@@ -172,8 +190,19 @@ async function handleStripeEvent(event) {
         // Cancela en Stripe la suscripción
         try {
           await stripe.subscriptions.del(subscriptionId);
+
+          // --- DESACTIVAR EN MEMBERPRESS SEGÚN PRODUCTO ---
+          const productId = MEMBERPRESS_IDS['El Club Laboroteca'];
+          if (productId && email) {
+            await syncMemberpressClub({
+              email,
+              accion: 'desactivar',
+              membership_id: productId
+            });
+            console.log(`🚫 Sincronizado baja de Club Laboroteca en MemberPress (${productId})`);
+          }
+
           await desactivarMembresiaClub(email);
-          await syncMemberpressClub({ email, accion: 'desactivar' }); // DESACTIVA en MemberPress
 
           // Envía aviso de cancelación al usuario y a Ignacio
           await enviarEmailAvisoImpago({
@@ -208,15 +237,23 @@ async function handleStripeEvent(event) {
       ((subscription?.items?.data?.[0]?.description || '').includes('Club Laboroteca'))
     ) {
       try {
+        const productId = MEMBERPRESS_IDS['El Club Laboroteca'];
+        if (productId && customerEmail) {
+          await syncMemberpressClub({
+            email: customerEmail,
+            accion: 'desactivar',
+            membership_id: productId
+          });
+          console.log(`🚫 Baja Club Laboroteca también en MemberPress (${productId})`);
+        }
+
         await desactivarMembresiaClub(customerEmail);
-        await syncMemberpressClub({ email: customerEmail, accion: 'desactivar' }); // DESACTIVA en MemberPress
         console.log(`✅ Membresía del Club desactivada para ${customerEmail}`);
       } catch (err) {
         console.error('❌ Error al desactivar membresía del Club:', err);
       }
     }
 
-    // Log en Firestore
     await firestore.collection('bajasProcesadas').add({
       email: customerEmail,
       fecha: new Date().toISOString(),

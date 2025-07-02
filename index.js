@@ -243,6 +243,22 @@ app.post('/desactivar-membresia-club', async (req, res) => {
   if (!email) return res.status(400).json({ error: 'Falta el email' });
 
   try {
+    // 1️⃣ Cancelar suscripción activa en Stripe
+    const customers = await stripe.customers.list({ email, limit: 1 });
+    if (customers.data.length) {
+      const customerId = customers.data[0].id;
+      const subs = await stripe.subscriptions.list({ customer: customerId, status: 'active', limit: 1 });
+      if (subs.data.length) {
+        const subscriptionId = subs.data[0].id;
+        await stripe.subscriptions.del(subscriptionId);
+        console.log(`🛑 Suscripción ${subscriptionId} cancelada en Stripe para ${email}`);
+      } else {
+        console.warn(`ℹ️ No hay suscripción activa en Stripe para ${email}`);
+      }
+    } else {
+      console.warn(`⚠️ No se encontró cliente Stripe con email ${email}`);
+    }
+
     await desactivarMembresiaClub(email);
     await syncMemberpressClub({ email, accion: 'desactivar', membership_id: 10663 });
     return res.json({ ok: true });

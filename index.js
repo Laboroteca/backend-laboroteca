@@ -75,14 +75,13 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-app.use((req, res, next) => {
-  if (req.originalUrl === '/webhook') {
-    express.raw({ type: 'application/json' })(req, res, next);
-  } else {
-    bodyParser.json()(req, res, next);
-  }
-});
-app.use(bodyParser.urlencoded({ extended: true }));
+// ** Aquí está el cambio fundamental para Stripe Webhook **
+app.use('/webhook', express.raw({ type: 'application/json' }));
+
+// Para resto de rutas, parsear JSON y URL encoded
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
 app.use(express.static(__dirname));
 
 app.get('/', (req, res) => {

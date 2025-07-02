@@ -80,12 +80,13 @@ async function crearFacturaEnFacturaCity(datosCliente) {
       console.warn('⚠️ No se pudo añadir dirección fiscal:', err.message);
     }
 
-    // ✅ MODIFICACIÓN CLAVE AQUÍ
+    // ✅ Ajuste clave: referencia según producto
     const descripcion = datosCliente.descripcionProducto || datosCliente.descripcion || datosCliente.producto;
+    const referencia = datosCliente.nombreProducto === 'el-club-laboroteca' ? 'CLUB001' : 'LIBRO001';
 
     const lineas = [
       {
-        referencia: 'LIBRO001',
+        referencia,
         descripcion,
         cantidad: 1,
         pvpunitario: precioBase,

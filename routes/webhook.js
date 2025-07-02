@@ -5,6 +5,9 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
+const admin = require('../firebase'); // 👈 AÑADIDO
+const firestore = admin.firestore();
+
 const handleStripeEvent = require('../services/handleStripeEvent');
 const { syncMemberpressClub } = require('../services/syncMemberpressClub');
 
@@ -74,6 +77,38 @@ module.exports = async function (req, res) {
         return res.status(200).json({ received: true, ...result });
 
       case 'invoice.paid':
+        try {
+          const invoice = event.data.object;
+          const email =
+            invoice.customer_email ||
+            invoice.customer_details?.email ||
+            invoice.metadata?.email;
+
+          console.log('💳 invoice.paid recibido para:', email);
+
+          const esClub =
+            invoice.lines?.data?.some(line =>
+              line.description?.toLowerCase().includes('club laboroteca')
+            ) || invoice.metadata?.nombreProducto === 'el-club-laboroteca';
+
+          if (email && esClub) {
+            console.log(`📆 Renovación mensual registrada para ${email}`);
+
+            await firestore.collection('renovacionesClub').add({
+              email,
+              fecha: new Date().toISOString(),
+              evento: 'renovacion-club',
+              stripeInvoiceId: invoice.id,
+              importe: invoice.amount_paid / 100
+            });
+          }
+
+          return res.status(200).json({ received: true });
+        } catch (err) {
+          console.error('❌ Error procesando invoice.paid:', err);
+          return res.status(500).json({ error: 'Error invoice.paid' });
+        }
+
       case 'customer.subscription.created':
       case 'customer.subscription.updated':
       case 'payment_intent.succeeded':

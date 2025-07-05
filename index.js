@@ -15,7 +15,6 @@ const path = require('path');
 
 const procesarCompra = require('./services/procesarCompra');
 const { activarMembresiaClub } = require('./services/activarMembresiaClub');
-const { desactivarMembresiaClub } = require('./services/desactivarMembresiaClub');
 const { syncMemberpressClub } = require('./services/syncMemberpressClub');
 
 const app = express();
@@ -203,31 +202,9 @@ app.post('/activar-membresia-club', async (req, res) => {
   }
 });
 
-app.post('/desactivar-membresia-club', async (req, res) => {
-  const { email } = req.body;
-  if (!email) return res.status(400).json({ error: 'Falta el email' });
-
-  try {
-    const customers = await stripe.customers.list({ email, limit: 1 });
-    if (customers.data.length) {
-      const customerId = customers.data[0].id;
-      const subs = await stripe.subscriptions.list({ customer: customerId, status: 'active', limit: 1 });
-      if (subs.data.length) {
-        const subscriptionId = subs.data[0].id;
-        await stripe.subscriptions.del(subscriptionId);
-        console.log(`🛑 Suscripción ${subscriptionId} cancelada en Stripe para ${email}`);
-      }
-    }
-
-    await desactivarMembresiaClub(email);
-    await syncMemberpressClub({ email, accion: 'desactivar', membership_id: 10663 });
-    return res.json({ ok: true });
-
-  } catch (error) {
-    console.error('❌ Error desactivar membresía:', error.message);
-    return res.status(500).json({ error: 'Error al desactivar la membresía' });
-  }
-});
+// ✅ NUEVA RUTA DE DESACTIVACIÓN con validación del token de seguridad
+const desactivarRuta = require('./routes/desactivarMembresiaClub');
+app.use('/desactivar-membresia-club', desactivarRuta);
 
 app.post('/crear-portal-cliente', async (req, res) => {
   const { email } = req.body;

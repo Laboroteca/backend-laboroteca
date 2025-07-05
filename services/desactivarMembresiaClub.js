@@ -1,8 +1,11 @@
+// services/desactivarMembresiaClub.js
+
 const admin = require('../firebase');
 const firestore = admin.firestore();
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
+const bcrypt = require('bcryptjs');
 const { enviarConfirmacionBajaClub } = require('./email');
-const { cancelarSuscripcionStripe } = require('./stripeUtils'); // <-- asegúrate de tener esta
 const { syncMemberpressClub } = require('./syncMemberpressClub');
 
 /**
@@ -32,32 +35,53 @@ async function desactivarMembresiaClub(email, password) {
       return { ok: false, mensaje: 'No se ha configurado una contraseña.' };
     }
 
-    // Verificar contraseña usando bcrypt
-    const bcrypt = require('bcryptjs');
     const esValida = await bcrypt.compare(password, hashAlmacenado);
-
     if (!esValida) {
       return { ok: false, mensaje: 'La contraseña no es correcta.' };
     }
 
     const nombre = datos?.nombre || '';
 
-    // 🔴 1. Desactivar en Firestore
+    // 🔴 1. Cancelar suscripciones activas en Stripe
+    try {
+      const clientes = await stripe.customers.list({ email, limit: 1 });
+
+      if (clientes.data.length === 0) {
+        console.warn(`⚠️ Stripe: cliente no encontrado para ${email}`);
+      } else {
+        const customerId = clientes.data[0].id;
+        const subsActivas = await stripe.subscriptions.list({
+          customer: customerId,
+          status: 'active',
+          limit: 10
+        });
+
+        for (const sub of subsActivas.data) {
+          await stripe.subscriptions.cancel(sub.id);
+          console.log(`🛑 Stripe: suscripción ${sub.id} cancelada para ${email}`);
+        }
+      }
+    } catch (errStripe) {
+      console.error(`❌ Error cancelando suscripción en Stripe: ${errStripe.message}`);
+    }
+
+    // 🔴 2. Marcar como inactivo en Firestore
     await ref.set({
       activo: false,
       fechaBaja: new Date().toISOString()
     }, { merge: true });
-
-    console.log(`🚫 [CLUB] Firestore actualizado para ${email}`);
-
-    // 🔴 2. Cancelar en Stripe (debe devolver true si todo va bien)
-    const resultadoStripe = await cancelarSuscripcionStripe(email);
-    if (!resultadoStripe?.ok) {
-      console.warn(`⚠️ Stripe no pudo cancelar suscripción de ${email}: ${resultadoStripe.mensaje}`);
-    }
+    console.log(`📉 Firestore: usuario marcado como inactivo → ${email}`);
 
     // 🔴 3. Desactivar en MemberPress
-    await syncMemberpressClub({ email, accion: 'desactivar' });
+    try {
+      await syncMemberpressClub({
+        email,
+        accion: 'desactivar'
+      });
+      console.log(`🧩 MemberPress desactivado para ${email}`);
+    } catch (errMP) {
+      console.error(`❌ Error al desactivar en MemberPress: ${errMP.message}`);
+    }
 
     // 🔴 4. Enviar email de confirmación
     try {

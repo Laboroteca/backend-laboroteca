@@ -1,5 +1,3 @@
-// routes/cancelarSuscripcionClub.js
-
 const express = require('express');
 const router = express.Router();
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
@@ -11,51 +9,65 @@ const CLUB_MEMBERSHIP_ID = 10663;
 router.post('/', async (req, res) => {
   const { email, password, token } = req.body;
 
+  // Validación básica
   if (!email || !password) {
-    return res.status(400).json({ cancelada: false, mensaje: 'Faltan datos obligatorios.' });
+    return res.status(400).json({
+      cancelada: false,
+      mensaje: 'Faltan datos obligatorios.'
+    });
   }
 
-  // Validación opcional con token de seguridad
+  // Validación del token de seguridad
   if (process.env.TOKEN_DESACTIVACION && token !== process.env.TOKEN_DESACTIVACION) {
-    return res.status(403).json({ cancelada: false, mensaje: 'Token inválido.' });
+    return res.status(403).json({
+      cancelada: false,
+      mensaje: 'Token inválido.'
+    });
   }
 
   try {
-    // 🔄 Cancelar suscripción en Stripe
-    const customers = await stripe.customers.list({ email, limit: 1 });
-    if (customers.data.length > 0) {
-      const customerId = customers.data[0].id;
+    // Buscar cliente en Stripe
+    const clientes = await stripe.customers.list({ email, limit: 1 });
+    if (!clientes.data.length) {
+      console.warn(`⚠️ Cliente no encontrado en Stripe para ${email}`);
+    } else {
+      const customerId = clientes.data[0].id;
 
-      const subs = await stripe.subscriptions.list({
+      // Cancelar todas las suscripciones activas
+      const subsActivas = await stripe.subscriptions.list({
         customer: customerId,
         status: 'active',
         limit: 10
       });
 
-      if (subs.data.length > 0) {
-        for (const sub of subs.data) {
+      if (subsActivas.data.length) {
+        for (const sub of subsActivas.data) {
           await stripe.subscriptions.cancel(sub.id);
           console.log(`🛑 Suscripción ${sub.id} cancelada en Stripe para ${email}`);
         }
       } else {
-        console.log(`ℹ️ No hay suscripciones activas para ${email}`);
+        console.log(`ℹ️ No hay suscripciones activas en Stripe para ${email}`);
       }
-    } else {
-      console.log(`⚠️ Cliente no encontrado en Stripe para ${email}`);
     }
 
-    // ❌ Desactivar en MemberPress
+    // Desactivar acceso en MemberPress
     await syncMemberpressClub({
       email,
       accion: 'desactivar',
       membership_id: CLUB_MEMBERSHIP_ID
     });
 
-    return res.json({ cancelada: true, mensaje: 'Suscripción cancelada correctamente.' });
+    return res.json({
+      cancelada: true,
+      mensaje: 'Suscripción cancelada correctamente.'
+    });
 
   } catch (error) {
-    console.error('❌ Error cancelando suscripción:', error.message || error);
-    return res.status(500).json({ cancelada: false, mensaje: 'Error interno al cancelar la suscripción.' });
+    console.error('❌ Error al cancelar la suscripción:', error.message || error);
+    return res.status(500).json({
+      cancelada: false,
+      mensaje: 'Error interno al cancelar la suscripción.'
+    });
   }
 });
 

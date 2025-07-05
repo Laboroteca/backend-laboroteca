@@ -154,7 +154,7 @@ async function handleStripeEvent(event) {
       });
       updateUrl = portalSession.url;
     } catch (err) {
-      console.error('❌ Error al generar enlace de portal de cliente Stripe:', err);
+      console.error('❌ Error al generar enlace de portal de cliente Stripe:', err.message);
       updateUrl = 'https://www.laboroteca.es/mi-cuenta';
     }
 
@@ -230,7 +230,19 @@ async function handleStripeEvent(event) {
   // 🛑 CUSTOMER SUBSCRIPTION DELETED
   if (eventType === 'customer.subscription.deleted') {
     const subscription = event.data.object;
-    const customerEmail = subscription?.metadata?.email_autorelleno || subscription?.metadata?.email || subscription?.customer_email || '';
+
+    let customerEmail = subscription?.metadata?.email_autorelleno || subscription?.metadata?.email || subscription?.customer_email || '';
+
+    // 🧠 Recuperar email si sigue sin estar
+    if (!customerEmail && subscription.customer) {
+      try {
+        const customerData = await stripe.customers.retrieve(subscription.customer);
+        customerEmail = customerData.email || '';
+        console.log(`📧 Email obtenido desde Stripe: ${customerEmail}`);
+      } catch (err) {
+        console.error('❌ No se pudo obtener el email del cliente desde Stripe:', err.message);
+      }
+    }
 
     console.log(`🛑 Suscripción cancelada para email: ${customerEmail}`);
 

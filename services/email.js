@@ -34,13 +34,19 @@ async function enviarEmailPersonalizado({ to, subject, html, text, pdfBuffer = n
   });
 
   const resultado = await response.json();
+  const successReal = resultado?.data?.succeeded === 1 && resultado?.data?.failed === 0;
 
-  if (!resultado.success || resultado.data?.succeeded !== 1) {
-    console.error('❌ Error desde SMTP2GO:', JSON.stringify(resultado, null, 2));
+  if (!resultado.success && !successReal) {
+    console.error('❌ Error real desde SMTP2GO:', JSON.stringify(resultado, null, 2));
     throw new Error('Error al enviar email con SMTP2GO');
   }
 
-  console.log(`✅ Email "${subject}" enviado con éxito a ${destinatarios.join(', ')}`);
+  if (successReal) {
+    console.log(`✅ Email "${subject}" enviado correctamente a ${destinatarios.join(', ')}`);
+  } else {
+    console.warn(`⚠️ Advertencia: Email "${subject}" enviado pero con posibles incidencias:`, resultado);
+  }
+
   return 'OK';
 }
 

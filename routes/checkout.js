@@ -22,11 +22,12 @@ const PRODUCTOS = {
 
 router.post('/create-session', async (req, res) => {
   try {
-    const datos = req.body.email ? req.body : Object.values(req.body)[0];
+    const body = req.body;
+    const datos = typeof body === 'object' && body.email ? body : Object.values(body)[0] || {};
 
     const nombre = datos.nombre || datos.Nombre || '';
     const apellidos = datos.apellidos || datos.Apellidos || '';
-    const email = datos.email || '';
+    const email = (typeof datos.email === 'string') ? datos.email.trim().toLowerCase() : '';
     const dni = datos.dni || '';
     const direccion = datos.direccion || '';
     const ciudad = datos.ciudad || '';

@@ -1,3 +1,6 @@
+const admin = require('../firebase');
+const firestore = admin.firestore();
+
 const { crearFacturaEnFacturaCity } = require('./facturaCity');
 const { guardarEnGoogleSheets } = require('./googleSheets');
 const { enviarFacturaPorEmail } = require('./email');
@@ -7,7 +10,7 @@ module.exports = async function procesarCompra(datos) {
   try {
     const nombre = datos.nombre || datos.Nombre || '';
     const apellidos = datos.apellidos || datos.Apellidos || '';
-    const email = datos.email || '';
+    let email = datos.email || '';
     const dni = datos.dni || '';
     const direccion = datos.direccion || datos['Dirección'] || '';
     const ciudad = datos.ciudad || datos['Municipio'] || '';
@@ -17,6 +20,22 @@ module.exports = async function procesarCompra(datos) {
     const descripcionProducto = datos.descripcionProducto || '';
     const tipoProducto = datos.tipoProducto || 'Otro';
     const importe = parseFloat((datos.importe || '22.90').toString().replace(',', '.'));
+
+    // 🛡️ Verificación del email y recuperación si es inválido
+    if (!email.includes('@')) {
+      const alias = datos.alias || datos.userAlias || '';
+      if (alias) {
+        const userSnap = await firestore.collection('usuariosClub').doc(alias).get();
+        if (userSnap.exists) {
+          email = userSnap.data().email || '';
+          console.log(`📩 Email recuperado desde Firestore para alias ${alias}: ${email}`);
+        }
+      }
+    }
+
+    if (!email || !email.includes('@')) {
+      throw new Error(`❌ Email inválido en procesarCompra: "${email}"`);
+    }
 
     const datosCliente = {
       nombre,

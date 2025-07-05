@@ -1,14 +1,6 @@
-const admin = require('firebase-admin');
+// firebase.js
 
-if (!admin.apps.length) {
-  // 🔐 Convertir cadena escapada a JSON, corrigiendo saltos de línea
-  const serviceAccount = JSON.parse(
-    process.env.FIREBASE_ADMIN_KEY.replace(/\\n/g, '\n')
-  );
+// ⚠️ PRUEBA TEMPORAL para descartar error al parsear FIREBASE_ADMIN_KEY
+console.warn("⚠️ Firebase no inicializado en esta ejecución (modo diagnóstico)");
 
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount)
-  });
-}
-
-module.exports = admin;
+module.exports = {}; // Exporta un objeto vacío para evitar errores de importación

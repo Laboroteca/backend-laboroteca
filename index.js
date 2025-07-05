@@ -75,13 +75,9 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// ** Aquí está el cambio fundamental para Stripe Webhook **
 app.use('/webhook', express.raw({ type: 'application/json' }));
-
-// Para resto de rutas, parsear JSON y URL encoded
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
 app.use(express.static(__dirname));
 
 app.get('/', (req, res) => {
@@ -103,17 +99,11 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   const key = normalizarProducto(nombreProducto);
   const producto = PRODUCTOS[key];
 
-  if (!producto) {
-    return res.status(400).json({ error: 'Producto no disponible.' });
-  }
-  if (!nombre || !email) {
-    return res.status(400).json({ error: 'Faltan campos obligatorios.' });
-  }
+  if (!producto) return res.status(400).json({ error: 'Producto no disponible.' });
+  if (!nombre || !email) return res.status(400).json({ error: 'Faltan campos obligatorios.' });
 
   const emailValido = await verificarEmailEnWordPress(email);
-  if (!emailValido) {
-    return res.status(403).json({ error: 'Este email no está registrado.' });
-  }
+  if (!emailValido) return res.status(403).json({ error: 'Este email no está registrado.' });
 
   try {
     const session = await stripe.checkout.sessions.create({
@@ -133,15 +123,8 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
         quantity: 1
       }],
       metadata: {
-        nombre,
-        apellidos,
-        email,
-        dni,
-        direccion,
-        ciudad,
-        provincia,
-        cp,
-        tipoProducto,
+        nombre, apellidos, email, dni, direccion,
+        ciudad, provincia, cp, tipoProducto,
         nombreProducto: producto.nombre,
         descripcionProducto: producto.descripcion
       },
@@ -150,7 +133,6 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
     });
 
     return res.json({ url: session.url });
-
   } catch (error) {
     console.error('❌ Error Stripe:', error.message);
     return res.status(500).json({ error: 'Error al crear la sesión de pago' });
@@ -169,17 +151,11 @@ app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
   const key = normalizarProducto(nombreProducto);
   const producto = PRODUCTOS[key];
 
-  if (!producto) {
-    return res.status(400).json({ error: 'Producto no disponible.' });
-  }
-  if (!nombre || !email) {
-    return res.status(400).json({ error: 'Faltan campos obligatorios.' });
-  }
+  if (!producto) return res.status(400).json({ error: 'Producto no disponible.' });
+  if (!nombre || !email) return res.status(400).json({ error: 'Faltan campos obligatorios.' });
 
   const emailValido = await verificarEmailEnWordPress(email);
-  if (!emailValido) {
-    return res.status(403).json({ error: 'Este email no está registrado.' });
-  }
+  if (!emailValido) return res.status(403).json({ error: 'Este email no está registrado.' });
 
   try {
     const session = await stripe.checkout.sessions.create({
@@ -199,15 +175,8 @@ app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
         quantity: 1
       }],
       metadata: {
-        nombre,
-        apellidos,
-        email,
-        dni,
-        direccion,
-        ciudad,
-        provincia,
-        cp,
-        tipoProducto,
+        nombre, apellidos, email, dni, direccion,
+        ciudad, provincia, cp, tipoProducto,
         nombreProducto: producto.nombre,
         descripcionProducto: producto.descripcion
       },
@@ -216,7 +185,6 @@ app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
     });
 
     return res.json({ url: session.url });
-
   } catch (error) {
     console.error('❌ Error Stripe suscripción:', error.message);
     return res.status(500).json({ error: 'Error al crear la suscripción' });
@@ -242,7 +210,6 @@ app.post('/desactivar-membresia-club', async (req, res) => {
   if (!email) return res.status(400).json({ error: 'Falta el email' });
 
   try {
-    // 1️⃣ Cancelar suscripción activa en Stripe
     const customers = await stripe.customers.list({ email, limit: 1 });
     if (customers.data.length) {
       const customerId = customers.data[0].id;
@@ -287,7 +254,8 @@ app.post('/crear-portal-cliente', async (req, res) => {
   }
 });
 
+// ✅ CAMBIO CRUCIAL PARA RAILWAY:
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`✅ Backend funcionando en http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`✅ Backend funcionando en http://0.0.0.0:${PORT}`);
 });

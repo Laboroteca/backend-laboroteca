@@ -206,13 +206,13 @@ app.post('/activar-membresia-club', async (req, res) => {
   }
 });
 
-// ✅ NUEVA RUTA de desactivación manual (sin Stripe)
+// ✅ Ruta para desactivar solo en MemberPress (manual)
 app.use('/desactivar-membresia-club', require('./routes/desactivarMembresiaClub'));
 
-// ✅ NUEVA RUTA de cancelación completa (Stripe + MemberPress)
-app.use('/cancelar-suscripcion-club', require('./routes/cancelarSuscripcionClub'));
+// ✅ Ruta para cancelar en Stripe + MemberPress
+app.use('/cancelar-suscripcion-club', require('./routes/desactivarMembresiaClub'));
 
-// Portal de cliente de Stripe
+// Portal cliente de Stripe
 app.post('/crear-portal-cliente', async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'Falta el email' });

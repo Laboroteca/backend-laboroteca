@@ -206,6 +206,10 @@ app.post('/activar-membresia-club', async (req, res) => {
 const desactivarRuta = require('./routes/desactivarMembresiaClub');
 app.use('/desactivar-membresia-club', desactivarRuta);
 
+// ✅ NUEVA RUTA PARA CANCELAR SUSCRIPCIÓN (manual + password)
+const cancelarRuta = require('./routes/cancelarSuscripcionClub');
+app.use('/cancelar-suscripcion-club', cancelarRuta);
+
 app.post('/crear-portal-cliente', async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'Falta el email' });

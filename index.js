@@ -83,9 +83,11 @@ app.get('/', (req, res) => {
   res.send('✔️ API de Laboroteca activa');
 });
 
+// Webhook Stripe
 const webhookHandler = require('./routes/webhook');
 app.post('/webhook', webhookHandler);
 
+// Crear sesión de pago única (libros, curso, etc.)
 app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   const datos = req.body;
   const {
@@ -137,6 +139,7 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   }
 });
 
+// Crear suscripción mensual
 app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
   const datos = req.body;
   const {
@@ -188,6 +191,7 @@ app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
   }
 });
 
+// Activar acceso manual
 app.post('/activar-membresia-club', async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'Falta el email' });
@@ -202,14 +206,13 @@ app.post('/activar-membresia-club', async (req, res) => {
   }
 });
 
-// ✅ NUEVA RUTA DE DESACTIVACIÓN
-const desactivarRuta = require('./routes/desactivarMembresiaClub');
-app.use('/desactivar-membresia-club', desactivarRuta);
+// ✅ NUEVA RUTA de desactivación manual (sin Stripe)
+app.use('/desactivar-membresia-club', require('./routes/desactivarMembresiaClub'));
 
-// ✅ NUEVA RUTA DE CANCELACIÓN
-const cancelarRuta = require('./routes/desactivarSuscripcionClub');
-app.use('/desactivar-suscripcion-club', cancelarRuta);
+// ✅ NUEVA RUTA de cancelación completa (Stripe + MemberPress)
+app.use('/cancelar-suscripcion-club', require('./routes/cancelarSuscripcionClub'));
 
+// Portal de cliente de Stripe
 app.post('/crear-portal-cliente', async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'Falta el email' });

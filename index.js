@@ -8,7 +8,6 @@ console.log('🔑 STRIPE_SECRET_KEY presente:', !!process.env.STRIPE_SECRET_KEY)
 console.log('🔐 STRIPE_WEBHOOK_SECRET presente:', !!process.env.STRIPE_WEBHOOK_SECRET);
 
 const express = require('express');
-const bodyParser = require('body-parser');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY || '');
 const cors = require('cors');
 const path = require('path');
@@ -123,9 +122,8 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
         quantity: 1
       }],
       metadata: {
-        nombre, apellidos, email, dni, direccion,
-        ciudad, provincia, cp, tipoProducto,
-        nombreProducto: producto.nombre,
+        nombre, apellidos, email, dni, direccion, ciudad, provincia, cp,
+        tipoProducto, nombreProducto: producto.nombre,
         descripcionProducto: producto.descripcion
       },
       success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(producto.nombre)}`,
@@ -133,6 +131,7 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
     });
 
     return res.json({ url: session.url });
+
   } catch (error) {
     console.error('❌ Error Stripe:', error.message);
     return res.status(500).json({ error: 'Error al crear la sesión de pago' });
@@ -175,9 +174,8 @@ app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
         quantity: 1
       }],
       metadata: {
-        nombre, apellidos, email, dni, direccion,
-        ciudad, provincia, cp, tipoProducto,
-        nombreProducto: producto.nombre,
+        nombre, apellidos, email, dni, direccion, ciudad, provincia, cp,
+        tipoProducto, nombreProducto: producto.nombre,
         descripcionProducto: producto.descripcion
       },
       success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(producto.nombre)}`,
@@ -185,6 +183,7 @@ app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
     });
 
     return res.json({ url: session.url });
+
   } catch (error) {
     console.error('❌ Error Stripe suscripción:', error.message);
     return res.status(500).json({ error: 'Error al crear la suscripción' });
@@ -254,8 +253,9 @@ app.post('/crear-portal-cliente', async (req, res) => {
   }
 });
 
-// ✅ CAMBIO CRUCIAL PARA RAILWAY:
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`✅ Backend funcionando en http://0.0.0.0:${PORT}`);
-});
+if (require.main === module) {
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.log(`✅ Backend funcionando en http://localhost:${PORT}`);
+  });
+}

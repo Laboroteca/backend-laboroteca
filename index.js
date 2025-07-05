@@ -207,8 +207,8 @@ const desactivarRuta = require('./routes/desactivarMembresiaClub');
 app.use('/desactivar-membresia-club', desactivarRuta);
 
 // ✅ NUEVA RUTA DE CANCELACIÓN
-const cancelarRuta = require('./routes/cancelarSuscripcionClub');
-app.use('/cancelar-suscripcion-club', cancelarRuta);
+const cancelarRuta = require('./routes/desactivarSuscripcionClub');
+app.use('/desactivar-suscripcion-club', cancelarRuta);
 
 app.post('/crear-portal-cliente', async (req, res) => {
   const { email } = req.body;

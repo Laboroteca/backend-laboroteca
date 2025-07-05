@@ -67,7 +67,7 @@ async function verificarEmailEnWordPress(email) {
   return true;
 }
 
-// ✅ CORS
+// ✅ CORS global
 app.use(cors({
   origin: 'https://www.laboroteca.es',
   methods: ['GET', 'POST', 'OPTIONS'],
@@ -215,8 +215,9 @@ app.post('/activar-membresia-club', async (req, res) => {
   }
 });
 
-// ❌ Cancelar suscripción manualmente
-app.post('/cancelar-suscripcion-club', async (req, res) => {
+// ✅ Cancelar suscripción manualmente (con soporte preflight CORS)
+app.options('/cancelar-suscripcion-club', cors()); // 👈 Soporte preflight
+app.post('/cancelar-suscripcion-club', cors(), async (req, res) => {
   const { email, password, token } = req.body;
   const tokenEsperado = 'bajaClub@2025!';
 

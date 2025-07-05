@@ -202,11 +202,11 @@ app.post('/activar-membresia-club', async (req, res) => {
   }
 });
 
-// ✅ NUEVA RUTA DE DESACTIVACIÓN con validación del token de seguridad
+// ✅ NUEVA RUTA DE DESACTIVACIÓN
 const desactivarRuta = require('./routes/desactivarMembresiaClub');
 app.use('/desactivar-membresia-club', desactivarRuta);
 
-// ✅ NUEVA RUTA PARA CANCELAR SUSCRIPCIÓN (manual + password)
+// ✅ NUEVA RUTA DE CANCELACIÓN
 const cancelarRuta = require('./routes/cancelarSuscripcionClub');
 app.use('/cancelar-suscripcion-club', cancelarRuta);
 
@@ -229,7 +229,6 @@ app.post('/crear-portal-cliente', async (req, res) => {
   }
 });
 
-// Manejo de errores no controlados
 process.on('uncaughtException', err => {
   console.error('💥 uncaughtException:', err);
 });
@@ -237,7 +236,7 @@ process.on('unhandledRejection', err => {
   console.error('💥 unhandledRejection:', err);
 });
 
-// Puerto final
+// ✅ PORT CORRECTO PARA RAILWAY
 if (require.main === module) {
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {

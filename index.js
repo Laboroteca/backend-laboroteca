@@ -25,7 +25,7 @@ const desactivarMembresiaClub = require('./services/desactivarMembresiaClub');
 const app = express();
 app.set('trust proxy', 1);
 
-// ✅ Configuración CORS
+// ✅ CORS
 const corsOptions = {
   origin: 'https://www.laboroteca.es',
   methods: ['GET', 'POST', 'OPTIONS'],
@@ -35,21 +35,21 @@ const corsOptions = {
 app.options('*', cors(corsOptions));
 app.use(cors(corsOptions));
 
-// ✅ Webhook requiere raw body
+// ✅ Webhook (raw)
 app.use('/webhook', express.raw({ type: 'application/json' }));
 
-// ✅ Middlewares estándar
+// ✅ Middlewares normales
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// ✅ Límite de peticiones
+// ✅ Rate limit
 const pagoLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
   message: { error: 'Demasiados intentos. Inténtalo más tarde.' }
 });
 
-// 🛒 Productos disponibles
+// ✅ Productos
 const PRODUCTOS = {
   'de cara a la jubilacion': {
     nombre: 'De cara a la jubilación',
@@ -214,7 +214,8 @@ app.post('/activar-membresia-club', async (req, res) => {
   }
 });
 
-app.post('/cancelar-suscripcion-club', async (req, res) => {
+app.options('/cancelar-suscripcion-club', cors(corsOptions)); // Preflight
+app.post('/cancelar-suscripcion-club', cors(corsOptions), async (req, res) => {
   const { email, password, token } = req.body;
   const tokenEsperado = 'bajaClub@2025!';
 
@@ -260,7 +261,7 @@ app.post('/crear-portal-cliente', async (req, res) => {
   }
 });
 
-// 🧨 Errores globales
+// 🧨 Global errors
 process.on('uncaughtException', err => {
   console.error('💥 uncaughtException:', err);
 });
@@ -268,10 +269,8 @@ process.on('unhandledRejection', err => {
   console.error('💥 unhandledRejection:', err);
 });
 
-// 🚀 Arrancar servidor
-if (require.main === module) {
-  const PORT = process.env.PORT || 3000;
-  app.listen(PORT, () => {
-    console.log(`✅ Backend funcionando en http://localhost:${PORT}`);
-  });
-}
+// 🚀 Iniciar servidor
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`✅ Backend funcionando en http://localhost:${PORT}`);
+});

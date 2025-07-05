@@ -7,7 +7,6 @@ console.log('🌍 NODE_ENV:', process.env.NODE_ENV);
 console.log('🔑 STRIPE_SECRET_KEY presente:', !!process.env.STRIPE_SECRET_KEY);
 console.log('🔐 STRIPE_WEBHOOK_SECRET presente:', !!process.env.STRIPE_WEBHOOK_SECRET);
 
-// 🔐 Validación crítica de variables de entorno
 if (!process.env.STRIPE_SECRET_KEY) {
   throw new Error('❌ Falta STRIPE_SECRET_KEY en variables de entorno');
 }
@@ -68,33 +67,36 @@ async function verificarEmailEnWordPress(email) {
   return true;
 }
 
-// 💡 Límite de peticiones para evitar abuso
+// ✅ CORS
+app.use(cors({
+  origin: 'https://www.laboroteca.es',
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+}));
+
+// ✅ Middleware
+app.use('/webhook', express.raw({ type: 'application/json' }));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// ✅ Límite de peticiones
 const pagoLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
   message: { error: 'Demasiados intentos. Inténtalo más tarde.' }
 });
 
-app.use(cors({
-  origin: 'https://www.laboroteca.es',
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
+// ✅ Rutas
 
-app.use('/webhook', express.raw({ type: 'application/json' }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-// 🌍 Ruta principal
 app.get('/', (req, res) => {
   res.send('✔️ API de Laboroteca activa');
 });
 
-// 🔁 Webhook de Stripe
-const webhookHandler = require('./routes/webhook');
-app.post('/webhook', webhookHandler);
+// 🧾 Webhook Stripe
+app.post('/webhook', require('./routes/webhook'));
 
-// 🧾 Crear sesión de pago (libros/cursos)
+// 🧾 Crear sesión de pago única
 app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   const datos = req.body;
   const {
@@ -146,7 +148,7 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   }
 });
 
-// 🔁 Crear suscripción mensual (Club Laboroteca)
+// 🔁 Crear suscripción (Club)
 app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
   const datos = req.body;
   const {
@@ -213,14 +215,6 @@ app.post('/activar-membresia-club', async (req, res) => {
   }
 });
 
-// 🔻 Protección método HTTP en ruta sensible
-app.all('/cancelar-suscripcion-club', (req, res, next) => {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Método no permitido' });
-  }
-  next();
-});
-
 // ❌ Cancelar suscripción manualmente
 app.post('/cancelar-suscripcion-club', async (req, res) => {
   const { email, password, token } = req.body;
@@ -247,7 +241,7 @@ app.post('/cancelar-suscripcion-club', async (req, res) => {
   }
 });
 
-// 🧾 Portal de cliente Stripe
+// 🧾 Portal cliente Stripe
 app.post('/crear-portal-cliente', async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'Falta el email' });
@@ -269,7 +263,7 @@ app.post('/crear-portal-cliente', async (req, res) => {
   }
 });
 
-// 🧨 Manejo de errores globales
+// 🧨 Errores globales
 process.on('uncaughtException', err => {
   console.error('💥 uncaughtException:', err);
 });
@@ -277,7 +271,7 @@ process.on('unhandledRejection', err => {
   console.error('💥 unhandledRejection:', err);
 });
 
-// 🚀 Iniciar servidor
+// 🚀 Arrancar servidor
 if (require.main === module) {
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {

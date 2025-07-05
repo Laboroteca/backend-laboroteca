@@ -1,3 +1,6 @@
+const express = require('express');
+const router = express.Router();
+
 require('dotenv').config();
 console.log('📦 WEBHOOK CARGADO');
 
@@ -13,7 +16,8 @@ const { syncMemberpressClub } = require('../services/syncMemberpressClub');
 
 const MEMBERPRESS_CLUB_ID = 10663;
 
-module.exports = async function (req, res) {
+// 🚨 Envolver en router.post()
+router.post('/', express.raw({ type: 'application/json' }), async (req, res) => {
   console.log('🔥 LLEGÓ AL WEBHOOK');
 
   const sig = req.headers['stripe-signature'];
@@ -62,7 +66,6 @@ module.exports = async function (req, res) {
           const subscription = event.data.object;
           const customerId = subscription.customer;
 
-          // Obtener el email desde Stripe
           const customer = await stripe.customers.retrieve(customerId);
           const email = customer.email;
 
@@ -133,5 +136,6 @@ module.exports = async function (req, res) {
     console.error('❌ Error al manejar evento Stripe:', error);
     return res.status(500).json({ error: 'Error al manejar evento Stripe' });
   }
-};
+});
 
+module.exports = router;

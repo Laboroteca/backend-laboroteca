@@ -30,7 +30,22 @@ async function desactivarMembresiaClub(email) {
   console.log(`🚫 [CLUB] Membresía desactivada para: ${email}`);
 
   // 📧 Enviar email de confirmación
-  await enviarConfirmacionBajaClub(email, nombre);
+  try {
+    const resultado = await enviarConfirmacionBajaClub(email, nombre);
+
+    // Analizar respuesta SMTP2GO
+    if (
+      resultado?.data?.succeeded === 1 &&
+      resultado?.data?.failed === 0
+    ) {
+      console.log(`📩 Email de confirmación enviado correctamente a ${email}`);
+    } else {
+      console.warn(`⚠️ Email de baja enviado pero con advertencias para ${email}:`, resultado);
+    }
+  } catch (error) {
+    console.error(`❌ Error al enviar email de confirmación de baja a ${email}:`, error.message || error);
+    // Pero no lanzamos error para no bloquear el resto del flujo
+  }
 }
 
 module.exports = { desactivarMembresiaClub };

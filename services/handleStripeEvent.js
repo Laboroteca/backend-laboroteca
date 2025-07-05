@@ -70,10 +70,8 @@ async function handleStripeEvent(event) {
 
     try {
       await guardarEnGoogleSheets(datosCliente);
-
       const pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
       const nombreArchivo = `facturas/${email}/${Date.now()}-${datosCliente.producto}.pdf`;
-
       await subirFactura(nombreArchivo, pdfBuffer, {
         email,
         nombreProducto: datosCliente.producto,
@@ -186,9 +184,13 @@ async function handleStripeEvent(event) {
         });
         console.log(`📧 Aviso de impago ${fallos} enviado a ${email}`);
       }
+
       if (fallos >= 3) {
         try {
-          await stripe.subscriptions.del(subscriptionId);
+          await stripe.subscriptions.cancel(subscriptionId, {
+            invoice_now: true,
+            prorate: false
+          });
 
           const productId = MEMBERPRESS_IDS['El Club Laboroteca'];
           if (productId && email) {
@@ -207,17 +209,20 @@ async function handleStripeEvent(event) {
             subject: 'Suscripción cancelada por impago',
             body: plantillaImpago(3, name || email, updateUrl)
           });
+
           await enviarEmailAvisoImpago({
             to: 'laboroteca@gmail.com',
             subject: '🔔 [Laboroteca] Suscripción cancelada por impago',
             body: `El usuario ${email} (${name}) ha sido dado de baja tras 3 intentos de cobro fallidos.`
           });
+
           console.log(`🚫 Suscripción cancelada y avisos enviados (${email})`);
         } catch (err) {
           console.error('❌ Error cancelando suscripción en Stripe/desactivando membresía:', err);
         }
       }
     }
+
     return { impago: true, fallos };
   }
 

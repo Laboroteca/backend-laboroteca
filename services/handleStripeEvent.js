@@ -8,6 +8,7 @@ const { subirFactura } = require('./gcs');
 const { activarMembresiaClub } = require('./activarMembresiaClub');
 const { desactivarMembresiaClub } = require('./desactivarMembresiaClub');
 const { syncMemberpressClub } = require('./syncMemberpressClub');
+
 const fs = require('fs').promises;
 const path = require('path');
 const Stripe = require('stripe');
@@ -30,6 +31,7 @@ function plantillaImpago(n, nombre, link) {
 async function handleStripeEvent(event) {
   const eventType = event.type;
 
+  // ✅ CHECKOUT SESSION COMPLETED
   if (eventType === 'checkout.session.completed') {
     const session = event.data.object;
     const sessionId = session.id;
@@ -72,6 +74,7 @@ async function handleStripeEvent(event) {
       await guardarEnGoogleSheets(datosCliente);
       const pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
       const nombreArchivo = `facturas/${email}/${Date.now()}-${datosCliente.producto}.pdf`;
+
       await subirFactura(nombreArchivo, pdfBuffer, {
         email,
         nombreProducto: datosCliente.producto,
@@ -87,16 +90,12 @@ async function handleStripeEvent(event) {
 
       const productId = MEMBERPRESS_IDS[datosCliente.nombreProducto];
       if (productId && email) {
-        try {
-          await syncMemberpressClub({
-            email,
-            accion: 'activar',
-            membership_id: productId
-          });
-          console.log(`✅ Sincronizado alta de ${datosCliente.nombreProducto} en MemberPress (${productId})`);
-        } catch (err) {
-          console.error(`❌ Error al activar en MemberPress [${productId}]:`, err);
-        }
+        await syncMemberpressClub({
+          email,
+          accion: 'activar',
+          membership_id: productId
+        });
+        console.log(`✅ Sincronizado alta de ${datosCliente.nombreProducto} en MemberPress (${productId})`);
       }
 
       if (datosCliente.nombreProducto === 'El Club Laboroteca') {
@@ -138,11 +137,12 @@ async function handleStripeEvent(event) {
     return { success: true };
   }
 
+  // ⚠️ INVOICE PAYMENT FAILED
   if (eventType === 'invoice.payment_failed') {
     const invoice = event.data.object;
     const subscriptionId = invoice.subscription;
     const customerId = invoice.customer;
-    const email = invoice.metadata?.email_autorelleno || invoice.metadata?.email || invoice.customer_email || invoice.customer?.email || '';
+    const email = invoice.metadata?.email_autorelleno || invoice.metadata?.email || invoice.customer_email || '';
     const name = invoice.customer_name || '';
     const nombreProducto = invoice.lines?.data?.[0]?.description || '';
 
@@ -165,6 +165,7 @@ async function handleStripeEvent(event) {
       fallos = doc.data().fallos || 0;
     }
     fallos += 1;
+
     await ref.set({
       subscriptionId,
       email,
@@ -226,6 +227,7 @@ async function handleStripeEvent(event) {
     return { impago: true, fallos };
   }
 
+  // 🛑 CUSTOMER SUBSCRIPTION DELETED
   if (eventType === 'customer.subscription.deleted') {
     const subscription = event.data.object;
     const customerEmail = subscription?.metadata?.email_autorelleno || subscription?.metadata?.email || subscription?.customer_email || '';

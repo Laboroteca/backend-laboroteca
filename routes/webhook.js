@@ -60,21 +60,25 @@ module.exports = async function (req, res) {
         result = await handleStripeEvent(event);
         try {
           const subscription = event.data.object;
-          const email =
-            subscription.metadata?.email_autorelleno ||
-            subscription.metadata?.email ||
-            subscription.customer_email;
+          const customerId = subscription.customer;
+
+          // Obtener el email desde Stripe
+          const customer = await stripe.customers.retrieve(customerId);
+          const email = customer.email;
 
           if (
             email &&
             (subscription.metadata?.nombreProducto === 'el-club-laboroteca' ||
-              subscription?.items?.data?.[0]?.description?.includes('Club Laboroteca'))
+              subscription?.items?.data?.[0]?.description?.toLowerCase().includes('club laboroteca'))
           ) {
+            console.log(`🛑 Suscripción cancelada para email: ${email}`);
             await syncMemberpressClub({
               email,
               accion: 'desactivar',
               membership_id: MEMBERPRESS_CLUB_ID
             });
+          } else {
+            console.warn('⚠️ Email no válido o no se reconoce producto Club Laboroteca:', email);
           }
         } catch (err) {
           console.error('❌ Error al desactivar en MemberPress:', err);
@@ -130,3 +134,4 @@ module.exports = async function (req, res) {
     return res.status(500).json({ error: 'Error al manejar evento Stripe' });
   }
 };
+

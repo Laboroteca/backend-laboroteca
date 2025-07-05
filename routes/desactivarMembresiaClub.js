@@ -1,36 +1,27 @@
+// routes/cancelarSuscripcionClub.js
+
 const express = require('express');
 const router = express.Router();
-
-const { desactivarMembresiaClub } = require('../services/desactivarMembresiaClub');
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const { wpAuthenticateUser } = require('../services/wordpress');
 const { syncMemberpressClub } = require('../services/syncMemberpressClub');
 
-const Stripe = require('stripe');
-const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+router.post('/cancelar-suscripcion-club', async (req, res) => {
+  const { email, password } = req.body;
 
-const TOKEN_ESPERADO = 'baja-club-token-2025';
-
-router.post('/', async (req, res) => {
-  const token = req.headers['authorization'] || '';
-
-  if (token !== TOKEN_ESPERADO) {
-    console.warn('❌ Token no válido en desactivación de membresía');
-    return res.status(401).json({ error: 'Token no autorizado' });
-  }
-
-  const datos = req.body;
-  const email = typeof datos.email_autorelleno === 'string'
-    ? datos.email_autorelleno.trim().toLowerCase()
-    : (typeof datos.email === 'string' ? datos.email.trim().toLowerCase() : '');
-
-  if (!email) {
-    console.warn('⚠️ Falta el campo email en el cuerpo de la solicitud');
-    return res.status(400).json({ error: 'Falta el email' });
+  if (!email || !password) {
+    return res.status(400).json({ cancelada: false, mensaje: 'Faltan datos obligatorios.' });
   }
 
   try {
-    await desactivarMembresiaClub(email);
+    // Verifica login contra WordPress
+    const user = await wpAuthenticateUser(email, password);
+    if (!user) {
+      return res.status(401).json({ cancelada: false, mensaje: 'Login incorrecto.' });
+    }
 
-    const customers = await stripe.customers.list({ email: email, limit: 1 });
+    // Cancela suscripción activa en Stripe
+    const customers = await stripe.customers.list({ email, limit: 1 });
     if (customers.data.length > 0) {
       const customerId = customers.data[0].id;
       const subs = await stripe.subscriptions.list({
@@ -50,16 +41,18 @@ router.post('/', async (req, res) => {
       console.log(`⚠️ No se encontró cliente en Stripe con email ${email}`);
     }
 
+    // Desactiva membresía en MemberPress
     await syncMemberpressClub({
       email,
       accion: 'desactivar',
       membership_id: 10663
     });
 
-    return res.json({ ok: true, mensaje: 'Membresía cancelada correctamente.' });
+    return res.json({ cancelada: true, mensaje: 'Suscripción cancelada correctamente.' });
+
   } catch (error) {
-    console.error('❌ Error al desactivar membresía:', error.message || error);
-    return res.status(500).json({ error: 'Error al procesar la baja.' });
+    console.error('❌ Error al cancelar suscripción:', error.message || error);
+    return res.status(500).json({ cancelada: false, mensaje: 'Error interno al cancelar la suscripción.' });
   }
 });
 

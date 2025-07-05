@@ -7,8 +7,13 @@ console.log('🌍 NODE_ENV:', process.env.NODE_ENV);
 console.log('🔑 STRIPE_SECRET_KEY presente:', !!process.env.STRIPE_SECRET_KEY);
 console.log('🔐 STRIPE_WEBHOOK_SECRET presente:', !!process.env.STRIPE_WEBHOOK_SECRET);
 
+// 🔐 Validación crítica de variables de entorno
+if (!process.env.STRIPE_SECRET_KEY) {
+  throw new Error('❌ Falta STRIPE_SECRET_KEY en variables de entorno');
+}
+
 const express = require('express');
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY || '');
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
@@ -16,11 +21,12 @@ const path = require('path');
 const procesarCompra = require('./services/procesarCompra');
 const { activarMembresiaClub } = require('./services/activarMembresiaClub');
 const { syncMemberpressClub } = require('./services/syncMemberpressClub');
+const desactivarMembresiaClub = require('./services/desactivarMembresiaClub');
 
 const app = express();
 app.set('trust proxy', 1);
 
-// Productos disponibles
+// 🛒 Productos disponibles
 const PRODUCTOS = {
   'de cara a la jubilacion': {
     nombre: 'De cara a la jubilación',
@@ -62,6 +68,7 @@ async function verificarEmailEnWordPress(email) {
   return true;
 }
 
+// 💡 Límite de peticiones para evitar abuso
 const pagoLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
@@ -78,16 +85,16 @@ app.use('/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Rutas principales
+// 🌍 Ruta principal
 app.get('/', (req, res) => {
   res.send('✔️ API de Laboroteca activa');
 });
 
-// Webhook Stripe
+// 🔁 Webhook de Stripe
 const webhookHandler = require('./routes/webhook');
 app.post('/webhook', webhookHandler);
 
-// Crear sesión de pago única (libros, curso, etc.)
+// 🧾 Crear sesión de pago (libros/cursos)
 app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   const datos = req.body;
   const {
@@ -134,12 +141,12 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
     return res.json({ url: session.url });
 
   } catch (error) {
-    console.error('❌ Error Stripe:', error.message);
+    console.error('❌ Error Stripe (crear-sesion-pago):', error);
     return res.status(500).json({ error: 'Error al crear la sesión de pago' });
   }
 });
 
-// Crear suscripción mensual
+// 🔁 Crear suscripción mensual (Club Laboroteca)
 app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
   const datos = req.body;
   const {
@@ -186,12 +193,12 @@ app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
     return res.json({ url: session.url });
 
   } catch (error) {
-    console.error('❌ Error Stripe suscripción:', error.message);
+    console.error('❌ Error Stripe (crear-suscripcion-club):', error);
     return res.status(500).json({ error: 'Error al crear la suscripción' });
   }
 });
 
-// Activar acceso manual
+// ✅ Activar membresía manual
 app.post('/activar-membresia-club', async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'Falta el email' });
@@ -201,18 +208,46 @@ app.post('/activar-membresia-club', async (req, res) => {
     await syncMemberpressClub({ email, accion: 'activar' });
     return res.json({ ok: true });
   } catch (error) {
-    console.error('❌ Error activar membresía:', error.message);
+    console.error('❌ Error activar membresía:', error);
     return res.status(500).json({ error: 'Error al activar la membresía' });
   }
 });
 
-// ✅ Ruta para desactivar solo en MemberPress (manual)
-app.use('/desactivar-membresia-club', require('./routes/desactivarMembresiaClub'));
+// 🔻 Protección método HTTP en ruta sensible
+app.all('/cancelar-suscripcion-club', (req, res, next) => {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Método no permitido' });
+  }
+  next();
+});
 
-// ✅ Ruta para cancelar en Stripe + MemberPress
-app.use('/cancelar-suscripcion-club', require('./routes/desactivarMembresiaClub'));
+// ❌ Cancelar suscripción manualmente
+app.post('/cancelar-suscripcion-club', async (req, res) => {
+  const { email, password, token } = req.body;
+  const tokenEsperado = 'bajaClub@2025!';
 
-// Portal cliente de Stripe
+  if (token !== tokenEsperado) {
+    return res.status(403).json({ cancelada: false, mensaje: 'Token inválido' });
+  }
+
+  if (!email || !password) {
+    return res.status(400).json({ cancelada: false, mensaje: 'Faltan datos obligatorios' });
+  }
+
+  try {
+    const resultado = await desactivarMembresiaClub(email, password);
+    if (resultado.ok) {
+      return res.json({ cancelada: true });
+    } else {
+      return res.status(400).json({ cancelada: false, mensaje: resultado.mensaje || 'No se pudo cancelar la suscripción.' });
+    }
+  } catch (error) {
+    console.error('❌ Error al cancelar suscripción:', error);
+    return res.status(500).json({ cancelada: false, mensaje: 'Error interno del servidor.' });
+  }
+});
+
+// 🧾 Portal de cliente Stripe
 app.post('/crear-portal-cliente', async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'Falta el email' });
@@ -225,13 +260,16 @@ app.post('/crear-portal-cliente', async (req, res) => {
       customer: customers.data[0].id,
       return_url: 'https://www.laboroteca.es/mi-cuenta'
     });
+
     return res.json({ url: session.url });
+
   } catch (error) {
-    console.error('❌ Error creando portal cliente Stripe:', error.message);
+    console.error('❌ Error creando portal cliente Stripe:', error);
     return res.status(500).json({ error: 'No se pudo crear el portal de cliente Stripe' });
   }
 });
 
+// 🧨 Manejo de errores globales
 process.on('uncaughtException', err => {
   console.error('💥 uncaughtException:', err);
 });
@@ -239,7 +277,7 @@ process.on('unhandledRejection', err => {
   console.error('💥 unhandledRejection:', err);
 });
 
-// ✅ PORT CORRECTO PARA RAILWAY
+// 🚀 Iniciar servidor
 if (require.main === module) {
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {

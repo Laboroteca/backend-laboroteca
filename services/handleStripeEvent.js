@@ -6,9 +6,8 @@ const { crearFacturaEnFacturaCity } = require('./facturaCity');
 const { enviarFacturaPorEmail } = require('./email');
 const { subirFactura } = require('./gcs');
 const { activarMembresiaClub } = require('./activarMembresiaClub');
-const { desactivarMembresiaClub } = require('./desactivarMembresiaClub');
+const desactivarMembresiaClub = require('./desactivarMembresiaClub'); // ✅ función directa
 const { syncMemberpressClub } = require('./syncMemberpressClub');
-
 const fs = require('fs').promises;
 const path = require('path');
 const Stripe = require('stripe');
@@ -29,23 +28,17 @@ function plantillaImpago(n, nombre, link) {
 }
 
 async function handleStripeEvent(event) {
-  const eventType = event.type;
+  const type = event.type;
 
-  // ✅ CHECKOUT SESSION COMPLETED
-  if (eventType === 'checkout.session.completed') {
+  // ✅ 1. Checkout completado
+  if (type === 'checkout.session.completed') {
     const session = event.data.object;
     const sessionId = session.id;
 
-    if (session.payment_status !== 'paid') {
-      console.warn(`⚠️ Sesión ${sessionId} con estado ${session.payment_status}.`);
-      return { ignored: true };
-    }
+    if (session.payment_status !== 'paid') return { ignored: true };
 
     const docRef = firestore.collection('comprasProcesadas').doc(sessionId);
-    if ((await docRef.get()).exists) {
-      console.warn(`⚠️ La sesión ${sessionId} ya fue procesada.`);
-      return { duplicate: true };
-    }
+    if ((await docRef.get()).exists) return { duplicate: true };
 
     const m = session.metadata || {};
     const email = m.email_autorelleno || m.email || session.customer_details?.email || '';
@@ -53,28 +46,26 @@ async function handleStripeEvent(event) {
     const amountTotal = session.amount_total || 0;
 
     const datosCliente = {
-      nombre: m.nombre || name || '',
+      nombre: m.nombre || name,
       apellidos: m.apellidos || '',
       dni: m.dni || '',
-      importe: parseFloat((amountTotal / 100).toFixed(2)),
       email,
       direccion: m.direccion || '',
       ciudad: m.ciudad || '',
       provincia: m.provincia || '',
       cp: m.cp || '',
+      importe: parseFloat((amountTotal / 100).toFixed(2)),
+      tipoProducto: m.tipoProducto || 'Otro',
       nombreProducto: m.nombreProducto || '',
-      descripcionProducto: m.descripcionProducto || '',
-      producto: m.descripcionProducto || m.nombreProducto || 'producto_desconocido',
-      tipoProducto: m.tipoProducto || 'Otro'
+      descripcionProducto: m.descripcionProducto || m.nombreProducto || 'producto_desconocido',
+      producto: m.descripcionProducto || m.nombreProducto || 'producto_desconocido'
     };
-
-    console.log('🧾 Procesando datos cliente:\n', JSON.stringify(datosCliente, null, 2));
 
     try {
       await guardarEnGoogleSheets(datosCliente);
+
       const pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
       const nombreArchivo = `facturas/${email}/${Date.now()}-${datosCliente.producto}.pdf`;
-
       await subirFactura(nombreArchivo, pdfBuffer, {
         email,
         nombreProducto: datosCliente.producto,
@@ -85,41 +76,34 @@ async function handleStripeEvent(event) {
       try {
         await enviarFacturaPorEmail(datosCliente, pdfBuffer);
       } catch (err) {
-        console.error('❌ Error al enviar email:', err.message);
+        console.error('❌ Error al enviar email factura:', err.message);
       }
 
       const productId = MEMBERPRESS_IDS[datosCliente.nombreProducto];
-      if (productId && email) {
+      if (productId) {
         await syncMemberpressClub({ email, accion: 'activar', membership_id: productId });
-        console.log(`✅ Alta en MemberPress (${productId})`);
       }
 
       if (datosCliente.nombreProducto === 'El Club Laboroteca') {
-        try {
-          await activarMembresiaClub(email);
-        } catch (err) {
-          console.error('❌ Error Firestore membresía:', err);
-        }
+        await activarMembresiaClub(email);
       }
 
+      // Cupón
       const codigoDescuento = m.codigoDescuento || '';
       if (codigoDescuento) {
         try {
           const raw = await fs.readFile(RUTA_CUPONES, 'utf8');
           const cupones = JSON.parse(raw);
           const index = cupones.findIndex(c => c.codigo === codigoDescuento && !c.usado);
-
           if (index !== -1) {
             cupones[index].usado = true;
             await fs.writeFile(RUTA_CUPONES, JSON.stringify(cupones, null, 2));
-            console.log(`🎟️ Cupón ${codigoDescuento} usado`);
-          } else {
-            console.warn(`⚠️ Cupón no válido: ${codigoDescuento}`);
           }
         } catch (err) {
-          console.error('❌ Error cupones.json:', err);
+          console.error('❌ Error procesando cupón:', err);
         }
       }
+
     } finally {
       await docRef.set({
         sessionId,
@@ -133,31 +117,30 @@ async function handleStripeEvent(event) {
     return { success: true };
   }
 
-  // ⚠️ INVOICE PAYMENT FAILED
-  if (eventType === 'invoice.payment_failed') {
+  // ❌ 2. Pago fallido
+  if (type === 'invoice.payment_failed') {
     const invoice = event.data.object;
     const subscriptionId = invoice.subscription;
     const customerId = invoice.customer;
-    const email = invoice.metadata?.email_autorelleno || invoice.metadata?.email || invoice.customer_email || '';
+    const email = invoice.customer_email || invoice.metadata?.email || '';
     const name = invoice.customer_name || '';
     const nombreProducto = invoice.lines?.data?.[0]?.description || '';
 
-    let updateUrl = '';
+    let updateUrl = 'https://www.laboroteca.es/mi-cuenta';
     try {
-      const portalSession = await stripe.billingPortal.sessions.create({
+      const portal = await stripe.billingPortal.sessions.create({
         customer: customerId,
-        return_url: 'https://www.laboroteca.es/mi-cuenta'
+        return_url: updateUrl
       });
-      updateUrl = portalSession.url;
+      updateUrl = portal.url;
     } catch (err) {
-      console.error('❌ Error portal cliente Stripe:', err.message);
-      updateUrl = 'https://www.laboroteca.es/mi-cuenta';
+      console.error('❌ Error creando portal Stripe:', err.message);
     }
 
     const ref = firestore.collection('suscripcionesImpago').doc(subscriptionId);
     const doc = await ref.get();
     let fallos = doc.exists ? doc.data().fallos || 0 : 0;
-    fallos += 1;
+    fallos++;
 
     await ref.set({
       subscriptionId,
@@ -170,13 +153,12 @@ async function handleStripeEvent(event) {
     if (nombreProducto.includes('Club Laboroteca')) {
       const { enviarEmailAvisoImpago } = require('./emailAvisos');
 
-      if (fallos === 1 || fallos === 2) {
+      if (fallos <= 2) {
         await enviarEmailAvisoImpago({
           to: email,
           subject: 'Fallo en el cobro de tu suscripción',
           body: plantillaImpago(fallos, name || email, updateUrl)
         });
-        console.log(`📧 Aviso impago ${fallos} a ${email}`);
       }
 
       if (fallos >= 3) {
@@ -188,12 +170,7 @@ async function handleStripeEvent(event) {
 
           const productId = MEMBERPRESS_IDS['El Club Laboroteca'];
           if (productId && email) {
-            await syncMemberpressClub({
-              email,
-              accion: 'desactivar',
-              membership_id: productId
-            });
-            console.log(`🚫 Baja en MemberPress (${productId})`);
+            await syncMemberpressClub({ email, accion: 'desactivar', membership_id: productId });
           }
 
           await desactivarMembresiaClub(email);
@@ -207,12 +184,11 @@ async function handleStripeEvent(event) {
           await enviarEmailAvisoImpago({
             to: 'laboroteca@gmail.com',
             subject: '🔔 [Laboroteca] Suscripción cancelada',
-            body: `El usuario ${email} (${name}) ha sido dado de baja.`
+            body: `El usuario ${email} (${name}) ha sido dado de baja por impago.`
           });
 
-          console.log(`🛑 Cancelación y avisos enviados (${email})`);
         } catch (err) {
-          console.error('❌ Error cancelación impago:', err);
+          console.error('❌ Error en cancelación tras impago:', err.message);
         }
       }
     }
@@ -220,59 +196,42 @@ async function handleStripeEvent(event) {
     return { impago: true, fallos };
   }
 
-  // 🛑 CUSTOMER SUBSCRIPTION DELETED
-  if (eventType === 'customer.subscription.deleted') {
+  // 🗑️ 3. Suscripción eliminada manualmente
+  if (type === 'customer.subscription.deleted') {
     const subscription = event.data.object;
-    let customerEmail =
-      subscription?.metadata?.email_autorelleno ||
-      subscription?.metadata?.email ||
-      subscription?.customer_email ||
-      '';
+    let email = subscription.metadata?.email || '';
 
-    if (!customerEmail && subscription.customer) {
+    if (!email && subscription.customer) {
       try {
-        const customerData = await stripe.customers.retrieve(subscription.customer);
-        customerEmail = customerData.email || '';
-        console.log(`📧 Email recuperado: ${customerEmail}`);
+        const cliente = await stripe.customers.retrieve(subscription.customer);
+        email = cliente.email || '';
       } catch (err) {
-        console.error('❌ No se pudo recuperar email desde Stripe:', err.message);
+        console.error('❌ No se pudo recuperar email del cliente:', err.message);
       }
     }
 
-    console.log(`🛑 Baja por eliminación: ${customerEmail}`);
+    if (email && (subscription.metadata?.nombreProducto === 'El Club Laboroteca' ||
+        (subscription.items?.data?.[0]?.description || '').includes('Club Laboroteca'))) {
 
-    if (
-      (subscription?.metadata?.nombreProducto === 'El Club Laboroteca') ||
-      ((subscription?.items?.data?.[0]?.description || '').includes('Club Laboroteca'))
-    ) {
       try {
         const productId = MEMBERPRESS_IDS['El Club Laboroteca'];
-        if (productId && customerEmail) {
-          await syncMemberpressClub({
-            email: customerEmail,
-            accion: 'desactivar',
-            membership_id: productId
-          });
-          console.log(`🚫 Baja también en MemberPress (${productId})`);
-        }
-
-        await desactivarMembresiaClub(customerEmail);
-        console.log(`✅ Desactivada membresía en Firestore (${customerEmail})`);
+        await syncMemberpressClub({ email, accion: 'desactivar', membership_id: productId });
+        await desactivarMembresiaClub(email);
+        await firestore.collection('bajasProcesadas').add({
+          email,
+          subscriptionId: subscription.id,
+          fecha: new Date().toISOString()
+        });
       } catch (err) {
-        console.error('❌ Error desactivando membresía:', err);
+        console.error('❌ Error en baja manual:', err.message);
       }
     }
-
-    await firestore.collection('bajasProcesadas').add({
-      email: customerEmail,
-      fecha: new Date().toISOString(),
-      subscriptionId: subscription.id
-    });
 
     return { baja: true };
   }
 
-  console.log(`ℹ️ Evento ignorado: ${eventType}`);
+  // 💤 Evento no manejado
+  console.log(`ℹ️ Evento ignorado: ${type}`);
   return { ignored: true };
 }
 

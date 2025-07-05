@@ -17,7 +17,11 @@ router.post('/', async (req, res) => {
     return res.status(401).json({ error: 'Token no autorizado' });
   }
 
-  const { email } = req.body;
+  const datos = req.body;
+  const email = typeof datos.email_autorelleno === 'string'
+    ? datos.email_autorelleno.trim().toLowerCase()
+    : (typeof datos.email === 'string' ? datos.email.trim().toLowerCase() : '');
+
   if (!email) {
     console.warn('⚠️ Falta el campo email en el cuerpo de la solicitud');
     return res.status(400).json({ error: 'Falta el email' });

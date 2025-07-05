@@ -26,14 +26,16 @@ async function guardarEnGoogleSheets(datos) {
 
     const now = new Date().toLocaleString('es-ES');
 
+    const email = datos.email_autorelleno || datos.email || '';
+
     const fila = [
       datos.nombre || '',
       datos.apellidos || '',
       datos.dni || '',
-      datos.descripcionProducto || datos.nombreProducto || '', // ✅ Fallback si no hay descripción
+      datos.descripcionProducto || datos.nombreProducto || '',
       datos.importe || '',
       now,
-      datos.email || '',
+      email,
       datos.direccion || '',
       datos.ciudad || '',
       datos.cp || '',

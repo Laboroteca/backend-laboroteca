@@ -10,7 +10,7 @@ module.exports = async function procesarCompra(datos) {
   try {
     const nombre = datos.nombre || datos.Nombre || '';
     const apellidos = datos.apellidos || datos.Apellidos || '';
-    let email = datos.email || '';
+    let email = datos.email_autorelleno || datos.email || '';
     const dni = datos.dni || '';
     const direccion = datos.direccion || datos['Dirección'] || '';
     const ciudad = datos.ciudad || datos['Municipio'] || '';

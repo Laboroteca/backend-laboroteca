@@ -18,7 +18,7 @@ module.exports = async function (req, res) {
   // 🔎 Normaliza claves
   const nombre = datos.nombre || datos.Nombre || '';
   const apellidos = datos.apellidos || datos.Apellidos || '';
-  const email = datos.email || '';
+  const email = datos.email_autorelleno || datos.email || '';
   const dni = datos.dni || '';
   const direccion = datos.direccion || '';
   const ciudad = datos.ciudad || '';

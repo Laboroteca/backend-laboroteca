@@ -5,13 +5,12 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
-const admin = require('../firebase'); // 👈 AÑADIDO
+const admin = require('../firebase');
 const firestore = admin.firestore();
 
 const handleStripeEvent = require('../services/handleStripeEvent');
 const { syncMemberpressClub } = require('../services/syncMemberpressClub');
 
-// ID de MemberPress para el Club Laboroteca
 const MEMBERPRESS_CLUB_ID = 10663;
 
 module.exports = async function (req, res) {
@@ -36,7 +35,10 @@ module.exports = async function (req, res) {
         result = await handleStripeEvent(event);
         try {
           const session = event.data.object;
-          const email = session.metadata?.email || session.customer_details?.email;
+          const email =
+            session.metadata?.email_autorelleno ||
+            session.metadata?.email ||
+            session.customer_details?.email;
 
           if (
             email &&
@@ -58,7 +60,10 @@ module.exports = async function (req, res) {
         result = await handleStripeEvent(event);
         try {
           const subscription = event.data.object;
-          const email = subscription.metadata?.email || subscription.customer_email;
+          const email =
+            subscription.metadata?.email_autorelleno ||
+            subscription.metadata?.email ||
+            subscription.customer_email;
 
           if (
             email &&
@@ -80,9 +85,10 @@ module.exports = async function (req, res) {
         try {
           const invoice = event.data.object;
           const email =
+            invoice.metadata?.email_autorelleno ||
+            invoice.metadata?.email ||
             invoice.customer_email ||
-            invoice.customer_details?.email ||
-            invoice.metadata?.email;
+            invoice.customer_details?.email;
 
           console.log('💳 invoice.paid recibido para:', email);
 

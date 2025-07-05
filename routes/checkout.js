@@ -27,7 +27,9 @@ router.post('/create-session', async (req, res) => {
 
     const nombre = datos.nombre || datos.Nombre || '';
     const apellidos = datos.apellidos || datos.Apellidos || '';
-    const email = (typeof datos.email === 'string') ? datos.email.trim().toLowerCase() : '';
+    const email = typeof datos.email_autorelleno === 'string'
+      ? datos.email_autorelleno.trim().toLowerCase()
+      : (typeof datos.email === 'string' ? datos.email.trim().toLowerCase() : '');
     const dni = datos.dni || '';
     const direccion = datos.direccion || '';
     const ciudad = datos.ciudad || '';

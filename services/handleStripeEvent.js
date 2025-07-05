@@ -46,7 +46,7 @@ async function handleStripeEvent(event) {
     }
 
     const m = session.metadata || {};
-    const email = session.customer_details?.email || m.email || '';
+    const email = m.email_autorelleno || m.email || session.customer_details?.email || '';
     const name = session.customer_details?.name || `${m.nombre || ''} ${m.apellidos || ''}`.trim();
     const amountTotal = session.amount_total || 0;
 
@@ -142,7 +142,7 @@ async function handleStripeEvent(event) {
     const invoice = event.data.object;
     const subscriptionId = invoice.subscription;
     const customerId = invoice.customer;
-    const email = invoice.customer_email || invoice.customer?.email || '';
+    const email = invoice.metadata?.email_autorelleno || invoice.metadata?.email || invoice.customer_email || invoice.customer?.email || '';
     const name = invoice.customer_name || '';
     const nombreProducto = invoice.lines?.data?.[0]?.description || '';
 
@@ -228,7 +228,7 @@ async function handleStripeEvent(event) {
 
   if (eventType === 'customer.subscription.deleted') {
     const subscription = event.data.object;
-    const customerEmail = subscription?.metadata?.email || subscription?.customer_email || '';
+    const customerEmail = subscription?.metadata?.email_autorelleno || subscription?.metadata?.email || subscription?.customer_email || '';
 
     console.log(`🛑 Suscripción cancelada para email: ${customerEmail}`);
 

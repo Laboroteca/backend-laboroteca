@@ -1,17 +1,14 @@
-// firebase.js
-
 const admin = require('firebase-admin');
 
+if (!process.env.FIREBASE_ADMIN_KEY) {
+  throw new Error('❌ Falta FIREBASE_ADMIN_KEY en variables de entorno');
+}
+
 if (!admin.apps.length) {
-  try {
-    const serviceAccount = JSON.parse(process.env.FIREBASE_ADMIN_KEY);
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount)
-    });
-    console.log('✅ Firebase inicializado correctamente');
-  } catch (error) {
-    console.error('❌ Error al inicializar Firebase:', error);
-  }
+  const serviceAccount = JSON.parse(process.env.FIREBASE_ADMIN_KEY);
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount)
+  });
 }
 
 module.exports = admin;

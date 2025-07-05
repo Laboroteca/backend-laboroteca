@@ -37,7 +37,7 @@ router.post('/', async (req, res) => {
 
       if (subs.data.length) {
         const subscriptionId = subs.data[0].id;
-        await stripe.subscriptions.del(subscriptionId);
+        await stripe.subscriptions.cancel(subscriptionId); // ✅ Corrección aquí
         console.log(`🛑 Suscripción ${subscriptionId} cancelada en Stripe para ${email}`);
       } else {
         console.log(`ℹ️ Cliente ${email} no tiene suscripción activa en Stripe`);

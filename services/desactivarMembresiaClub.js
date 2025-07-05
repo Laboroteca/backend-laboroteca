@@ -3,8 +3,8 @@
 const admin = require('../firebase');
 const firestore = admin.firestore();
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-
 const bcrypt = require('bcryptjs');
+
 const { enviarConfirmacionBajaClub } = require('./email');
 const { syncMemberpressClub } = require('./syncMemberpressClub');
 
@@ -45,7 +45,6 @@ async function desactivarMembresiaClub(email, password) {
     // 🔴 1. Cancelar suscripciones activas en Stripe
     try {
       const clientes = await stripe.customers.list({ email, limit: 1 });
-
       if (clientes.data.length === 0) {
         console.warn(`⚠️ Stripe: cliente no encontrado para ${email}`);
       } else {
@@ -62,15 +61,20 @@ async function desactivarMembresiaClub(email, password) {
         }
       }
     } catch (errStripe) {
-      console.error(`❌ Error cancelando suscripción en Stripe: ${errStripe.message}`);
+      console.error(`❌ Error cancelando suscripción en Stripe:`, errStripe.message);
     }
 
     // 🔴 2. Marcar como inactivo en Firestore
-    await ref.set({
-      activo: false,
-      fechaBaja: new Date().toISOString()
-    }, { merge: true });
-    console.log(`📉 Firestore: usuario marcado como inactivo → ${email}`);
+    try {
+      await ref.set({
+        activo: false,
+        fechaBaja: new Date().toISOString()
+      }, { merge: true });
+
+      console.log(`📉 Firestore: usuario marcado como inactivo → ${email}`);
+    } catch (errFS) {
+      console.error(`❌ Error actualizando Firestore:`, errFS.message);
+    }
 
     // 🔴 3. Desactivar en MemberPress
     try {
@@ -80,7 +84,7 @@ async function desactivarMembresiaClub(email, password) {
       });
       console.log(`🧩 MemberPress desactivado para ${email}`);
     } catch (errMP) {
-      console.error(`❌ Error al desactivar en MemberPress: ${errMP.message}`);
+      console.error(`❌ Error al desactivar en MemberPress:`, errMP.message);
     }
 
     // 🔴 4. Enviar email de confirmación
@@ -92,12 +96,13 @@ async function desactivarMembresiaClub(email, password) {
         console.warn(`⚠️ Email no confirmado para ${email}:`, resultadoEmail);
       }
     } catch (errEmail) {
-      console.error(`❌ Error al enviar email de baja: ${errEmail.message}`);
+      console.error(`❌ Error al enviar email de baja:`, errEmail.message);
     }
 
     return { ok: true };
+
   } catch (error) {
-    console.error(`❌ Error al desactivar membresía de ${email}:`, error.message);
+    console.error(`❌ Error global al desactivar membresía de ${email}:`, error.message || error);
     return { ok: false, mensaje: 'Error interno del servidor.' };
   }
 }

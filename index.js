@@ -35,9 +35,6 @@ const corsOptions = {
 app.options('*', cors(corsOptions));
 app.use(cors(corsOptions));
 
-// ✅ Webhook (raw)
-app.use('/webhook', express.raw({ type: 'application/json' }));
-
 // ✅ Middlewares normales
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -214,7 +211,7 @@ app.post('/activar-membresia-club', async (req, res) => {
   }
 });
 
-app.options('/cancelar-suscripcion-club', cors(corsOptions)); // Preflight
+app.options('/cancelar-suscripcion-club', cors(corsOptions));
 app.post('/cancelar-suscripcion-club', cors(corsOptions), async (req, res) => {
   const { email, password, token } = req.body;
   const tokenEsperado = 'bajaClub@2025!';

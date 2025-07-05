@@ -14,8 +14,6 @@ router.post('/', async (req, res) => {
   try {
     await activarMembresiaClub(email);
 
-    // Aquí puedes añadir lógica adicional si en el futuro quieres notificar por email, etc.
-
     return res.json({ ok: true });
   } catch (error) {
     console.error('❌ Error al activar la membresía:', error.message);

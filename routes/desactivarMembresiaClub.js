@@ -1,34 +1,54 @@
+const express = require('express');
+const router = express.Router();
+
 const { desactivarMembresiaClub } = require('../services/desactivarMembresiaClub');
+const { syncMemberpressClub } = require('../services/syncMemberpressClub');
 const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
-module.exports = async function (req, res) {
-  try {
-    const { email } = req.body;
-    if (!email) {
-      return res.status(400).json({ error: 'Falta el email' });
-    }
+const TOKEN_ESPERADO = 'baja-club-token-2025';
 
-    // 1. Desactivar en Firestore
+router.post('/', async (req, res) => {
+  const token = req.headers['authorization'];
+
+  if (token !== TOKEN_ESPERADO) {
+    return res.status(403).json({ error: 'Token inválido' });
+  }
+
+  const { email } = req.body;
+  if (!email) {
+    return res.status(400).json({ error: 'Falta el email' });
+  }
+
+  try {
+    // 🔄 Desactivar en Firestore
     await desactivarMembresiaClub(email);
 
-    // 2. Cancelar suscripción activa en Stripe
+    // 🔄 Cancelar suscripción en Stripe
     const customers = await stripe.customers.list({ email, limit: 1 });
-    if (!customers.data.length) {
-      return res.status(404).json({ error: 'Cliente no encontrado en Stripe' });
+    if (customers.data.length) {
+      const customerId = customers.data[0].id;
+      const subs = await stripe.subscriptions.list({ customer: customerId, status: 'active', limit: 1 });
+
+      if (subs.data.length) {
+        const subscriptionId = subs.data[0].id;
+        await stripe.subscriptions.del(subscriptionId);
+        console.log(`🛑 Suscripción ${subscriptionId} cancelada en Stripe para ${email}`);
+      } else {
+        console.warn(`ℹ️ No hay suscripción activa en Stripe para ${email}`);
+      }
+    } else {
+      console.warn(`⚠️ No se encontró cliente Stripe con email ${email}`);
     }
 
-    const customerId = customers.data[0].id;
-    const subs = await stripe.subscriptions.list({ customer: customerId, status: 'active', limit: 1 });
-    if (!subs.data.length) {
-      return res.status(404).json({ error: 'Suscripción activa no encontrada en Stripe' });
-    }
+    // 🔄 Desactivar en MemberPress
+    await syncMemberpressClub({ email, accion: 'desactivar', membership_id: 10663 });
 
-    await stripe.subscriptions.del(subs.data[0].id);
-
-    return res.json({ ok: true, mensaje: 'Baja tramitada correctamente en Firestore y Stripe.' });
+    return res.json({ ok: true, mensaje: 'Membresía cancelada correctamente.' });
   } catch (error) {
-    console.error('❌ Error al desactivar membresía:', error);
-    return res.status(500).json({ error: 'Error al desactivar la membresía', msg: error.message });
+    console.error('❌ Error al desactivar membresía:', error.message);
+    return res.status(500).json({ error: 'Error al procesar la baja.' });
   }
-};
+});
+
+module.exports = router;

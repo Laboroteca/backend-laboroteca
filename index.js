@@ -32,7 +32,7 @@ const corsOptions = {
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
 };
-app.options('*', cors(corsOptions)); // ✅ Soporte preflight global
+app.options('*', cors(corsOptions));
 app.use(cors(corsOptions));
 
 // ✅ Webhook requiere raw body
@@ -92,7 +92,6 @@ async function verificarEmailEnWordPress(email) {
 }
 
 // ✅ Rutas
-
 app.get('/', (req, res) => {
   res.send('✔️ API de Laboroteca activa');
 });

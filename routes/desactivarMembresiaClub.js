@@ -31,7 +31,10 @@ async function desactivarMembresiaClub(email, password) {
       return { ok: false, mensaje: 'No se ha configurado una contraseña.' };
     }
 
-    // Verificar contraseña usando bcrypt
+    if (typeof password !== 'string' || password.length < 6) {
+      return { ok: false, mensaje: 'La contraseña no es válida.' };
+    }
+
     const bcrypt = require('bcryptjs');
     const esValida = await bcrypt.compare(password, hashAlmacenado);
 
@@ -53,7 +56,7 @@ async function desactivarMembresiaClub(email, password) {
       });
 
       for (const sub of subsActivas.data) {
-        await stripe.subscriptions.cancel(sub.id);
+        await stripe.subscriptions.cancel(sub.id, { invoice_now: false, prorate: false });
         console.log(`🛑 Stripe: suscripción ${sub.id} cancelada para ${email}`);
       }
     } else {
@@ -61,10 +64,10 @@ async function desactivarMembresiaClub(email, password) {
     }
 
     // 🔴 2. Desactivar en Firestore
-    await ref.set({
+    await ref.update({
       activo: false,
       fechaBaja: new Date().toISOString()
-    }, { merge: true });
+    });
 
     console.log(`🚫 [CLUB] Firestore actualizado para ${email}`);
 

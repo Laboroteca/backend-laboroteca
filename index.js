@@ -10,8 +10,8 @@ console.log('🔐 STRIPE_WEBHOOK_SECRET presente:', !!process.env.STRIPE_WEBHOOK
 const express = require('express');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY || '');
 const cors = require('cors');
-const path = require('path');
 const rateLimit = require('express-rate-limit');
+const path = require('path');
 
 const procesarCompra = require('./services/procesarCompra');
 const { activarMembresiaClub } = require('./services/activarMembresiaClub');
@@ -21,6 +21,7 @@ const { syncMemberpressClub } = require('./services/syncMemberpressClub');
 const app = express();
 app.set('trust proxy', 1);
 
+// Productos disponibles
 const PRODUCTOS = {
   'de cara a la jubilacion': {
     nombre: 'De cara a la jubilación',
@@ -77,10 +78,10 @@ app.use(cors({
 app.use('/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(express.static(__dirname));
 
+// Rutas principales
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'formulario.html'));
+  res.send('✔️ API de Laboroteca activa');
 });
 
 const webhookHandler = require('./routes/webhook');
@@ -88,8 +89,6 @@ app.post('/webhook', webhookHandler);
 
 app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   const datos = req.body;
-  console.log('📦 DATOS FORMULARIO:', JSON.stringify(datos, null, 2));
-
   const {
     nombre = '', apellidos = '', email = '', dni = '', direccion = '',
     ciudad = '', provincia = '', cp = '', tipoProducto = '', nombreProducto = ''
@@ -98,8 +97,9 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   const key = normalizarProducto(nombreProducto);
   const producto = PRODUCTOS[key];
 
-  if (!producto) return res.status(400).json({ error: 'Producto no disponible.' });
-  if (!nombre || !email) return res.status(400).json({ error: 'Faltan campos obligatorios.' });
+  if (!producto || !nombre || !email) {
+    return res.status(400).json({ error: 'Faltan campos obligatorios o producto no disponible.' });
+  }
 
   const emailValido = await verificarEmailEnWordPress(email);
   if (!emailValido) return res.status(403).json({ error: 'Este email no está registrado.' });
@@ -140,8 +140,6 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
 
 app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
   const datos = req.body;
-  console.log('📦 DATOS SUSCRIPCIÓN CLUB:', JSON.stringify(datos, null, 2));
-
   const {
     nombre = '', apellidos = '', email = '', dni = '', direccion = '',
     ciudad = '', provincia = '', cp = '', tipoProducto = '', nombreProducto = ''
@@ -150,8 +148,9 @@ app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
   const key = normalizarProducto(nombreProducto);
   const producto = PRODUCTOS[key];
 
-  if (!producto) return res.status(400).json({ error: 'Producto no disponible.' });
-  if (!nombre || !email) return res.status(400).json({ error: 'Faltan campos obligatorios.' });
+  if (!producto || !nombre || !email) {
+    return res.status(400).json({ error: 'Faltan campos obligatorios o producto no disponible.' });
+  }
 
   const emailValido = await verificarEmailEnWordPress(email);
   if (!emailValido) return res.status(403).json({ error: 'Este email no está registrado.' });
@@ -217,16 +216,13 @@ app.post('/desactivar-membresia-club', async (req, res) => {
         const subscriptionId = subs.data[0].id;
         await stripe.subscriptions.del(subscriptionId);
         console.log(`🛑 Suscripción ${subscriptionId} cancelada en Stripe para ${email}`);
-      } else {
-        console.warn(`ℹ️ No hay suscripción activa en Stripe para ${email}`);
       }
-    } else {
-      console.warn(`⚠️ No se encontró cliente Stripe con email ${email}`);
     }
 
     await desactivarMembresiaClub(email);
     await syncMemberpressClub({ email, accion: 'desactivar', membership_id: 10663 });
     return res.json({ ok: true });
+
   } catch (error) {
     console.error('❌ Error desactivar membresía:', error.message);
     return res.status(500).json({ error: 'Error al desactivar la membresía' });
@@ -241,18 +237,26 @@ app.post('/crear-portal-cliente', async (req, res) => {
     const customers = await stripe.customers.list({ email, limit: 1 });
     if (!customers.data.length) return res.status(404).json({ error: 'No existe cliente Stripe para este email.' });
 
-    const customerId = customers.data[0].id;
     const session = await stripe.billingPortal.sessions.create({
-      customer: customerId,
+      customer: customers.data[0].id,
       return_url: 'https://www.laboroteca.es/mi-cuenta'
     });
     return res.json({ url: session.url });
   } catch (error) {
-    console.error('❌ Error creando portal cliente Stripe:', error);
+    console.error('❌ Error creando portal cliente Stripe:', error.message);
     return res.status(500).json({ error: 'No se pudo crear el portal de cliente Stripe' });
   }
 });
 
+// Manejo de errores no controlados
+process.on('uncaughtException', err => {
+  console.error('💥 uncaughtException:', err);
+});
+process.on('unhandledRejection', err => {
+  console.error('💥 unhandledRejection:', err);
+});
+
+// Puerto final
 if (require.main === module) {
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {

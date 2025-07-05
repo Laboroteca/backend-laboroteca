@@ -25,6 +25,16 @@ const desactivarMembresiaClub = require('./services/desactivarMembresiaClub');
 const app = express();
 app.set('trust proxy', 1);
 
+// ✅ CORS manual explícito (soluciona Railway + CORS + preflight)
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', 'https://www.laboroteca.es');
+  res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
+  next();
+});
+
 // 🛒 Productos disponibles
 const PRODUCTOS = {
   'de cara a la jubilacion': {
@@ -66,14 +76,6 @@ async function verificarEmailEnWordPress(email) {
   console.log('🔓 Verificación desactivada. Email:', email);
   return true;
 }
-
-// ✅ CORS global
-app.use(cors({
-  origin: 'https://www.laboroteca.es',
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
-}));
 
 // ✅ Middleware
 app.use('/webhook', express.raw({ type: 'application/json' }));
@@ -215,9 +217,8 @@ app.post('/activar-membresia-club', async (req, res) => {
   }
 });
 
-// ✅ Cancelar suscripción manualmente (con soporte preflight CORS)
-app.options('/cancelar-suscripcion-club', cors()); // 👈 Soporte preflight
-app.post('/cancelar-suscripcion-club', cors(), async (req, res) => {
+// ✅ Cancelar suscripción manualmente
+app.post('/cancelar-suscripcion-club', async (req, res) => {
   const { email, password, token } = req.body;
   const tokenEsperado = 'bajaClub@2025!';
 

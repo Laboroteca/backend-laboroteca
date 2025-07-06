@@ -14,7 +14,7 @@ const bcrypt = require('bcryptjs');
  */
 async function verificarLoginWordPress(email, password) {
   try {
-    const res = await fetch('https://www.laboroteca.es/wp-json/labo/v1/verificar-login', {
+    const res = await fetch('https://www.laboroteca.es/wp-json/laboroteca/v1/verificar-login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password })

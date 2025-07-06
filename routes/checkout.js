@@ -23,42 +23,60 @@ const PRODUCTOS = {
 router.post('/create-session', async (req, res) => {
   try {
     const body = req.body;
-    const datos = typeof body === 'object' && body.email ? body : Object.values(body)[0] || {};
+    // Compatibilidad con distintas estructuras recibidas (Fluent Forms, etc)
+    const datos = typeof body === 'object' && (body.email || body.email_autorelleno || body.nombre)
+      ? body
+      : (Object.values(body)[0] || {});
 
-    const nombre = datos.nombre || datos.Nombre || '';
-    const apellidos = datos.apellidos || datos.Apellidos || '';
-    const email = typeof datos.email_autorelleno === 'string'
-      ? datos.email_autorelleno.trim().toLowerCase()
-      : (typeof datos.email === 'string' ? datos.email.trim().toLowerCase() : '');
-    const dni = datos.dni || '';
-    const direccion = datos.direccion || '';
-    const ciudad = datos.ciudad || '';
-    const provincia = datos.provincia || '';
-    const cp = datos.cp || '';
-    const tipoProducto = datos.tipoProducto || '';
-    const nombreProducto = datos.nombreProducto || '';
+    // Recogida y limpieza de campos
+    const nombre = (datos.nombre || datos.Nombre || '').trim();
+    const apellidos = (datos.apellidos || datos.Apellidos || '').trim();
+    let email = (datos.email_autorelleno || datos.email || '').trim().toLowerCase();
+    const dni = (datos.dni || '').trim();
+    const direccion = (datos.direccion || '').trim();
+    const ciudad = (datos.ciudad || '').trim();
+    const provincia = (datos.provincia || '').trim();
+    const cp = (datos.cp || '').trim();
+    const tipoProducto = (datos.tipoProducto || '').trim();
+    const nombreProducto = (datos.nombreProducto || '').trim();
 
+    // Normalización del nombre del producto
     const clave = normalizar(nombreProducto);
     const producto = PRODUCTOS[clave];
 
-    console.log('📩 Solicitud recibida:', {
+    // Log de los datos recibidos
+    console.log('📩 [create-session] Solicitud recibida:', {
       nombre, apellidos, email, dni, direccion,
       ciudad, provincia, cp, tipoProducto, nombreProducto
     });
 
-    if (!email || !nombre || !nombreProducto || !tipoProducto || !producto) {
-      console.warn('⚠️ Faltan datos o producto inválido.');
+    // 🔒 Validación estricta de campos
+    if (
+      !email ||
+      typeof email !== 'string' ||
+      !email.includes('@') ||
+      email === 'email' ||
+      !nombre ||
+      !nombreProducto ||
+      !tipoProducto ||
+      !producto
+    ) {
+      console.warn('⚠️ [create-session] Faltan datos obligatorios o producto inválido.', {
+        nombre, email, nombreProducto, tipoProducto, producto
+      });
       return res.status(400).json({ error: 'Faltan datos obligatorios o producto no válido.' });
     }
 
+    // Verificación en WordPress
     const registrado = await emailRegistradoEnWordPress(email);
     if (!registrado) {
-      console.warn('🚫 Email no registrado en WP:', email);
+      console.warn('🚫 [create-session] Email no registrado en WP:', email);
       return res.status(403).json({ error: 'El email no está registrado como usuario.' });
     }
 
     const isSuscripcion = tipoProducto.toLowerCase().includes('suscrip');
 
+    // Crear sesión de Stripe
     const session = await stripe.checkout.sessions.create({
       mode: isSuscripcion ? 'subscription' : 'payment',
       payment_method_types: ['card'],
@@ -84,11 +102,11 @@ router.post('/create-session', async (req, res) => {
       }
     });
 
-    console.log('✅ Sesión Stripe creada:', session.url);
+    console.log('✅ [create-session] Sesión Stripe creada:', session.url);
     res.json({ url: session.url });
 
   } catch (err) {
-    console.error('❌ Error creando sesión de pago:', err.message);
+    console.error('❌ [create-session] Error creando sesión de pago:', err);
     res.status(500).json({ error: 'Error interno al crear la sesión' });
   }
 });

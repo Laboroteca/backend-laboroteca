@@ -6,7 +6,8 @@ const API_KEY = 'laboroteca_club_sync_2024supersegura';
 const API_URL = 'https://www.laboroteca.es/wp-json/laboroteca/v1/club-membership/';
 
 /**
- * Sincroniza la membresía en MemberPress (activar o desactivar).
+ * 🔁 Sincroniza una membresía en MemberPress (activar o desactivar).
+ *
  * @param {Object} params
  * @param {string} params.email - Email del usuario
  * @param {string} params.accion - 'activar' o 'desactivar'
@@ -14,17 +15,16 @@ const API_URL = 'https://www.laboroteca.es/wp-json/laboroteca/v1/club-membership
  * @returns {Promise<Object>} - Respuesta del servidor
  */
 async function syncMemberpressClub({ email, accion, membership_id }) {
-  // ✅ Validaciones robustas
   if (!email || typeof email !== 'string' || !email.includes('@')) {
-    throw new Error('Email inválido en syncMemberpressClub');
+    throw new Error('❌ Email inválido en syncMemberpressClub');
   }
 
   if (!['activar', 'desactivar'].includes(accion)) {
-    throw new Error("La acción debe ser 'activar' o 'desactivar'");
+    throw new Error("❌ Acción inválida: debe ser 'activar' o 'desactivar'");
   }
 
   if (!Number.isInteger(membership_id)) {
-    throw new Error('membership_id debe ser un número entero');
+    throw new Error('❌ membership_id debe ser un número entero');
   }
 
   try {
@@ -41,11 +41,11 @@ async function syncMemberpressClub({ email, accion, membership_id }) {
     try {
       data = await response.json();
     } catch (jsonErr) {
-      throw new Error(`No se pudo parsear respuesta JSON: ${jsonErr.message}`);
+      throw new Error(`❌ No se pudo parsear respuesta JSON: ${jsonErr.message}`);
     }
 
     if (!response.ok) {
-      throw new Error(`Error HTTP ${response.status}: ${JSON.stringify(data)}`);
+      throw new Error(`❌ Error HTTP ${response.status}: ${JSON.stringify(data)}`);
     }
 
     console.log(`✅ [MemberPress] ${accion} completado para ${email}`);

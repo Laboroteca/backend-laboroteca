@@ -10,7 +10,38 @@ module.exports = async function procesarCompra(datos) {
   try {
     const nombre = datos.nombre || datos.Nombre || '';
     const apellidos = datos.apellidos || datos.Apellidos || '';
-    let email = datos.email_autorelleno || datos.email || '';
+    // 🟦 Log de recepción
+    console.log('🚦 [procesarCompra] Recibido:', {
+      email_autorelleno: datos.email_autorelleno,
+      email: datos.email,
+      alias: datos.alias || datos.userAlias || ''
+    });
+
+    // 🟧 Limpieza y recogida del email
+    let email = (datos.email_autorelleno || datos.email || '').trim().toLowerCase();
+
+    // Si el email es inválido, intenta recuperar desde Firestore usando alias
+    if (!email.includes('@')) {
+      const alias = (datos.alias || datos.userAlias || '').trim();
+      if (alias) {
+        try {
+          const userSnap = await firestore.collection('usuariosClub').doc(alias).get();
+          if (userSnap.exists) {
+            email = (userSnap.data().email || '').trim().toLowerCase();
+            console.log(`📩 [procesarCompra] Email recuperado desde Firestore para alias "${alias}": ${email}`);
+          }
+        } catch (err) {
+          console.error(`❌ [procesarCompra] Error accediendo a Firestore con alias "${alias}":`, err);
+        }
+      }
+    }
+
+    // Validación estricta de email
+    if (!email || !email.includes('@')) {
+      console.error(`❌ [procesarCompra] Email inválido tras todos los intentos: "${email}"`);
+      throw new Error(`❌ Email inválido en procesarCompra: "${email}"`);
+    }
+
     const dni = datos.dni || '';
     const direccion = datos.direccion || datos['Dirección'] || '';
     const ciudad = datos.ciudad || datos['Municipio'] || '';
@@ -20,22 +51,6 @@ module.exports = async function procesarCompra(datos) {
     const descripcionProducto = datos.descripcionProducto || '';
     const tipoProducto = datos.tipoProducto || 'Otro';
     const importe = parseFloat((datos.importe || '22.90').toString().replace(',', '.'));
-
-    // 🛡️ Verificación del email y recuperación si es inválido
-    if (!email.includes('@')) {
-      const alias = datos.alias || datos.userAlias || '';
-      if (alias) {
-        const userSnap = await firestore.collection('usuariosClub').doc(alias).get();
-        if (userSnap.exists) {
-          email = userSnap.data().email || '';
-          console.log(`📩 Email recuperado desde Firestore para alias ${alias}: ${email}`);
-        }
-      }
-    }
-
-    if (!email || !email.includes('@')) {
-      throw new Error(`❌ Email inválido en procesarCompra: "${email}"`);
-    }
 
     const datosCliente = {
       nombre,
@@ -53,7 +68,7 @@ module.exports = async function procesarCompra(datos) {
     };
 
     console.time(`🕒 Compra ${email}`);
-    console.log('📦 Datos finales de facturación:\n', JSON.stringify(datosCliente, null, 2));
+    console.log('📦 [procesarCompra] Datos finales de facturación:\n', JSON.stringify(datosCliente, null, 2));
 
     // Guardar en Sheets
     try {

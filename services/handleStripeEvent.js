@@ -47,13 +47,17 @@ async function handleStripeEvent(event) {
     if (procesado) return { duplicate: true };
 
     const m = session.metadata || {};
-    const email =
-      m.email_autorelleno ||
-      m.email ||
-      session.customer_details?.email ||
-      session.customer_email;
+    console.log('🧐 Stripe session.metadata:', m);
 
-    if (!email || !email.includes('@')) {
+    // Priorizamos email_autorelleno y validamos siempre
+    let email = (
+      (m.email_autorelleno && typeof m.email_autorelleno === 'string' && m.email_autorelleno.includes('@') && m.email_autorelleno) ||
+      (m.email && typeof m.email === 'string' && m.email.includes('@') && m.email) ||
+      (session.customer_details?.email && typeof session.customer_details.email === 'string' && session.customer_details.email.includes('@') && session.customer_details.email) ||
+      (session.customer_email && typeof session.customer_email === 'string' && session.customer_email.includes('@') && session.customer_email)
+    )?.toLowerCase().trim();
+
+    if (!email) {
       console.error('❌ No se pudo obtener un email válido en checkout.session.completed');
       await docRef.update({
         error: true,
@@ -122,7 +126,7 @@ async function handleStripeEvent(event) {
         await syncMemberpressLibro({
           email,
           accion: 'activar',
-          membership_id: memberpressId,
+          // membership_id: memberpressId, // Este parámetro no lo usa el endpoint, pero lo dejamos si quieres traza
           importe: datosCliente.importe
         });
       }

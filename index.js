@@ -25,7 +25,6 @@ const desactivarMembresiaClub = require('./services/desactivarMembresiaClub');
 const app = express();
 app.set('trust proxy', 1);
 
-// ✅ CORS solo para tu dominio de producción
 const corsOptions = {
   origin: 'https://www.laboroteca.es',
   methods: ['GET', 'POST', 'OPTIONS'],
@@ -34,18 +33,15 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 
-// ✅ Middlewares normales
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// ✅ Rate limit solo para endpoints de pago
 const pagoLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
   message: { error: 'Demasiados intentos. Inténtalo más tarde.' }
 });
 
-// ✅ Productos
 const PRODUCTOS = {
   'de cara a la jubilacion': {
     nombre: 'De cara a la jubilación',
@@ -87,16 +83,14 @@ async function verificarEmailEnWordPress(email) {
   return true;
 }
 
-// ✅ Rutas principales
+// ✅ Rutas
 
 app.get('/', (req, res) => {
   res.send('✔️ API de Laboroteca activa');
 });
 
-// Webhook de Stripe (debe ser la primera ruta POST si tienes bodyparser)
 app.post('/webhook', require('./routes/webhook'));
 
-// Pago único (libros, cursos, etc)
 app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   const datos = req.body;
   const {
@@ -148,13 +142,21 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   }
 });
 
-// Suscripción mensual club
 app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
   const datos = req.body;
-  const {
-    nombre = '', apellidos = '', email = '', dni = '', direccion = '',
-    ciudad = '', provincia = '', cp = '', tipoProducto = '', nombreProducto = ''
-  } = datos;
+
+  const nombre = datos.nombre || datos.Nombre || '';
+  const apellidos = datos.apellidos || datos.Apellidos || '';
+  const email = typeof datos.email_autorelleno === 'string'
+    ? datos.email_autorelleno.trim().toLowerCase()
+    : (typeof datos.email === 'string' ? datos.email.trim().toLowerCase() : '');
+  const dni = datos.dni || '';
+  const direccion = datos.direccion || '';
+  const ciudad = datos.ciudad || '';
+  const provincia = datos.provincia || '';
+  const cp = datos.cp || '';
+  const tipoProducto = datos.tipoProducto || '';
+  const nombreProducto = datos.nombreProducto || '';
 
   const key = normalizarProducto(nombreProducto);
   const producto = PRODUCTOS[key];
@@ -200,7 +202,6 @@ app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
   }
 });
 
-// Activar membresía manual (debug/soporte)
 app.post('/activar-membresia-club', async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'Falta el email' });
@@ -215,8 +216,7 @@ app.post('/activar-membresia-club', async (req, res) => {
   }
 });
 
-// CANCELACIÓN DE SUSCRIPCIÓN CLUB - Esta es la que usa el formulario WordPress
-app.options('/cancelar-suscripcion-club', cors(corsOptions)); // Preflight CORS
+app.options('/cancelar-suscripcion-club', cors(corsOptions));
 app.post('/cancelar-suscripcion-club', cors(corsOptions), async (req, res) => {
   const { email, password, token } = req.body;
   const tokenEsperado = 'bajaClub@2025!';
@@ -242,7 +242,6 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), async (req, res) => {
   }
 });
 
-// Portal cliente Stripe (gestión de suscripción/cambios pago)
 app.post('/crear-portal-cliente', async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'Falta el email' });
@@ -264,7 +263,6 @@ app.post('/crear-portal-cliente', async (req, res) => {
   }
 });
 
-// 🧨 Global errors
 process.on('uncaughtException', err => {
   console.error('💥 uncaughtException:', err);
 });
@@ -272,7 +270,6 @@ process.on('unhandledRejection', err => {
   console.error('💥 unhandledRejection:', err);
 });
 
-// 🚀 Iniciar servidor
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Backend funcionando en http://localhost:${PORT}`);

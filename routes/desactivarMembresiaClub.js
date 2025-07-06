@@ -3,10 +3,14 @@ const firestore = admin.firestore();
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const { enviarConfirmacionBajaClub } = require('./email');
 const { syncMemberpressClub } = require('./syncMemberpressClub');
-const fetch = require('node-fetch'); // Necesario para la llamada a WordPress
+const fetch = require('node-fetch');
+const bcrypt = require('bcryptjs');
 
 /**
- * Verifica email+password en WP (si no existe en Firestore)
+ * Verifica email+password en WordPress
+ * @param {string} email
+ * @param {string} password
+ * @returns {Promise<{ok: boolean, mensaje?: string}>}
  */
 async function verificarLoginWordPress(email, password) {
   try {
@@ -15,19 +19,24 @@ async function verificarLoginWordPress(email, password) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password })
     });
+
     const data = await res.json();
-    return !!data.ok;
+    if (!data || typeof data.ok === 'undefined') {
+      return { ok: false, mensaje: 'Respuesta inesperada del servidor de WordPress.' };
+    }
+
+    return data;
   } catch (e) {
     console.error('❌ Error conectando a WP para login:', e.message);
-    return false;
+    return { ok: false, mensaje: 'No se pudo conectar con WordPress.' };
   }
 }
 
 /**
  * Desactiva la membresía del Club Laboroteca para un usuario dado.
  * Verifica la contraseña (Firestore o WP) y, si es correcta, desactiva en Stripe, Firestore y MemberPress.
- * @param {string} email - Email del usuario
- * @param {string} password - Contraseña para verificar identidad
+ * @param {string} email
+ * @param {string} password
  * @returns {Promise<{ok: boolean, mensaje?: string}>}
  */
 async function desactivarMembresiaClub(email, password) {
@@ -43,38 +52,46 @@ async function desactivarMembresiaClub(email, password) {
     let nombre = '';
 
     if (doc.exists) {
-      // Caso Firestore (registro club)
       const datos = doc.data();
       const hashAlmacenado = datos?.passwordHash;
 
       if (!hashAlmacenado) {
-        // -----> Si está en Firestore pero sin contraseña: intentar en WordPress
-        esValida = await verificarLoginWordPress(email, password);
-        if (!esValida) {
-          return { ok: false, mensaje: 'No se ha configurado una contraseña.' };
+        // Sin hash: verificar contra WordPress
+        const wpLogin = await verificarLoginWordPress(email, password);
+        if (!wpLogin.ok) {
+          return { ok: false, mensaje: wpLogin.mensaje || 'No se ha podido verificar la contraseña.' };
         }
+        esValida = true;
       } else {
+        // Verificar con bcrypt
         if (typeof password !== 'string' || password.length < 6) {
           return { ok: false, mensaje: 'La contraseña no es válida.' };
         }
-        const bcrypt = require('bcryptjs');
+
         esValida = await bcrypt.compare(password, hashAlmacenado);
         if (!esValida) {
-          return { ok: false, mensaje: 'La contraseña no es correcta.' };
+          return { ok: false, mensaje: 'La contraseña introducida no es correcta.' };
         }
       }
+
       nombre = datos?.nombre || '';
     } else {
-      // -----> Caso solo WordPress
-      esValida = await verificarLoginWordPress(email, password);
-      if (!esValida) {
-        return { ok: false, mensaje: 'El usuario no existe o la contraseña es incorrecta.' };
+      // No existe en Firestore → verificar con WordPress
+      const wpLogin = await verificarLoginWordPress(email, password);
+      if (!wpLogin.ok) {
+        return { ok: false, mensaje: wpLogin.mensaje || 'El usuario no existe o la contraseña no es válida.' };
       }
+      esValida = true;
     }
 
-    // 🔴 1. Cancelar suscripciones activas en Stripe
+    if (!esValida) {
+      return { ok: false, mensaje: 'No se ha podido verificar la contraseña.' };
+    }
+
+    // 🔴 1. Cancelar suscripciones en Stripe
     const clientes = await stripe.customers.list({ email, limit: 1 });
-    if (clientes.data.length) {
+
+    if (clientes.data.length > 0) {
       const customerId = clientes.data[0].id;
 
       const subsActivas = await stripe.subscriptions.list({
@@ -91,7 +108,7 @@ async function desactivarMembresiaClub(email, password) {
       console.warn(`⚠️ Stripe: cliente no encontrado para ${email}`);
     }
 
-    // 🔴 2. Desactivar en Firestore (si existe)
+    // 🔴 2. Desactivar en Firestore
     if (doc.exists) {
       await ref.update({
         activo: false,
@@ -103,7 +120,7 @@ async function desactivarMembresiaClub(email, password) {
     // 🔴 3. Desactivar en MemberPress
     await syncMemberpressClub({ email, accion: 'desactivar' });
 
-    // 🔴 4. Enviar email de confirmación
+    // 🔴 4. Email de confirmación
     try {
       const resultadoEmail = await enviarConfirmacionBajaClub(email, nombre);
       if (resultadoEmail?.data?.succeeded === 1) {
@@ -116,6 +133,7 @@ async function desactivarMembresiaClub(email, password) {
     }
 
     return { ok: true };
+
   } catch (error) {
     console.error(`❌ Error al desactivar membresía de ${email}:`, error.message);
     return { ok: false, mensaje: 'Error interno del servidor.' };

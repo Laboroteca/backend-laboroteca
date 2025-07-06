@@ -27,7 +27,7 @@ async function desactivarMembresiaClub(email, password) {
       headers: { 'Content-Type': 'application/json' }
     });
 
-    if (!wpResp.data?.verificado) {
+    if (!wpResp.data?.ok) {
       return { ok: false, mensaje: wpResp.data?.mensaje || 'Contraseña incorrecta.' };
     }
 

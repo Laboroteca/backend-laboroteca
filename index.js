@@ -33,10 +33,10 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 
-// ⚠️ EL WEBHOOK DEBE IR PRIMERO y RAW
-app.post('/webhook', require('./routes/webhook'));
+// ⚠️ WEBHOOK: SIEMPRE EL PRIMERO Y EN RAW
+app.use('/webhook', require('./routes/webhook')); // No poner .post aquí
 
-// SOLO DESPUÉS LOS BODY PARSER
+// DESPUÉS DEL WEBHOOK, LOS BODY PARSERS
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

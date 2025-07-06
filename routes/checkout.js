@@ -4,7 +4,6 @@ const { emailRegistradoEnWordPress } = require('../utils/wordpress');
 const express = require('express');
 const router = express.Router();
 
-// 🧠 Mapa de productos
 const PRODUCTOS = {
   'de cara a la jubilacion': {
     nombre: 'De cara a la jubilación',
@@ -23,12 +22,10 @@ const PRODUCTOS = {
 router.post('/create-session', async (req, res) => {
   try {
     const body = req.body;
-    // Compatibilidad con distintas estructuras recibidas (Fluent Forms, etc)
     const datos = typeof body === 'object' && (body.email || body.email_autorelleno || body.nombre)
       ? body
       : (Object.values(body)[0] || {});
 
-    // Recogida y limpieza de campos
     const nombre = (datos.nombre || datos.Nombre || '').trim();
     const apellidos = (datos.apellidos || datos.Apellidos || '').trim();
     let email = (datos.email_autorelleno || datos.email || '').trim().toLowerCase();
@@ -40,17 +37,14 @@ router.post('/create-session', async (req, res) => {
     const tipoProducto = (datos.tipoProducto || '').trim();
     const nombreProducto = (datos.nombreProducto || '').trim();
 
-    // Normalización del nombre del producto
     const clave = normalizar(nombreProducto);
     const producto = PRODUCTOS[clave];
 
-    // Log de los datos recibidos
     console.log('📩 [create-session] Solicitud recibida:', {
       nombre, apellidos, email, dni, direccion,
       ciudad, provincia, cp, tipoProducto, nombreProducto
     });
 
-    // 🔒 Validación estricta de campos
     if (
       !email ||
       typeof email !== 'string' ||
@@ -67,7 +61,6 @@ router.post('/create-session', async (req, res) => {
       return res.status(400).json({ error: 'Faltan datos obligatorios o producto no válido.' });
     }
 
-    // Verificación en WordPress
     const registrado = await emailRegistradoEnWordPress(email);
     if (!registrado) {
       console.warn('🚫 [create-session] Email no registrado en WP:', email);
@@ -76,7 +69,6 @@ router.post('/create-session', async (req, res) => {
 
     const isSuscripcion = tipoProducto.toLowerCase().includes('suscrip');
 
-    // Crear sesión de Stripe
     const session = await stripe.checkout.sessions.create({
       mode: isSuscripcion ? 'subscription' : 'payment',
       payment_method_types: ['card'],
@@ -106,7 +98,7 @@ router.post('/create-session', async (req, res) => {
     res.json({ url: session.url });
 
   } catch (err) {
-    console.error('❌ [create-session] Error creando sesión de pago:', err);
+    console.error('❌ [create-session] Error creando sesión de pago:', err && err.message ? err.message : err);
     res.status(500).json({ error: 'Error interno al crear la sesión' });
   }
 });

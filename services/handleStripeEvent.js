@@ -1,5 +1,3 @@
-// services/handleStripeEvent.js
-
 const admin = require('../firebase');
 const firestore = admin.firestore();
 
@@ -33,6 +31,7 @@ function plantillaImpago(n, nombre, link) {
 async function handleStripeEvent(event) {
   const type = event.type;
 
+  // CHECKOUT SESSION COMPLETED
   if (type === 'checkout.session.completed') {
     const session = event.data.object;
     const sessionId = session.id;
@@ -77,7 +76,9 @@ async function handleStripeEvent(event) {
 
       try {
         await enviarFacturaPorEmail(datosCliente, pdfBuffer);
-      } catch (err) {}
+      } catch (err) {
+        console.error('❌ Error enviando email con factura:', err?.message);
+      }
 
       const productId = MEMBERPRESS_IDS[datosCliente.nombreProducto];
       if (productId) {
@@ -97,8 +98,13 @@ async function handleStripeEvent(event) {
             cupones[index].usado = true;
             await fs.writeFile(RUTA_CUPONES, JSON.stringify(cupones, null, 2));
           }
-        } catch (err) {}
+        } catch (err) {
+          console.error('❌ Error marcando cupón como usado:', err?.message);
+        }
       }
+    } catch (error) {
+      console.error('❌ Error en flujo checkout.session.completed:', error?.message);
+      throw error;
     } finally {
       await docRef.set({
         sessionId,
@@ -112,6 +118,7 @@ async function handleStripeEvent(event) {
     return { success: true };
   }
 
+  // INVOICE PAYMENT FAILED
   if (type === 'invoice.payment_failed') {
     const invoice = event.data.object;
     const subscriptionId = invoice.subscription;
@@ -127,7 +134,9 @@ async function handleStripeEvent(event) {
         return_url: updateUrl
       });
       updateUrl = portal.url;
-    } catch (err) {}
+    } catch (err) {
+      console.error('❌ Error creando portal de pago:', err?.message);
+    }
 
     const ref = firestore.collection('suscripcionesImpago').doc(subscriptionId);
     const doc = await ref.get();
@@ -179,13 +188,16 @@ async function handleStripeEvent(event) {
             subject: '🔔 [Laboroteca] Suscripción cancelada',
             body: `El usuario ${email} (${name}) ha sido dado de baja por impago.`
           });
-        } catch (err) {}
+        } catch (err) {
+          console.error('❌ Error cancelando por impago:', err?.message);
+        }
       }
     }
 
     return { impago: true, fallos };
   }
 
+  // SUSCRIPCIÓN ELIMINADA
   if (type === 'customer.subscription.deleted') {
     const subscription = event.data.object;
     let email = subscription.metadata?.email || '';
@@ -194,7 +206,9 @@ async function handleStripeEvent(event) {
       try {
         const cliente = await stripe.customers.retrieve(subscription.customer);
         email = cliente.email || '';
-      } catch (err) {}
+      } catch (err) {
+        console.error('❌ No se pudo recuperar email del cliente:', err?.message);
+      }
     }
 
     const nombreProducto = subscription.metadata?.nombreProducto || subscription.items?.data?.[0]?.description || '';
@@ -213,12 +227,16 @@ async function handleStripeEvent(event) {
           subscriptionId: subscription.id,
           fecha: new Date().toISOString()
         });
-      } catch (err) {}
+      } catch (err) {
+        console.error('❌ Error en baja manual:', err?.message);
+      }
     }
 
     return { baja: true };
   }
 
+  // Ignorado
+  console.log(`ℹ️ Evento ignorado: ${type}`);
   return { ignored: true };
 }
 

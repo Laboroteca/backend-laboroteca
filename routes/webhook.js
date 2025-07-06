@@ -13,9 +13,9 @@ const MEMBERPRESS_CLUB_ID = 10663;
 
 console.log('📦 WEBHOOK CARGADO');
 
-// ⚡️ SOLO en este endpoint usamos raw
+// SOLO aquí usamos express.raw, SOLO para Stripe
 router.post('/', express.raw({ type: 'application/json' }), async (req, res) => {
-  // Log depuración: cabeceras y body crudo (UTF-8)
+  // Log de depuración de cabeceras y body (crudo)
   try {
     console.log('🛎️ Stripe webhook recibido:', {
       headers: req.headers,
@@ -26,7 +26,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
   const sig = req.headers['stripe-signature'];
   let event;
 
-  // Verifica la firma
+  // Verifica la firma y parsea el evento
   try {
     event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
     console.log(`🎯 Webhook verificado: ${event.type}`);
@@ -67,12 +67,14 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
       case 'customer.subscription.deleted': {
         result = await handleStripeEvent(event);
         const subscription = event.data.object;
-        let email;
+        let email = '';
         try {
-          const customer = await stripe.customers.retrieve(subscription.customer);
-          email = customer?.email;
+          if (subscription.customer) {
+            const customer = await stripe.customers.retrieve(subscription.customer);
+            email = customer?.email || '';
+          }
         } catch (e) {
-          email = null;
+          email = '';
         }
         const nombreProducto =
           subscription.metadata?.nombreProducto ||

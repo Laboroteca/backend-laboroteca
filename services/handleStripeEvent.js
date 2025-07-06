@@ -47,7 +47,21 @@ async function handleStripeEvent(event) {
     if (procesado) return { duplicate: true };
 
     const m = session.metadata || {};
-    const email = m.email_autorelleno || m.email || session.customer_details?.email || '';
+    const email =
+      m.email_autorelleno ||
+      m.email ||
+      session.customer_details?.email ||
+      session.customer_email;
+
+    if (!email || !email.includes('@')) {
+      console.error('❌ No se pudo obtener un email válido en checkout.session.completed');
+      await docRef.update({
+        error: true,
+        errorMsg: 'Email inválido o ausente en Stripe session'
+      });
+      return { error: 'Email inválido' };
+    }
+
     const name = session.customer_details?.name || `${m.nombre || ''} ${m.apellidos || ''}`.trim();
     const amountTotal = session.amount_total || 0;
 
@@ -93,7 +107,7 @@ async function handleStripeEvent(event) {
         console.error('❌ Error enviando email con factura:', err?.message);
       }
 
-      // Activar membresías SIEMPRE, tanto si es suscripción como compra suelta
+      // Activar membresías siempre (tanto suscripciones como compras sueltas)
       if (memberpressId === 10663) {
         await syncMemberpressClub({
           email,
@@ -113,6 +127,7 @@ async function handleStripeEvent(event) {
         });
       }
 
+      // Marcar cupón como usado (si existe)
       if (m.codigoDescuento) {
         try {
           const raw = await fs.readFile(RUTA_CUPONES, 'utf8');

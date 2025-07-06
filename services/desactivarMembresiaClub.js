@@ -14,12 +14,16 @@ const { syncMemberpressClub } = require('./syncMemberpressClub');
  * @returns {Promise<{ok: boolean, mensaje?: string}>}
  */
 async function desactivarMembresiaClub(email, password) {
+  console.log(`[BajaClub] Iniciando baja para: ${email}`);
+
   if (!email || !password) {
+    console.log('[BajaClub] Faltan datos obligatorios');
     return { ok: false, mensaje: 'Faltan datos obligatorios.' };
   }
 
   try {
     // 🔐 Verificar login contra WordPress
+    console.log('[BajaClub] Verificando login en WordPress...');
     const wpResp = await axios.post('https://www.laboroteca.es/wp-json/laboroteca/v1/verificar-login', {
       email,
       password
@@ -33,6 +37,7 @@ async function desactivarMembresiaClub(email, password) {
       if (msg.toLowerCase().includes('contraseña') || msg.toLowerCase().includes('password')) {
         msg = 'Contraseña incorrecta';
       }
+      console.log(`[BajaClub] Login incorrecto: ${msg}`);
       return { ok: false, mensaje: msg || 'Contraseña incorrecta' };
     }
 
@@ -41,6 +46,7 @@ async function desactivarMembresiaClub(email, password) {
     const doc = await ref.get();
 
     if (!doc.exists) {
+      console.log('[BajaClub] Usuario no existe en Firestore');
       return { ok: false, mensaje: 'El usuario no existe en la base de datos.' };
     }
 
@@ -83,14 +89,18 @@ async function desactivarMembresiaClub(email, password) {
 
     // 🔴 3. Desactivar en MemberPress
     try {
-      await syncMemberpressClub({
+      const mpResp = await syncMemberpressClub({
         email,
         accion: 'desactivar',
         membership_id: 10663 // ✅ ID fijo del Club Laboroteca
       });
-      console.log(`🧩 MemberPress desactivado para ${email}`);
+      console.log(`🧩 MemberPress desactivado para ${email}`, mpResp);
+      if (!mpResp.ok) {
+        return { ok: false, mensaje: `Error desactivando en MemberPress: ${mpResp?.error || 'Sin mensaje'}` };
+      }
     } catch (errMP) {
-      console.error(`❌ Error al desactivar en MemberPress:`, errMP.message);
+      console.error(`❌ Error al desactivar en MemberPress:`, errMP.message || errMP);
+      return { ok: false, mensaje: `Error al desactivar en MemberPress: ${errMP.message || errMP}` };
     }
 
     // 🔴 4. Enviar email de confirmación
@@ -114,6 +124,7 @@ async function desactivarMembresiaClub(email, password) {
       if (msg.toLowerCase().includes('contraseña') || msg.toLowerCase().includes('password')) {
         msg = 'Contraseña incorrecta';
       }
+      console.log(`[BajaClub] Error login WP: ${msg}`);
       return { ok: false, mensaje: msg || 'Contraseña incorrecta' };
     }
 

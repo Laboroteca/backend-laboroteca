@@ -1,3 +1,5 @@
+// services/syncMemberpressClub.js
+
 const fetch = require('node-fetch');
 
 const API_KEY = 'laboroteca_club_sync_2024supersegura';
@@ -13,18 +15,18 @@ const API_URL = 'https://www.laboroteca.es/wp-json/laboroteca/v1/club-membership
  * @returns {Promise<Object>} - Respuesta del servidor
  */
 async function syncMemberpressClub({ email, accion, membership_id, importe = 0.01 }) {
+  // Validaciones básicas
   if (!email || typeof email !== 'string' || !email.includes('@')) {
     throw new Error('❌ Email inválido en syncMemberpressClub');
   }
-
   if (!['activar', 'desactivar'].includes(accion)) {
     throw new Error("❌ Acción inválida: debe ser 'activar' o 'desactivar'");
   }
-
   if (!Number.isInteger(membership_id)) {
     throw new Error('❌ membership_id debe ser un número entero');
   }
 
+  // Construcción de payload
   const payload = {
     email,
     accion,
@@ -32,31 +34,41 @@ async function syncMemberpressClub({ email, accion, membership_id, importe = 0.0
     importe: typeof importe === 'number' && importe > 0 ? parseFloat(importe.toFixed(2)) : 0.01
   };
 
-  console.log(`📡 [syncMemberpressClub] Enviando ${accion} para ${email} (ID: ${membership_id}, Importe: ${payload.importe})`);
+  console.log('⏩ [syncMemberpressClub] Payload enviado:', JSON.stringify(payload));
 
-  const response = await fetch(API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': API_KEY
-    },
-    body: JSON.stringify(payload)
-  });
-
-  let data;
+  let response, text, data;
   try {
-    data = await response.json();
+    response = await fetch(API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': API_KEY
+      },
+      body: JSON.stringify(payload),
+      timeout: 15000
+    });
+
+    text = await response.text();
+    try {
+      data = JSON.parse(text);
+    } catch (jsonErr) {
+      throw new Error(`❌ Respuesta no es JSON válido: ${text.substring(0, 200)}`);
+    }
+
+    if (!response.ok) {
+      // Extrae error con detalle si lo hay
+      const errorMsg = (data && data.error) ? data.error : response.statusText;
+      throw new Error(`❌ Error HTTP ${response.status} en syncMemberpressClub: ${errorMsg}`);
+    }
+
+    // Todo OK
+    console.log(`✅ [MemberPress] Acción '${accion}' completada para ${email}:`, data);
+    return data;
+
   } catch (err) {
-    throw new Error(`❌ No se pudo parsear respuesta JSON: ${err.message}`);
+    console.error(`❌ [syncMemberpressClub] Error total:`, err.message || err, text || '');
+    throw err;
   }
-
-  if (!response.ok) {
-    console.error(`❌ Error HTTP ${response.status} en syncMemberpressClub:`, data);
-    throw new Error(`❌ Error en MemberPress: ${JSON.stringify(data)}`);
-  }
-
-  console.log(`✅ [MemberPress] Acción '${accion}' completada correctamente para ${email}`);
-  return data;
 }
 
 module.exports = { syncMemberpressClub };

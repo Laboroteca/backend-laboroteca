@@ -15,7 +15,6 @@ const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const RUTA_CUPONES = path.join(__dirname, '../data/cupones.json');
 
-// 🔤 Normalizador universal: elimina tildes, guiones, minúsculas y espacios extra
 function normalizarProducto(str) {
   return (str || '')
     .toLowerCase()
@@ -30,167 +29,153 @@ const MEMBERPRESS_IDS = {
 };
 
 async function handleStripeEvent(event) {
-  const type = event.type;
-
-  if (type === 'checkout.session.completed') {
-    const session = event.data.object;
-    const sessionId = session.id;
-    if (session.payment_status !== 'paid') return { ignored: true };
-
-    const docRef = firestore.collection('comprasProcesadas').doc(sessionId);
-    const procesado = await firestore.runTransaction(async (transaction) => {
-      const doc = await transaction.get(docRef);
-      if (doc.exists) return true;
-      transaction.set(docRef, {
-        sessionId,
-        email: '',
-        producto: '',
-        fecha: new Date().toISOString(),
-        procesando: true,
-        error: false,
-        facturaGenerada: false
-      });
-      return false;
-    });
-    if (procesado) return { duplicate: true };
-
-    const m = session.metadata || {};
-    console.log('🧐 Stripe session.metadata:', m);
-
-    // Priorizamos email_autorelleno y validamos siempre
-    let email = (
-      (m.email_autorelleno && typeof m.email_autorelleno === 'string' && m.email_autorelleno.includes('@') && m.email_autorelleno) ||
-      (m.email && typeof m.email === 'string' && m.email.includes('@') && m.email) ||
-      (session.customer_details?.email && typeof session.customer_details.email === 'string' && session.customer_details.email.includes('@') && session.customer_details.email) ||
-      (session.customer_email && typeof session.customer_email === 'string' && session.customer_email.includes('@') && session.customer_email)
-    )?.toLowerCase().trim();
-
-    if (!email) {
-      console.error('❌ No se pudo obtener un email válido en checkout.session.completed');
-      await docRef.update({
-        error: true,
-        errorMsg: 'Email inválido o ausente en Stripe session'
-      });
-      return { error: 'Email inválido' };
-    }
-
-    const name = session.customer_details?.name || `${m.nombre || ''} ${m.apellidos || ''}`.trim();
-    const amountTotal = session.amount_total || 0;
-
-    // --- Normaliza nombre de producto para MemberPress (¡SIN TILDES NI GUIONES!)
-    const rawNombreProducto = (m.nombreProducto || '').toLowerCase().trim();
-    const productoSlug = normalizarProducto(rawNombreProducto);
-    const memberpressId = MEMBERPRESS_IDS[productoSlug];
-
-    console.log('🧩 Producto detectado:', {
-      rawNombreProducto,
-      productoSlug,
-      memberpressId
-    });
-
-    const datosCliente = {
-      nombre: m.nombre || name,
-      apellidos: m.apellidos || '',
-      dni: m.dni || '',
-      email,
-      direccion: m.direccion || '',
-      ciudad: m.ciudad || '',
-      provincia: m.provincia || '',
-      cp: m.cp || '',
-      importe: parseFloat((amountTotal / 100).toFixed(2)),
-      tipoProducto: m.tipoProducto || 'Otro',
-      nombreProducto: productoSlug,
-      descripcionProducto: m.descripcionProducto || m.nombreProducto || 'producto_desconocido',
-      producto: m.descripcionProducto || m.nombreProducto || 'producto_desconocido'
-    };
-
-    let errorProcesando = false;
-
-    try {
-      await guardarEnGoogleSheets(datosCliente);
-      const pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
-
-      const nombreArchivo = `facturas/${email}/${Date.now()}-${datosCliente.producto}.pdf`;
-      await subirFactura(nombreArchivo, pdfBuffer, {
-        email,
-        nombreProducto: datosCliente.producto,
-        tipoProducto: datosCliente.tipoProducto,
-        importe: datosCliente.importe
-      });
-
-      try {
-        await enviarFacturaPorEmail(datosCliente, pdfBuffer);
-      } catch (err) {
-        console.error('❌ Error enviando email con factura:', err?.message);
-      }
-
-      // --- Activar membresía CLUB (suscripción)
-      if (memberpressId === 10663) {
-        console.log('🟦 Activando membresía CLUB para:', email, 'ID:', memberpressId);
-        await syncMemberpressClub({
-          email,
-          accion: 'activar',
-          membership_id: memberpressId,
-          importe: datosCliente.importe
-        });
-        await activarMembresiaClub(email);
-        console.log('✅ Club Laboroteca ACTIVADO en MemberPress y Firestore para', email);
-      }
-
-      // --- Activar membresía LIBRO (solo no recurrente)
-      if (memberpressId === 7994) {
-        console.log('🟨 Activando membresía LIBRO para:', email, 'ID:', memberpressId);
-        const resultLibro = await syncMemberpressLibro({
-          email,
-          accion: 'activar',
-          membership_id: memberpressId,
-          importe: datosCliente.importe
-        });
-        console.log('📗 Respuesta MemberPressLibro:', resultLibro);
-      }
-
-      // --- Producto no reconocido
-      if (!memberpressId) {
-        console.log('🟥 No se detecta MemberPress ID para este producto:', productoSlug, rawNombreProducto);
-      }
-
-      // --- Marcar cupón como usado (si aplica)
-      if (m.codigoDescuento) {
-        try {
-          const raw = await fs.readFile(RUTA_CUPONES, 'utf8');
-          const cupones = JSON.parse(raw);
-          const index = cupones.findIndex(c => c.codigo === m.codigoDescuento && !c.usado);
-          if (index !== -1) {
-            cupones[index].usado = true;
-            await fs.writeFile(RUTA_CUPONES, JSON.stringify(cupones, null, 2));
-          }
-        } catch (err) {
-          console.error('❌ Error marcando cupón como usado:', err?.message);
-        }
-      }
-    } catch (error) {
-      errorProcesando = true;
-      console.error('❌ Error en flujo checkout.session.completed:', error?.message);
-      await docRef.update({
-        error: true,
-        errorMsg: error?.message || error
-      });
-      throw error;
-    } finally {
-      await docRef.update({
-        email,
-        producto: datosCliente.producto,
-        fecha: new Date().toISOString(),
-        procesando: false,
-        facturaGenerada: !errorProcesando,
-        error: !!errorProcesando
-      });
-    }
-
-    return { success: true };
+  if (event.type !== 'checkout.session.completed') {
+    return { ignored: true };
   }
 
-  return { ignored: true };
+  const session = event.data.object;
+  const sessionId = session.id;
+  if (session.payment_status !== 'paid') return { ignored: true };
+
+  const docRef = firestore.collection('comprasProcesadas').doc(sessionId);
+  const yaProcesado = await firestore.runTransaction(async (tx) => {
+    const doc = await tx.get(docRef);
+    if (doc.exists) return true;
+    tx.set(docRef, {
+      sessionId,
+      email: '',
+      producto: '',
+      fecha: new Date().toISOString(),
+      procesando: true,
+      error: false,
+      facturaGenerada: false
+    });
+    return false;
+  });
+  if (yaProcesado) return { duplicate: true };
+
+  const m = session.metadata || {};
+  console.log('🧐 Stripe metadata recibida:', m);
+
+  const email = (
+    (m.email_autorelleno && m.email_autorelleno.includes('@') && m.email_autorelleno) ||
+    (m.email && m.email.includes('@') && m.email) ||
+    (session.customer_details?.email && session.customer_details.email.includes('@') && session.customer_details.email) ||
+    (session.customer_email && session.customer_email.includes('@') && session.customer_email)
+  )?.toLowerCase().trim();
+
+  if (!email) {
+    console.error('❌ Email inválido en Stripe');
+    await docRef.update({ error: true, errorMsg: 'Email inválido en Stripe' });
+    return { error: 'Email inválido' };
+  }
+
+  const name = session.customer_details?.name || `${m.nombre || ''} ${m.apellidos || ''}`.trim();
+  const amountTotal = session.amount_total || 0;
+  const rawNombreProducto = (m.nombreProducto || '').toLowerCase().trim();
+  const productoSlug = normalizarProducto(rawNombreProducto);
+  const memberpressId = MEMBERPRESS_IDS[productoSlug];
+
+  const datosCliente = {
+    nombre: m.nombre || name,
+    apellidos: m.apellidos || '',
+    dni: m.dni || '',
+    email,
+    direccion: m.direccion || '',
+    ciudad: m.ciudad || '',
+    provincia: m.provincia || '',
+    cp: m.cp || '',
+    importe: parseFloat((amountTotal / 100).toFixed(2)),
+    tipoProducto: m.tipoProducto || 'Otro',
+    nombreProducto: productoSlug,
+    descripcionProducto: m.descripcionProducto || m.nombreProducto || 'producto_desconocido',
+    producto: m.descripcionProducto || m.nombreProducto || 'producto_desconocido'
+  };
+
+  console.log('📦 Procesando producto:', datosCliente.nombreProducto, '-', datosCliente.importe, '€');
+
+  let errorProcesando = false;
+
+  try {
+    await guardarEnGoogleSheets(datosCliente);
+    const pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
+
+    const nombreArchivo = `facturas/${email}/${Date.now()}-${datosCliente.producto}.pdf`;
+    await subirFactura(nombreArchivo, pdfBuffer, {
+      email,
+      nombreProducto: datosCliente.producto,
+      tipoProducto: datosCliente.tipoProducto,
+      importe: datosCliente.importe
+    });
+
+    try {
+      await enviarFacturaPorEmail(datosCliente, pdfBuffer);
+    } catch (err) {
+      console.error('❌ Error al enviar factura por email:', err?.message);
+    }
+
+    // 🎯 Activar CLUB (membresía recurrente)
+    if (memberpressId === 10663) {
+      console.log('🟦 Activando CLUB para', email);
+      await syncMemberpressClub({
+        email,
+        accion: 'activar',
+        membership_id: memberpressId,
+        importe: datosCliente.importe
+      });
+      await activarMembresiaClub(email);
+      console.log('✅ CLUB activado para', email);
+    }
+
+    // 📘 Activar LIBRO (transacción no recurrente)
+    if (memberpressId === 7994) {
+      console.log('🟨 Activando LIBRO para', email);
+      const result = await syncMemberpressLibro({
+        email,
+        accion: 'activar',
+        membership_id: memberpressId,
+        importe: datosCliente.importe
+      });
+      console.log('📗 Resultado libro:', result);
+    }
+
+    // ❓ Producto no reconocido
+    if (!memberpressId) {
+      console.log('🟥 Producto desconocido:', productoSlug, rawNombreProducto);
+    }
+
+    // 🎟 Marcar cupón como usado (si procede)
+    if (m.codigoDescuento) {
+      try {
+        const raw = await fs.readFile(RUTA_CUPONES, 'utf8');
+        const cupones = JSON.parse(raw);
+        const i = cupones.findIndex(c => c.codigo === m.codigoDescuento && !c.usado);
+        if (i !== -1) {
+          cupones[i].usado = true;
+          await fs.writeFile(RUTA_CUPONES, JSON.stringify(cupones, null, 2));
+        }
+      } catch (err) {
+        console.error('❌ Error al marcar cupón como usado:', err?.message);
+      }
+    }
+
+  } catch (err) {
+    errorProcesando = true;
+    console.error('❌ Error general en flujo Stripe:', err?.message);
+    await docRef.update({ error: true, errorMsg: err?.message || err });
+    throw err;
+  } finally {
+    await docRef.update({
+      email,
+      producto: datosCliente.producto,
+      fecha: new Date().toISOString(),
+      procesando: false,
+      facturaGenerada: !errorProcesando,
+      error: errorProcesando
+    });
+  }
+
+  return { success: true };
 }
 
 module.exports = handleStripeEvent;

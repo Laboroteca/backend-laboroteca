@@ -25,21 +25,20 @@ const desactivarMembresiaClub = require('./services/desactivarMembresiaClub');
 const app = express();
 app.set('trust proxy', 1);
 
-// ✅ CORS
+// ✅ CORS solo para tu dominio de producción
 const corsOptions = {
   origin: 'https://www.laboroteca.es',
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
 };
-app.options('*', cors(corsOptions));
 app.use(cors(corsOptions));
 
 // ✅ Middlewares normales
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// ✅ Rate limit
+// ✅ Rate limit solo para endpoints de pago
 const pagoLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
@@ -88,13 +87,16 @@ async function verificarEmailEnWordPress(email) {
   return true;
 }
 
-// ✅ Rutas
+// ✅ Rutas principales
+
 app.get('/', (req, res) => {
   res.send('✔️ API de Laboroteca activa');
 });
 
+// Webhook de Stripe (debe ser la primera ruta POST si tienes bodyparser)
 app.post('/webhook', require('./routes/webhook'));
 
+// Pago único (libros, cursos, etc)
 app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   const datos = req.body;
   const {
@@ -146,6 +148,7 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   }
 });
 
+// Suscripción mensual club
 app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
   const datos = req.body;
   const {
@@ -197,6 +200,7 @@ app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
   }
 });
 
+// Activar membresía manual (debug/soporte)
 app.post('/activar-membresia-club', async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'Falta el email' });
@@ -211,7 +215,8 @@ app.post('/activar-membresia-club', async (req, res) => {
   }
 });
 
-app.options('/cancelar-suscripcion-club', cors(corsOptions));
+// CANCELACIÓN DE SUSCRIPCIÓN CLUB - Esta es la que usa el formulario WordPress
+app.options('/cancelar-suscripcion-club', cors(corsOptions)); // Preflight CORS
 app.post('/cancelar-suscripcion-club', cors(corsOptions), async (req, res) => {
   const { email, password, token } = req.body;
   const tokenEsperado = 'bajaClub@2025!';
@@ -237,6 +242,7 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), async (req, res) => {
   }
 });
 
+// Portal cliente Stripe (gestión de suscripción/cambios pago)
 app.post('/crear-portal-cliente', async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'Falta el email' });

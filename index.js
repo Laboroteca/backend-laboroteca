@@ -93,18 +93,36 @@ app.get('/', (req, res) => {
   res.send('✔️ API de Laboroteca activa');
 });
 
+// FLUJO PAGO ÚNICO (LIBRO, CURSO, ETC.)
 app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   const datos = req.body;
-  const {
-    nombre = '', apellidos = '', email = '', dni = '', direccion = '',
-    ciudad = '', provincia = '', cp = '', tipoProducto = '', nombreProducto = ''
-  } = datos;
+
+  // Siempre priorizamos el email oculto (autorrelleno)
+  const email = (typeof datos.email_autorelleno === 'string' && datos.email_autorelleno.includes('@'))
+    ? datos.email_autorelleno.trim().toLowerCase()
+    : (typeof datos.email === 'string' && datos.email.includes('@') ? datos.email.trim().toLowerCase() : '');
+
+  const nombre = datos.nombre || datos.Nombre || '';
+  const apellidos = datos.apellidos || datos.Apellidos || '';
+  const dni = datos.dni || '';
+  const direccion = datos.direccion || '';
+  const ciudad = datos.ciudad || '';
+  const provincia = datos.provincia || '';
+  const cp = datos.cp || '';
+  const tipoProducto = datos.tipoProducto || '';
+  const nombreProducto = datos.nombreProducto || '';
 
   const key = normalizarProducto(nombreProducto);
   const producto = PRODUCTOS[key];
 
   if (!producto || !nombre || !email) {
     return res.status(400).json({ error: 'Faltan campos obligatorios o producto no disponible.' });
+  }
+
+  // El login previo ya garantiza el email, pero añadimos validación extra
+  if (!/^[^@]+@[^@]+\.[^@]+$/.test(email)) {
+    console.warn('❌ Email inválido antes de Stripe:', email);
+    return res.status(400).json({ error: 'Email inválido' });
   }
 
   const emailValido = await verificarEmailEnWordPress(email);
@@ -144,14 +162,16 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   }
 });
 
+// FLUJO SUSCRIPCIÓN CLUB
 app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
   const datos = req.body;
 
+  const email = (typeof datos.email_autorelleno === 'string' && datos.email_autorelleno.includes('@'))
+    ? datos.email_autorelleno.trim().toLowerCase()
+    : (typeof datos.email === 'string' && datos.email.includes('@') ? datos.email.trim().toLowerCase() : '');
+
   const nombre = datos.nombre || datos.Nombre || '';
   const apellidos = datos.apellidos || datos.Apellidos || '';
-  const email = typeof datos.email_autorelleno === 'string'
-    ? datos.email_autorelleno.trim().toLowerCase()
-    : (typeof datos.email === 'string' ? datos.email.trim().toLowerCase() : '');
   const dni = datos.dni || '';
   const direccion = datos.direccion || '';
   const ciudad = datos.ciudad || '';

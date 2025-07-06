@@ -15,6 +15,17 @@ console.log('📦 WEBHOOK CARGADO');
 
 // ✅ Middleware del webhook de Stripe
 router.post('/', express.raw({ type: 'application/json' }), async (req, res) => {
+  // 🚩 LOG DE DEPURACIÓN: CABECERAS Y BODY CRUDO
+  try {
+    console.log('🛎️ Stripe webhook recibido:', {
+      headers: req.headers,
+      body: req.body && req.body.length ? req.body.toString('utf8') : '[empty]'
+    });
+  } catch (logErr) {
+    // Por si hay error imprimiendo el body
+    console.warn('⚠️ No se pudo loguear el body del webhook:', logErr.message);
+  }
+
   const sig = req.headers['stripe-signature'];
   let event;
 
@@ -117,7 +128,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         return res.status(200).json({ received: true });
     }
   } catch (err) {
-    console.error('❌ Error al manejar evento Stripe:', err);
+    console.error('❌ Error al manejar evento Stripe:', err.stack || err);
     return res.status(500).json({ error: 'Error al manejar evento Stripe' });
   }
 });

@@ -15,7 +15,6 @@ console.log('📦 WEBHOOK CARGADO');
 
 // SOLO aquí usamos express.raw, SOLO para Stripe
 router.post('/', express.raw({ type: 'application/json' }), async (req, res) => {
-  // Log de depuración de cabeceras y body (crudo)
   try {
     console.log('🛎️ Stripe webhook recibido:', {
       headers: req.headers,
@@ -25,8 +24,6 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
 
   const sig = req.headers['stripe-signature'];
   let event;
-
-  // Verifica la firma y parsea el evento
   try {
     event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
     console.log(`🎯 Webhook verificado: ${event.type}`);
@@ -37,6 +34,14 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
 
   try {
     let result;
+    // --- CLAVE: Cada webhook Stripe lleva un event.id ÚNICO. Usamos ese id para bloquear duplicados ---
+    const eventId = event.id;
+    const processedRef = firestore.collection('stripeWebhookProcesados').doc(eventId);
+    if ((await processedRef.get()).exists) {
+      console.warn(`⛔️ [WEBHOOK] Evento duplicado ignorado: ${eventId}`);
+      return res.status(200).json({ received: true, duplicate: true });
+    }
+    await processedRef.set({ type: event.type, fecha: new Date().toISOString() });
 
     switch (event.type) {
       case 'checkout.session.completed': {
@@ -45,20 +50,26 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         const email =
           session.metadata?.email_autorelleno ||
           session.metadata?.email ||
-          session.customer_details?.email;
+          session.customer_details?.email || '';
         const nombreProducto =
-          session.metadata?.nombreProducto ||
-          session?.display_items?.[0]?.custom?.name;
+          (session.metadata?.nombreProducto || '').toLowerCase();
 
+        // Solo Club Laboroteca, y sólo si no está ya activado (marcar por email+date)
         if (
           email &&
-          nombreProducto?.toLowerCase() === 'el-club-laboroteca'
+          nombreProducto === 'el club laboroteca'
         ) {
-          await syncMemberpressClub({
-            email,
-            accion: 'activar',
-            membership_id: MEMBERPRESS_CLUB_ID
-          });
+          const actRef = firestore.collection('clubActivaciones').doc(email);
+          if (!(await actRef.get()).exists) {
+            await syncMemberpressClub({
+              email,
+              accion: 'activar',
+              membership_id: MEMBERPRESS_CLUB_ID
+            });
+            await actRef.set({ activado: true, fecha: new Date().toISOString() });
+          } else {
+            console.log(`⚠️ Club ya activado para ${email}`);
+          }
         }
 
         return res.status(200).json({ received: true, ...result });
@@ -77,18 +88,24 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           email = '';
         }
         const nombreProducto =
-          subscription.metadata?.nombreProducto ||
-          (subscription.items?.data?.[0]?.description || '');
+          (subscription.metadata?.nombreProducto || '').toLowerCase() ||
+          (subscription.items?.data?.[0]?.description || '').toLowerCase();
 
         if (
           email &&
-          nombreProducto?.toLowerCase().includes('club laboroteca')
+          nombreProducto.includes('club laboroteca')
         ) {
-          await syncMemberpressClub({
-            email,
-            accion: 'desactivar',
-            membership_id: MEMBERPRESS_CLUB_ID
-          });
+          const bajaRef = firestore.collection('clubBajas').doc(email);
+          if (!(await bajaRef.get()).exists) {
+            await syncMemberpressClub({
+              email,
+              accion: 'desactivar',
+              membership_id: MEMBERPRESS_CLUB_ID
+            });
+            await bajaRef.set({ baja: true, fecha: new Date().toISOString() });
+          } else {
+            console.log(`⚠️ Baja ya procesada para ${email}`);
+          }
         }
 
         return res.status(200).json({ received: true, ...result });
@@ -104,17 +121,22 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
 
         const esClub =
           (invoice.lines?.data?.some(line =>
-            line.description?.toLowerCase().includes('club laboroteca')
-          )) || invoice.metadata?.nombreProducto === 'el-club-laboroteca';
+            (line.description || '').toLowerCase().includes('club laboroteca')
+          )) || (invoice.metadata?.nombreProducto || '').toLowerCase() === 'el club laboroteca';
 
         if (email && esClub) {
-          await firestore.collection('renovacionesClub').add({
-            email,
-            fecha: new Date().toISOString(),
-            evento: 'renovacion-club',
-            stripeInvoiceId: invoice.id,
-            importe: invoice.amount_paid / 100
-          });
+          const renoRef = firestore.collection('renovacionesClub').doc(invoice.id);
+          if (!(await renoRef.get()).exists) {
+            await renoRef.set({
+              email,
+              fecha: new Date().toISOString(),
+              evento: 'renovacion-club',
+              stripeInvoiceId: invoice.id,
+              importe: invoice.amount_paid / 100
+            });
+          } else {
+            console.log(`⚠️ Renovación club ya registrada para ${invoice.id}`);
+          }
         }
 
         return res.status(200).json({ received: true });

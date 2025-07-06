@@ -27,8 +27,13 @@ async function desactivarMembresiaClub(email, password) {
       headers: { 'Content-Type': 'application/json' }
     });
 
+    // Normalizar mensaje de error de contraseña
     if (!wpResp.data?.ok) {
-      return { ok: false, mensaje: wpResp.data?.mensaje || 'Contraseña incorrecta.' };
+      let msg = wpResp.data?.mensaje || '';
+      if (msg.toLowerCase().includes('contraseña') || msg.toLowerCase().includes('password')) {
+        msg = 'Contraseña incorrecta';
+      }
+      return { ok: false, mensaje: msg || 'Contraseña incorrecta' };
     }
 
     // 🔎 Buscar en Firestore
@@ -103,6 +108,15 @@ async function desactivarMembresiaClub(email, password) {
     return { ok: true };
 
   } catch (error) {
+    // Si el error viene de axios (por ejemplo, 401 desde WordPress), forzar mensaje de contraseña incorrecta
+    if (error.response && error.response.data && typeof error.response.data.mensaje !== 'undefined') {
+      let msg = error.response.data.mensaje || '';
+      if (msg.toLowerCase().includes('contraseña') || msg.toLowerCase().includes('password')) {
+        msg = 'Contraseña incorrecta';
+      }
+      return { ok: false, mensaje: msg || 'Contraseña incorrecta' };
+    }
+
     console.error(`❌ Error global al desactivar membresía de ${email}:`, error.message || error);
     return { ok: false, mensaje: 'Error interno del servidor.' };
   }

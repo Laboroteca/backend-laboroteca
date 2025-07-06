@@ -7,17 +7,37 @@ const { enviarFacturaPorEmail } = require('./email');
 const { subirFactura } = require('./gcs');
 
 module.exports = async function procesarCompra(datos) {
+  // 🔒 Genera un ID único para esta compra (usa Stripe session_id si existe, si no uno propio)
+  const compraId = datos.session_id || datos.sessionId || 
+    (datos.email_autorelleno || datos.email || '').toLowerCase() + 
+    '-' + (datos.nombreProducto || 'producto') + 
+    '-' + (Date.now());
+
+  const docRef = firestore.collection('comprasProcesadas').doc(compraId);
+
+  // 🔴 Si ya existe doc, aborta inmediatamente (idempotente)
+  const yaExiste = await docRef.get();
+  if (yaExiste.exists) {
+    console.warn(`⛔️ [procesarCompra] Proceso abortado por Duplicado para ${compraId}`);
+    return { duplicate: true };
+  }
+  // Marca como procesando
+  await docRef.set({ 
+    compraId,
+    estado: 'procesando',
+    email: datos.email || datos.email_autorelleno || '',
+    fecha: new Date().toISOString()
+  });
+
   try {
     const nombre = datos.nombre || datos.Nombre || '';
     const apellidos = datos.apellidos || datos.Apellidos || '';
-    // 🟦 Log de recepción
     console.log('🚦 [procesarCompra] Recibido:', {
       email_autorelleno: datos.email_autorelleno,
       email: datos.email,
       alias: datos.alias || datos.userAlias || ''
     });
 
-    // 🟧 Limpieza y recogida del email
     let email = (datos.email_autorelleno || datos.email || '').trim().toLowerCase();
 
     // Si el email es inválido, intenta recuperar desde Firestore usando alias
@@ -36,7 +56,6 @@ module.exports = async function procesarCompra(datos) {
       }
     }
 
-    // Validación estricta de email
     if (!email || !email.includes('@')) {
       console.error(`❌ [procesarCompra] Email inválido tras todos los intentos: "${email}"`);
       throw new Error(`❌ Email inválido en procesarCompra: "${email}"`);
@@ -118,9 +137,21 @@ module.exports = async function procesarCompra(datos) {
       console.error('❌ Error enviando email:', emailErr);
     }
 
+    await docRef.update({
+      estado: 'finalizado',
+      facturaGenerada: true,
+      fechaFinal: new Date().toISOString()
+    });
+
     console.log(`✅ Compra procesada con éxito para ${nombre} ${apellidos}`);
     console.timeEnd(`🕒 Compra ${email}`);
+    return { success: true };
+
   } catch (error) {
+    await docRef.update({
+      estado: 'error',
+      errorMsg: error?.message || error
+    });
     console.error('❌ Error en procesarCompra:', error);
     throw error;
   }

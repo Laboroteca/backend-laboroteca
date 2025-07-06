@@ -24,6 +24,14 @@ async function verificarLoginWordPress(email, password) {
     if (!data || typeof data.ok === 'undefined') {
       return { ok: false, mensaje: 'Respuesta inesperada del servidor de WordPress.' };
     }
+    // Normaliza mensaje si incluye "contraseña"
+    if (!data.ok) {
+      let msg = data.mensaje || '';
+      if (msg.toLowerCase().includes('contraseña') || msg.toLowerCase().includes('password')) {
+        msg = 'Contraseña incorrecta';
+      }
+      return { ok: false, mensaje: msg || 'Contraseña incorrecta' };
+    }
 
     return data;
   } catch (e) {
@@ -59,33 +67,40 @@ async function desactivarMembresiaClub(email, password) {
         // Sin hash: verificar contra WordPress
         const wpLogin = await verificarLoginWordPress(email, password);
         if (!wpLogin.ok) {
-          return { ok: false, mensaje: wpLogin.mensaje || 'No se ha podido verificar la contraseña.' };
+          // Forzar mensaje uniforme para frontend
+          let msg = wpLogin.mensaje || '';
+          if (msg.toLowerCase().includes('contraseña') || msg.toLowerCase().includes('password')) {
+            msg = 'Contraseña incorrecta';
+          }
+          return { ok: false, mensaje: msg || 'Contraseña incorrecta' };
         }
         esValida = true;
       } else {
         // Verificar con bcrypt
         if (typeof password !== 'string' || password.length < 6) {
-          return { ok: false, mensaje: 'La contraseña no es válida.' };
+          return { ok: false, mensaje: 'Contraseña incorrecta' };
         }
-
         esValida = await bcrypt.compare(password, hashAlmacenado);
         if (!esValida) {
-          return { ok: false, mensaje: 'La contraseña introducida no es correcta.' };
+          return { ok: false, mensaje: 'Contraseña incorrecta' };
         }
       }
-
       nombre = datos?.nombre || '';
     } else {
       // No existe en Firestore → verificar con WordPress
       const wpLogin = await verificarLoginWordPress(email, password);
       if (!wpLogin.ok) {
-        return { ok: false, mensaje: wpLogin.mensaje || 'El usuario no existe o la contraseña no es válida.' };
+        let msg = wpLogin.mensaje || '';
+        if (msg.toLowerCase().includes('contraseña') || msg.toLowerCase().includes('password')) {
+          msg = 'Contraseña incorrecta';
+        }
+        return { ok: false, mensaje: msg || 'Contraseña incorrecta' };
       }
       esValida = true;
     }
 
     if (!esValida) {
-      return { ok: false, mensaje: 'No se ha podido verificar la contraseña.' };
+      return { ok: false, mensaje: 'Contraseña incorrecta' };
     }
 
     // 🔴 1. Cancelar suscripciones en Stripe

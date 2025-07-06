@@ -38,8 +38,18 @@ async function handleStripeEvent(event) {
 
     if (session.payment_status !== 'paid') return { ignored: true };
 
+    // ⛔️ Refuerzo idempotente: escribir doc en caliente y abortar si ya existe
     const docRef = firestore.collection('comprasProcesadas').doc(sessionId);
-    if ((await docRef.get()).exists) return { duplicate: true };
+    const docSnap = await docRef.get();
+    if (docSnap.exists) return { duplicate: true };
+
+    await docRef.set({
+      sessionId,
+      email: '',
+      producto: '',
+      fecha: new Date().toISOString(),
+      procesando: true
+    });
 
     const m = session.metadata || {};
     const email = m.email_autorelleno || m.email || session.customer_details?.email || '';
@@ -61,6 +71,8 @@ async function handleStripeEvent(event) {
       descripcionProducto: m.descripcionProducto || m.nombreProducto || 'producto_desconocido',
       producto: m.descripcionProducto || m.nombreProducto || 'producto_desconocido'
     };
+
+    let errorProcesando = false;
 
     try {
       await guardarEnGoogleSheets(datosCliente);
@@ -103,15 +115,21 @@ async function handleStripeEvent(event) {
         }
       }
     } catch (error) {
+      errorProcesando = true;
       console.error('❌ Error en flujo checkout.session.completed:', error?.message);
+      await docRef.update({
+        error: true,
+        errorMsg: error?.message || error
+      });
       throw error;
     } finally {
-      await docRef.set({
-        sessionId,
+      await docRef.update({
         email,
         producto: datosCliente.producto,
         fecha: new Date().toISOString(),
-        facturaGenerada: true
+        procesando: false,
+        facturaGenerada: !errorProcesando,
+        error: !!errorProcesando
       });
     }
 

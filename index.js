@@ -126,7 +126,7 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
         quantity: 1
       }],
       metadata: {
-        nombre, apellidos, email, dni, direccion, ciudad, provincia, cp,
+        nombre, apellidos, email, email_autorelleno: email, dni, direccion, ciudad, provincia, cp,
         tipoProducto, nombreProducto: producto.nombre,
         descripcionProducto: producto.descripcion
       },
@@ -137,7 +137,7 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
     return res.json({ url: session.url });
 
   } catch (error) {
-    console.error('❌ Error Stripe (crear-sesion-pago):', error);
+    console.error('❌ Error Stripe (crear-sesion-pago):', error.message);
     return res.status(500).json({ error: 'Error al crear la sesión de pago' });
   }
 });
@@ -165,6 +165,11 @@ app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
     return res.status(400).json({ error: 'Faltan campos obligatorios o producto no disponible.' });
   }
 
+  if (!/^[^@]+@[^@]+\.[^@]+$/.test(email)) {
+    console.warn('❌ Email inválido antes de Stripe:', email);
+    return res.status(400).json({ error: 'Email inválido' });
+  }
+
   const emailValido = await verificarEmailEnWordPress(email);
   if (!emailValido) return res.status(403).json({ error: 'Este email no está registrado.' });
 
@@ -186,7 +191,7 @@ app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
         quantity: 1
       }],
       metadata: {
-        nombre, apellidos, email, dni, direccion, ciudad, provincia, cp,
+        nombre, apellidos, email, email_autorelleno: email, dni, direccion, ciudad, provincia, cp,
         tipoProducto, nombreProducto: producto.nombre,
         descripcionProducto: producto.descripcion
       },
@@ -197,7 +202,7 @@ app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
     return res.json({ url: session.url });
 
   } catch (error) {
-    console.error('❌ Error Stripe (crear-suscripcion-club):', error);
+    console.error('❌ Error Stripe (crear-suscripcion-club):', error.message);
     return res.status(500).json({ error: 'Error al crear la suscripción' });
   }
 });
@@ -211,7 +216,7 @@ app.post('/activar-membresia-club', async (req, res) => {
     await syncMemberpressClub({ email, accion: 'activar' });
     return res.json({ ok: true });
   } catch (error) {
-    console.error('❌ Error activar membresía:', error);
+    console.error('❌ Error activar membresía:', error.message);
     return res.status(500).json({ error: 'Error al activar la membresía' });
   }
 });
@@ -237,7 +242,7 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), async (req, res) => {
       return res.status(400).json({ cancelada: false, mensaje: resultado.mensaje || 'No se pudo cancelar la suscripción.' });
     }
   } catch (error) {
-    console.error('❌ Error al cancelar suscripción:', error);
+    console.error('❌ Error al cancelar suscripción:', error.message);
     return res.status(500).json({ cancelada: false, mensaje: 'Error interno del servidor.' });
   }
 });
@@ -258,16 +263,16 @@ app.post('/crear-portal-cliente', async (req, res) => {
     return res.json({ url: session.url });
 
   } catch (error) {
-    console.error('❌ Error creando portal cliente Stripe:', error);
+    console.error('❌ Error creando portal cliente Stripe:', error.message);
     return res.status(500).json({ error: 'No se pudo crear el portal de cliente Stripe' });
   }
 });
 
 process.on('uncaughtException', err => {
-  console.error('💥 uncaughtException:', err);
+  console.error('💥 uncaughtException:', err.message);
 });
 process.on('unhandledRejection', err => {
-  console.error('💥 unhandledRejection:', err);
+  console.error('💥 unhandledRejection:', err.message);
 });
 
 const PORT = process.env.PORT || 3000;

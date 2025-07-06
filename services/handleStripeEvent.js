@@ -124,7 +124,7 @@ async function handleStripeEvent(event) {
         console.error('❌ Error enviando email con factura:', err?.message);
       }
 
-      // --- LOG justo antes de activar membresía Club
+      // --- Activar membresía CLUB (suscripción)
       if (memberpressId === 10663) {
         console.log('🟦 Activando membresía CLUB para:', email, 'ID:', memberpressId);
         await syncMemberpressClub({
@@ -137,28 +137,24 @@ async function handleStripeEvent(event) {
         console.log('✅ Club Laboroteca ACTIVADO en MemberPress y Firestore para', email);
       }
 
-      // --- LOG justo antes de activar membresía Libro (solo si fue subscription)
+      // --- Activar membresía LIBRO (solo no recurrente)
       if (memberpressId === 7994) {
         console.log('🟨 Activando membresía LIBRO para:', email, 'ID:', memberpressId);
-        if ((session.mode || '').toLowerCase() === 'subscription') {
-          const resultLibro = await syncMemberpressLibro({
-            email,
-            accion: 'activar',
-            membership_id: memberpressId,
-            importe: datosCliente.importe
-          });
-          console.log('📗 Respuesta MemberPressLibro:', resultLibro);
-        } else {
-          console.log('🟨 No se crea suscripción periódica para el LIBRO (modo pago único).');
-        }
+        const resultLibro = await syncMemberpressLibro({
+          email,
+          accion: 'activar',
+          membership_id: memberpressId,
+          importe: datosCliente.importe
+        });
+        console.log('📗 Respuesta MemberPressLibro:', resultLibro);
       }
 
-      // --- LOG si no detecta ningún producto
+      // --- Producto no reconocido
       if (!memberpressId) {
         console.log('🟥 No se detecta MemberPress ID para este producto:', productoSlug, rawNombreProducto);
       }
 
-      // Marcar cupón como usado (si existe)
+      // --- Marcar cupón como usado (si aplica)
       if (m.codigoDescuento) {
         try {
           const raw = await fs.readFile(RUTA_CUPONES, 'utf8');

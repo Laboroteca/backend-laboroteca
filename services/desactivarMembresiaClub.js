@@ -1,16 +1,14 @@
-// services/desactivarMembresiaClub.js
-
 const admin = require('../firebase');
 const firestore = admin.firestore();
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-const bcrypt = require('bcryptjs');
+const axios = require('axios');
 
 const { enviarConfirmacionBajaClub } = require('./email');
 const { syncMemberpressClub } = require('./syncMemberpressClub');
 
 /**
  * Desactiva la membresía del Club Laboroteca para un usuario dado.
- * Verifica la contraseña y, si es correcta, desactiva en Stripe, Firestore y MemberPress.
+ * Verifica la contraseña real en WordPress y, si es correcta, desactiva en Stripe, Firestore y MemberPress.
  * @param {string} email - Email del usuario
  * @param {string} password - Contraseña para verificar identidad
  * @returns {Promise<{ok: boolean, mensaje?: string}>}
@@ -21,6 +19,19 @@ async function desactivarMembresiaClub(email, password) {
   }
 
   try {
+    // 🔐 Verificar login contra WordPress
+    const wpResp = await axios.post('https://www.laboroteca.es/wp-json/laboroteca/v1/verificar-login', {
+      email,
+      password
+    }, {
+      headers: { 'Content-Type': 'application/json' }
+    });
+
+    if (!wpResp.data?.verificado) {
+      return { ok: false, mensaje: wpResp.data?.mensaje || 'Contraseña incorrecta.' };
+    }
+
+    // 🔎 Buscar en Firestore
     const ref = firestore.collection('usuariosClub').doc(email);
     const doc = await ref.get();
 
@@ -29,17 +40,6 @@ async function desactivarMembresiaClub(email, password) {
     }
 
     const datos = doc.data();
-    const hashAlmacenado = datos?.passwordHash;
-
-    if (!hashAlmacenado) {
-      return { ok: false, mensaje: 'No se ha configurado una contraseña.' };
-    }
-
-    const esValida = await bcrypt.compare(password, hashAlmacenado);
-    if (!esValida) {
-      return { ok: false, mensaje: 'La contraseña no es correcta.' };
-    }
-
     const nombre = datos?.nombre || '';
 
     // 🔴 1. Cancelar suscripciones activas en Stripe

@@ -80,7 +80,8 @@ async function desactivarMembresiaClub(email, password) {
     try {
       await syncMemberpressClub({
         email,
-        accion: 'desactivar'
+        accion: 'desactivar',
+        membership_id: 10663 // ✅ ID fijo del Club Laboroteca
       });
       console.log(`🧩 MemberPress desactivado para ${email}`);
     } catch (errMP) {

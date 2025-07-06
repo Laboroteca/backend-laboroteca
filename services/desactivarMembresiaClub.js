@@ -61,7 +61,7 @@ async function desactivarMembresiaClub(email, password) {
         });
 
         for (const sub of subsActivas.data) {
-          await stripe.subscriptions.cancel(sub.id);
+          await stripe.subscriptions.cancel(sub.id, { invoice_now: false, prorate: false });
           console.log(`🛑 Stripe: suscripción ${sub.id} cancelada para ${email}`);
         }
       }

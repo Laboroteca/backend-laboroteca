@@ -33,15 +33,27 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
   }
 
   try {
-    let result;
     // --- CLAVE: Cada webhook Stripe lleva un event.id ÚNICO. Usamos ese id para bloquear duplicados ---
     const eventId = event.id;
     const processedRef = firestore.collection('stripeWebhookProcesados').doc(eventId);
-    if ((await processedRef.get()).exists) {
+
+    const alreadyProcessed = await firestore.runTransaction(async (transaction) => {
+      const doc = await transaction.get(processedRef);
+      if (doc.exists) return true; // Ya procesado
+
+      transaction.set(processedRef, {
+        type: event.type,
+        fecha: new Date().toISOString()
+      });
+      return false;
+    });
+
+    if (alreadyProcessed) {
       console.warn(`⛔️ [WEBHOOK] Evento duplicado ignorado: ${eventId}`);
       return res.status(200).json({ received: true, duplicate: true });
     }
-    await processedRef.set({ type: event.type, fecha: new Date().toISOString() });
+
+    let result;
 
     switch (event.type) {
       case 'checkout.session.completed': {
@@ -60,7 +72,8 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           nombreProducto === 'el club laboroteca'
         ) {
           const actRef = firestore.collection('clubActivaciones').doc(email);
-          if (!(await actRef.get()).exists) {
+          const actDoc = await actRef.get();
+          if (!actDoc.exists) {
             await syncMemberpressClub({
               email,
               accion: 'activar',
@@ -96,7 +109,8 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           nombreProducto.includes('club laboroteca')
         ) {
           const bajaRef = firestore.collection('clubBajas').doc(email);
-          if (!(await bajaRef.get()).exists) {
+          const bajaDoc = await bajaRef.get();
+          if (!bajaDoc.exists) {
             await syncMemberpressClub({
               email,
               accion: 'desactivar',
@@ -126,7 +140,8 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
 
         if (email && esClub) {
           const renoRef = firestore.collection('renovacionesClub').doc(invoice.id);
-          if (!(await renoRef.get()).exists) {
+          const renoDoc = await renoRef.get();
+          if (!renoDoc.exists) {
             await renoRef.set({
               email,
               fecha: new Date().toISOString(),

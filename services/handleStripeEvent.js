@@ -31,25 +31,31 @@ function plantillaImpago(n, nombre, link) {
 async function handleStripeEvent(event) {
   const type = event.type;
 
-  // CHECKOUT SESSION COMPLETED
+  // CHECKOUT SESSION COMPLETED - Proceso idempotente
   if (type === 'checkout.session.completed') {
     const session = event.data.object;
     const sessionId = session.id;
 
     if (session.payment_status !== 'paid') return { ignored: true };
 
-    // ⛔️ Refuerzo idempotente: escribir doc en caliente y abortar si ya existe
     const docRef = firestore.collection('comprasProcesadas').doc(sessionId);
-    const docSnap = await docRef.get();
-    if (docSnap.exists) return { duplicate: true };
 
-    await docRef.set({
-      sessionId,
-      email: '',
-      producto: '',
-      fecha: new Date().toISOString(),
-      procesando: true
+    const procesado = await firestore.runTransaction(async (transaction) => {
+      const doc = await transaction.get(docRef);
+      if (doc.exists) return true;
+      transaction.set(docRef, {
+        sessionId,
+        email: '',
+        producto: '',
+        fecha: new Date().toISOString(),
+        procesando: true,
+        error: false,
+        facturaGenerada: false
+      });
+      return false;
     });
+
+    if (procesado) return { duplicate: true };
 
     const m = session.metadata || {};
     const email = m.email_autorelleno || m.email || session.customer_details?.email || '';

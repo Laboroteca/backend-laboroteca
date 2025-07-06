@@ -24,7 +24,6 @@ async function verificarLoginWordPress(email, password) {
     if (!data || typeof data.ok === 'undefined') {
       return { ok: false, mensaje: 'Respuesta inesperada del servidor de WordPress.' };
     }
-    // Normaliza mensaje si incluye "contraseña"
     if (!data.ok) {
       let msg = data.mensaje || '';
       if (msg.toLowerCase().includes('contraseña') || msg.toLowerCase().includes('password')) {
@@ -67,7 +66,6 @@ async function desactivarMembresiaClub(email, password) {
         // Sin hash: verificar contra WordPress
         const wpLogin = await verificarLoginWordPress(email, password);
         if (!wpLogin.ok) {
-          // Forzar mensaje uniforme para frontend
           let msg = wpLogin.mensaje || '';
           if (msg.toLowerCase().includes('contraseña') || msg.toLowerCase().includes('password')) {
             msg = 'Contraseña incorrecta';
@@ -133,7 +131,17 @@ async function desactivarMembresiaClub(email, password) {
     }
 
     // 🔴 3. Desactivar en MemberPress
-    await syncMemberpressClub({ email, accion: 'desactivar' });
+    try {
+      await syncMemberpressClub({
+        email,
+        accion: 'desactivar',
+        membership_id: 10663 // ID fijo del Club Laboroteca
+      });
+      console.log(`🧩 MemberPress desactivado para ${email}`);
+    } catch (errMP) {
+      console.error(`❌ Error al desactivar en MemberPress:`, errMP.message || errMP);
+      throw errMP;
+    }
 
     // 🔴 4. Email de confirmación
     try {
@@ -150,7 +158,7 @@ async function desactivarMembresiaClub(email, password) {
     return { ok: true };
 
   } catch (error) {
-    console.error(`❌ Error al desactivar membresía de ${email}:`, error.message);
+    console.error(`❌ Error al desactivar membresía de ${email}:`, error.message || error);
     return { ok: false, mensaje: 'Error interno del servidor.' };
   }
 }

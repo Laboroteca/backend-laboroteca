@@ -15,10 +15,18 @@ const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const RUTA_CUPONES = path.join(__dirname, '../data/cupones.json');
 
+// 🔤 Normalizador universal: elimina tildes, guiones, minúsculas y espacios extra
+function normalizarProducto(str) {
+  return (str || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[\s\-]+/g, ' ')
+    .trim();
+}
+
 const MEMBERPRESS_IDS = {
   'el club laboroteca': 10663,
-  'de cara a la jubilacion': 7994,
-  'de-cara-a-la-jubilacion': 7994
+  'de cara a la jubilacion': 7994
 };
 
 async function handleStripeEvent(event) {
@@ -69,11 +77,9 @@ async function handleStripeEvent(event) {
     const name = session.customer_details?.name || `${m.nombre || ''} ${m.apellidos || ''}`.trim();
     const amountTotal = session.amount_total || 0;
 
-    // --- LOG de producto
+    // --- Normaliza nombre de producto para MemberPress (¡SIN TILDES NI GUIONES!)
     const rawNombreProducto = (m.nombreProducto || '').toLowerCase().trim();
-    let productoSlug = rawNombreProducto;
-    if (productoSlug === 'el club laboroteca') productoSlug = 'el club laboroteca';
-    if (productoSlug === 'de cara a la jubilacion' || productoSlug === 'de-cara-a-la-jubilacion') productoSlug = 'de cara a la jubilacion';
+    const productoSlug = normalizarProducto(rawNombreProducto);
     const memberpressId = MEMBERPRESS_IDS[productoSlug];
 
     console.log('🧩 Producto detectado:', {

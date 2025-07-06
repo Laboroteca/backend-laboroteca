@@ -33,6 +33,10 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 
+// ⚠️ EL WEBHOOK DEBE IR PRIMERO y RAW
+app.post('/webhook', require('./routes/webhook'));
+
+// SOLO DESPUÉS LOS BODY PARSER
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -88,8 +92,6 @@ async function verificarEmailEnWordPress(email) {
 app.get('/', (req, res) => {
   res.send('✔️ API de Laboroteca activa');
 });
-
-app.post('/webhook', require('./routes/webhook'));
 
 app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   const datos = req.body;

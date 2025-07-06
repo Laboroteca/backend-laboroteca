@@ -13,22 +13,20 @@ const MEMBERPRESS_CLUB_ID = 10663;
 
 console.log('📦 WEBHOOK CARGADO');
 
-// ✅ Middleware del webhook de Stripe
+// ⚡️ SOLO en este endpoint usamos raw
 router.post('/', express.raw({ type: 'application/json' }), async (req, res) => {
-  // 🚩 LOG DE DEPURACIÓN: CABECERAS Y BODY CRUDO
+  // Log depuración: cabeceras y body crudo (UTF-8)
   try {
     console.log('🛎️ Stripe webhook recibido:', {
       headers: req.headers,
       body: req.body && req.body.length ? req.body.toString('utf8') : '[empty]'
     });
-  } catch (logErr) {
-    // Por si hay error imprimiendo el body
-    console.warn('⚠️ No se pudo loguear el body del webhook:', logErr.message);
-  }
+  } catch (logErr) {}
 
   const sig = req.headers['stripe-signature'];
   let event;
 
+  // Verifica la firma
   try {
     event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
     console.log(`🎯 Webhook verificado: ${event.type}`);
@@ -48,7 +46,6 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           session.metadata?.email_autorelleno ||
           session.metadata?.email ||
           session.customer_details?.email;
-
         const nombreProducto =
           session.metadata?.nombreProducto ||
           session?.display_items?.[0]?.custom?.name;
@@ -70,11 +67,16 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
       case 'customer.subscription.deleted': {
         result = await handleStripeEvent(event);
         const subscription = event.data.object;
-        const customer = await stripe.customers.retrieve(subscription.customer);
-        const email = customer?.email;
+        let email;
+        try {
+          const customer = await stripe.customers.retrieve(subscription.customer);
+          email = customer?.email;
+        } catch (e) {
+          email = null;
+        }
         const nombreProducto =
           subscription.metadata?.nombreProducto ||
-          subscription.items?.data?.[0]?.description;
+          (subscription.items?.data?.[0]?.description || '');
 
         if (
           email &&
@@ -96,12 +98,12 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           invoice.metadata?.email_autorelleno ||
           invoice.metadata?.email ||
           invoice.customer_email ||
-          invoice.customer_details?.email;
+          (invoice.customer_details && invoice.customer_details.email);
 
         const esClub =
-          invoice.lines?.data?.some(line =>
+          (invoice.lines?.data?.some(line =>
             line.description?.toLowerCase().includes('club laboroteca')
-          ) || invoice.metadata?.nombreProducto === 'el-club-laboroteca';
+          )) || invoice.metadata?.nombreProducto === 'el-club-laboroteca';
 
         if (email && esClub) {
           await firestore.collection('renovacionesClub').add({

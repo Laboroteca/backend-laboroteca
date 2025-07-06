@@ -29,7 +29,6 @@ async function handleStripeEvent(event) {
     const sessionId = session.id;
     if (session.payment_status !== 'paid') return { ignored: true };
 
-    // Idempotencia
     const docRef = firestore.collection('comprasProcesadas').doc(sessionId);
     const procesado = await firestore.runTransaction(async (transaction) => {
       const doc = await transaction.get(docRef);
@@ -52,7 +51,6 @@ async function handleStripeEvent(event) {
     const name = session.customer_details?.name || `${m.nombre || ''} ${m.apellidos || ''}`.trim();
     const amountTotal = session.amount_total || 0;
 
-    // --- Detección fiable de producto ---
     const rawNombreProducto = (m.nombreProducto || '').toLowerCase().trim();
     let productoSlug = rawNombreProducto;
     if (productoSlug === 'el club laboroteca') productoSlug = 'el club laboroteca';
@@ -95,7 +93,7 @@ async function handleStripeEvent(event) {
         console.error('❌ Error enviando email con factura:', err?.message);
       }
 
-      // ⚠️ ACTIVACIÓN SIEMPRE: tanto para "subscription" como para compra suelta
+      // Activar membresías SIEMPRE, tanto si es suscripción como compra suelta
       if (memberpressId === 10663) {
         await syncMemberpressClub({
           email,
@@ -105,6 +103,7 @@ async function handleStripeEvent(event) {
         });
         await activarMembresiaClub(email);
       }
+
       if (memberpressId === 7994) {
         await syncMemberpressLibro({
           email,
@@ -114,7 +113,6 @@ async function handleStripeEvent(event) {
         });
       }
 
-      // Lógica de cupones igual:
       if (m.codigoDescuento) {
         try {
           const raw = await fs.readFile(RUTA_CUPONES, 'utf8');
@@ -150,7 +148,6 @@ async function handleStripeEvent(event) {
     return { success: true };
   }
 
-  // Otros eventos Stripe...
   return { ignored: true };
 }
 

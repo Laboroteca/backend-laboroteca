@@ -137,16 +137,20 @@ async function handleStripeEvent(event) {
         console.log('✅ Club Laboroteca ACTIVADO en MemberPress y Firestore para', email);
       }
 
-      // --- LOG justo antes de activar membresía Libro
+      // --- LOG justo antes de activar membresía Libro (solo si fue subscription)
       if (memberpressId === 7994) {
         console.log('🟨 Activando membresía LIBRO para:', email, 'ID:', memberpressId);
-        const resultLibro = await syncMemberpressLibro({
-          email,
-          accion: 'activar',
-          membership_id: memberpressId,
-          importe: datosCliente.importe
-        });
-        console.log('📗 Respuesta MemberPressLibro:', resultLibro);
+        if ((session.mode || '').toLowerCase() === 'subscription') {
+          const resultLibro = await syncMemberpressLibro({
+            email,
+            accion: 'activar',
+            membership_id: memberpressId,
+            importe: datosCliente.importe
+          });
+          console.log('📗 Respuesta MemberPressLibro:', resultLibro);
+        } else {
+          console.log('🟨 No se crea suscripción periódica para el LIBRO (modo pago único).');
+        }
       }
 
       // --- LOG si no detecta ningún producto

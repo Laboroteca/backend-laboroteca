@@ -5,15 +5,16 @@ const Stripe = require('stripe');
 const admin = require('../firebase');
 const handleStripeEvent = require('../services/handleStripeEvent');
 const { syncMemberpressClub } = require('../services/syncMemberpressClub');
+const { syncMemberpressLibro } = require('../services/syncMemberpressLibro'); // Nuevo, crear este servicio igual que el del club
 
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
 const firestore = admin.firestore();
 const MEMBERPRESS_CLUB_ID = 10663;
+const MEMBERPRESS_LIBRO_ID = 7994;
 
 console.log('📦 WEBHOOK CARGADO');
 
-// SOLO aquí usamos express.raw, SOLO para Stripe
 router.post('/', express.raw({ type: 'application/json' }), async (req, res) => {
   try {
     console.log('🛎️ Stripe webhook recibido:', {
@@ -33,14 +34,12 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
   }
 
   try {
-    // --- CLAVE: Cada webhook Stripe lleva un event.id ÚNICO. Usamos ese id para bloquear duplicados ---
     const eventId = event.id;
     const processedRef = firestore.collection('stripeWebhookProcesados').doc(eventId);
 
     const alreadyProcessed = await firestore.runTransaction(async (transaction) => {
       const doc = await transaction.get(processedRef);
-      if (doc.exists) return true; // Ya procesado
-
+      if (doc.exists) return true;
       transaction.set(processedRef, {
         type: event.type,
         fecha: new Date().toISOString()
@@ -66,11 +65,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         const nombreProducto =
           (session.metadata?.nombreProducto || '').toLowerCase();
 
-        // Solo Club Laboroteca, y sólo si no está ya activado (marcar por email+date)
-        if (
-          email &&
-          nombreProducto === 'el club laboroteca'
-        ) {
+        if (email && nombreProducto === 'el club laboroteca') {
           const actRef = firestore.collection('clubActivaciones').doc(email);
           const actDoc = await actRef.get();
           if (!actDoc.exists) {
@@ -82,6 +77,22 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
             await actRef.set({ activado: true, fecha: new Date().toISOString() });
           } else {
             console.log(`⚠️ Club ya activado para ${email}`);
+          }
+        }
+
+        // 🔴 ACTIVAR LIBRO SI SE COMPRA EL LIBRO
+        if (email && nombreProducto === 'de-cara-a-la-jubilacion') {
+          const libroRef = firestore.collection('libroActivaciones').doc(email);
+          const libroDoc = await libroRef.get();
+          if (!libroDoc.exists) {
+            await syncMemberpressLibro({
+              email,
+              accion: 'activar',
+              membership_id: MEMBERPRESS_LIBRO_ID
+            });
+            await libroRef.set({ activado: true, fecha: new Date().toISOString() });
+          } else {
+            console.log(`⚠️ Libro ya activado para ${email}`);
           }
         }
 
@@ -104,10 +115,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           (subscription.metadata?.nombreProducto || '').toLowerCase() ||
           (subscription.items?.data?.[0]?.description || '').toLowerCase();
 
-        if (
-          email &&
-          nombreProducto.includes('club laboroteca')
-        ) {
+        if (email && nombreProducto.includes('club laboroteca')) {
           const bajaRef = firestore.collection('clubBajas').doc(email);
           const bajaDoc = await bajaRef.get();
           if (!bajaDoc.exists) {

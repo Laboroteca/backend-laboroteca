@@ -4,15 +4,15 @@ const API_KEY = 'laboroteca_club_sync_2024supersegura';
 const API_URL = 'https://www.laboroteca.es/wp-json/laboroteca/v1/libro-membership/';
 
 /**
- * Sincroniza la membresía del libro (activar o desactivar).
+ * Sincroniza la membresía del libro en MemberPress (activar o desactivar).
  * @param {Object} params
  * @param {string} params.email - Email del usuario
  * @param {string} params.accion - 'activar' o 'desactivar'
  * @param {number} params.membership_id - ID de la membresía en MemberPress
- * @param {number} [params.importe] - Importe (opcional)
+ * @param {number} [params.importe] - Importe en euros (opcional, por defecto 0.01)
  * @returns {Promise<Object>} - Respuesta del servidor
  */
-async function syncMemberpressLibro({ email, accion, membership_id, importe }) {
+async function syncMemberpressLibro({ email, accion, membership_id, importe = 0.01 }) {
   if (!email || typeof email !== 'string' || !email.includes('@')) {
     throw new Error('❌ Email inválido en syncMemberpressLibro');
   }
@@ -25,10 +25,14 @@ async function syncMemberpressLibro({ email, accion, membership_id, importe }) {
     throw new Error('❌ membership_id debe ser un número entero');
   }
 
-  const payload = { email, accion, membership_id };
-  if (typeof importe === 'number' && !isNaN(importe)) {
-    payload.importe = importe;
-  }
+  const payload = {
+    email,
+    accion,
+    membership_id,
+    importe: typeof importe === 'number' && importe > 0 ? parseFloat(importe.toFixed(2)) : 0.01
+  };
+
+  console.log(`📡 [syncMemberpressLibro] Enviando ${accion} para ${email} (ID: ${membership_id}, Importe: ${payload.importe})`);
 
   const response = await fetch(API_URL, {
     method: 'POST',
@@ -47,10 +51,11 @@ async function syncMemberpressLibro({ email, accion, membership_id, importe }) {
   }
 
   if (!response.ok) {
-    throw new Error(`❌ Error HTTP ${response.status}: ${JSON.stringify(data)}`);
+    console.error(`❌ Error HTTP ${response.status} en syncMemberpressLibro:`, data);
+    throw new Error(`❌ Error en MemberPress Libro: ${JSON.stringify(data)}`);
   }
 
-  console.log(`✅ [MemberPressLibro] ${accion} completado para ${email}`);
+  console.log(`✅ [MemberPressLibro] Acción '${accion}' completada correctamente para ${email}`);
   return data;
 }
 

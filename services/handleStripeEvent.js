@@ -95,12 +95,8 @@ async function handleStripeEvent(event) {
         console.error('❌ Error enviando email con factura:', err?.message);
       }
 
-      // ⚠️ SOLO activar membresía si NO es un checkout en modo "subscription" (es decir, compras sueltas)
-      // Así evitamos la doble alta, porque Stripe gestiona las suscripciones recurrentes
-      const esSubscription = session.mode === 'subscription';
-
-      if (memberpressId === 10663 && !esSubscription) {
-        // Club Laboroteca: solo activar si NO es una suscripción Stripe (ej: compra suelta, cupón, etc)
+      // ⚠️ ACTIVACIÓN SIEMPRE: tanto para "subscription" como para compra suelta
+      if (memberpressId === 10663) {
         await syncMemberpressClub({
           email,
           accion: 'activar',
@@ -109,8 +105,7 @@ async function handleStripeEvent(event) {
         });
         await activarMembresiaClub(email);
       }
-      if (memberpressId === 7994 && !esSubscription) {
-        // Libro vitalicio: solo activar si NO es una suscripción Stripe
+      if (memberpressId === 7994) {
         await syncMemberpressLibro({
           email,
           accion: 'activar',
@@ -155,7 +150,7 @@ async function handleStripeEvent(event) {
     return { success: true };
   }
 
-  // Delega los demás eventos (si tienes lógica, amplía aquí)
+  // Otros eventos Stripe...
   return { ignored: true };
 }
 

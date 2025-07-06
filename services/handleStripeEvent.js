@@ -18,7 +18,7 @@ const RUTA_CUPONES = path.join(__dirname, '../data/cupones.json');
 const MEMBERPRESS_IDS = {
   'el club laboroteca': 10663,
   'de cara a la jubilacion': 7994,
-  'de-cara-a-la-jubilacion': 7994 // Por si acaso algún slug llega así
+  'de-cara-a-la-jubilacion': 7994
 };
 
 async function handleStripeEvent(event) {
@@ -95,14 +95,17 @@ async function handleStripeEvent(event) {
         console.error('❌ Error enviando email con factura:', err?.message);
       }
 
-      // 🔥 ACTIVACIÓN EN MEMBERPRESS SOLO LA CORRECTA:
-      if (memberpressId === 10663) {
-        // Club Laboroteca → SÓLO activar Club
+      // 🔥 ACTIVACIÓN EN MEMBERPRESS SOLO SI NO ES SUSCRIPCIÓN STRIPE:
+      // Si NO es modo suscripción Stripe, activamos manualmente la membresía.
+      const esModoStripeSubscription = session.mode === 'subscription';
+
+      if (memberpressId === 10663 && !esModoStripeSubscription) {
+        // Club Laboroteca → SOLO activar si NO es Stripe subscription
         await syncMemberpressClub({ email, accion: 'activar', membership_id: memberpressId, importe: datosCliente.importe });
         await activarMembresiaClub(email);
       }
-      if (memberpressId === 7994) {
-        // Libro vitalicio → SÓLO activar Libro
+      if (memberpressId === 7994 && !esModoStripeSubscription) {
+        // Libro vitalicio → SOLO activar si NO es Stripe subscription
         await syncMemberpressLibro({ email, accion: 'activar', membership_id: memberpressId, importe: datosCliente.importe });
       }
 

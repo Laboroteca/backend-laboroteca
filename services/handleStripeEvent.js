@@ -69,11 +69,18 @@ async function handleStripeEvent(event) {
     const name = session.customer_details?.name || `${m.nombre || ''} ${m.apellidos || ''}`.trim();
     const amountTotal = session.amount_total || 0;
 
+    // --- LOG de producto
     const rawNombreProducto = (m.nombreProducto || '').toLowerCase().trim();
     let productoSlug = rawNombreProducto;
     if (productoSlug === 'el club laboroteca') productoSlug = 'el club laboroteca';
     if (productoSlug === 'de cara a la jubilacion' || productoSlug === 'de-cara-a-la-jubilacion') productoSlug = 'de cara a la jubilacion';
     const memberpressId = MEMBERPRESS_IDS[productoSlug];
+
+    console.log('🧩 Producto detectado:', {
+      rawNombreProducto,
+      productoSlug,
+      memberpressId
+    });
 
     const datosCliente = {
       nombre: m.nombre || name,
@@ -111,8 +118,9 @@ async function handleStripeEvent(event) {
         console.error('❌ Error enviando email con factura:', err?.message);
       }
 
-      // Activar membresías siempre (tanto suscripciones como compras sueltas)
+      // --- LOG justo antes de activar membresía Club
       if (memberpressId === 10663) {
+        console.log('🟦 Activando membresía CLUB para:', email, 'ID:', memberpressId);
         await syncMemberpressClub({
           email,
           accion: 'activar',
@@ -120,15 +128,24 @@ async function handleStripeEvent(event) {
           importe: datosCliente.importe
         });
         await activarMembresiaClub(email);
+        console.log('✅ Club Laboroteca ACTIVADO en MemberPress y Firestore para', email);
       }
 
+      // --- LOG justo antes de activar membresía Libro
       if (memberpressId === 7994) {
-        await syncMemberpressLibro({
+        console.log('🟨 Activando membresía LIBRO para:', email, 'ID:', memberpressId);
+        const resultLibro = await syncMemberpressLibro({
           email,
           accion: 'activar',
-          // membership_id: memberpressId, // Este parámetro no lo usa el endpoint, pero lo dejamos si quieres traza
+          membership_id: memberpressId,
           importe: datosCliente.importe
         });
+        console.log('📗 Respuesta MemberPressLibro:', resultLibro);
+      }
+
+      // --- LOG si no detecta ningún producto
+      if (!memberpressId) {
+        console.log('🟥 No se detecta MemberPress ID para este producto:', productoSlug, rawNombreProducto);
       }
 
       // Marcar cupón como usado (si existe)

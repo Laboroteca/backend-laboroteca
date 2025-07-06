@@ -6,10 +6,8 @@ const { crearFacturaEnFacturaCity } = require('./facturaCity');
 const { enviarFacturaPorEmail } = require('./email');
 const { subirFactura } = require('./gcs');
 const { activarMembresiaClub } = require('./activarMembresiaClub');
-const desactivarMembresiaClub = require('./desactivarMembresiaClub');
 const { syncMemberpressClub } = require('./syncMemberpressClub');
-const { syncMemberpressLibro } = require('./syncMemberpressLibro'); // <-- NUEVO, crea este servicio igual que el de club, cambiando sólo el ID
-
+const { syncMemberpressLibro } = require('./syncMemberpressLibro');
 const fs = require('fs').promises;
 const path = require('path');
 const Stripe = require('stripe');
@@ -19,7 +17,8 @@ const RUTA_CUPONES = path.join(__dirname, '../data/cupones.json');
 
 const MEMBERPRESS_IDS = {
   'el club laboroteca': 10663,
-  'de-cara-a-la-jubilacion': 7994
+  'de cara a la jubilacion': 7994,
+  'de-cara-a-la-jubilacion': 7994 // Por si acaso algún slug llega así
 };
 
 async function handleStripeEvent(event) {
@@ -28,11 +27,10 @@ async function handleStripeEvent(event) {
   if (type === 'checkout.session.completed') {
     const session = event.data.object;
     const sessionId = session.id;
-
     if (session.payment_status !== 'paid') return { ignored: true };
 
+    // Idempotencia
     const docRef = firestore.collection('comprasProcesadas').doc(sessionId);
-
     const procesado = await firestore.runTransaction(async (transaction) => {
       const doc = await transaction.get(docRef);
       if (doc.exists) return true;
@@ -47,7 +45,6 @@ async function handleStripeEvent(event) {
       });
       return false;
     });
-
     if (procesado) return { duplicate: true };
 
     const m = session.metadata || {};
@@ -55,9 +52,11 @@ async function handleStripeEvent(event) {
     const name = session.customer_details?.name || `${m.nombre || ''} ${m.apellidos || ''}`.trim();
     const amountTotal = session.amount_total || 0;
 
-    // CLAVE: Usar slug para determinar producto
-    const nombreProducto = (m.nombreProducto || '').toLowerCase();
-    const productoSlug = nombreProducto === 'el club laboroteca' ? 'el club laboroteca' : nombreProducto;
+    // --- Detección fiable de producto ---
+    const rawNombreProducto = (m.nombreProducto || '').toLowerCase().trim();
+    let productoSlug = rawNombreProducto;
+    if (productoSlug === 'el club laboroteca') productoSlug = 'el club laboroteca';
+    if (productoSlug === 'de cara a la jubilacion' || productoSlug === 'de-cara-a-la-jubilacion') productoSlug = 'de cara a la jubilacion';
     const memberpressId = MEMBERPRESS_IDS[productoSlug];
 
     const datosCliente = {
@@ -96,19 +95,18 @@ async function handleStripeEvent(event) {
         console.error('❌ Error enviando email con factura:', err?.message);
       }
 
-      // ACTIVACIÓN EN MEMBERPRESS CLUB O LIBRO
-      if (memberpressId) {
-        if (memberpressId === 10663) {
-          // Club
-          await syncMemberpressClub({ email, accion: 'activar', membership_id: memberpressId });
-          await activarMembresiaClub(email);
-        }
-        if (memberpressId === 7994) {
-          // Libro
-          await syncMemberpressLibro({ email, accion: 'activar', membership_id: memberpressId });
-        }
+      // 🔥 ACTIVACIÓN EN MEMBERPRESS SOLO LA CORRECTA:
+      if (memberpressId === 10663) {
+        // Club Laboroteca → SÓLO activar Club
+        await syncMemberpressClub({ email, accion: 'activar', membership_id: memberpressId, importe: datosCliente.importe });
+        await activarMembresiaClub(email);
+      }
+      if (memberpressId === 7994) {
+        // Libro vitalicio → SÓLO activar Libro
+        await syncMemberpressLibro({ email, accion: 'activar', membership_id: memberpressId, importe: datosCliente.importe });
       }
 
+      // Lógica de cupones igual:
       if (m.codigoDescuento) {
         try {
           const raw = await fs.readFile(RUTA_CUPONES, 'utf8');
@@ -144,11 +142,7 @@ async function handleStripeEvent(event) {
     return { success: true };
   }
 
-  // El resto igual que tenías antes...
-
-  // INVOICE PAYMENT FAILED...
-  // customer.subscription.deleted...
-  // etc...
+  // El resto igual...
 
   return { ignored: true };
 }

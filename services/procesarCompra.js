@@ -7,22 +7,19 @@ const { enviarFacturaPorEmail } = require('./email');
 const { subirFactura } = require('./gcs');
 
 module.exports = async function procesarCompra(datos) {
-  // Generar ID único para la compra: preferiblemente session_id de Stripe, si no fallback
   const compraId = datos.session_id || datos.sessionId ||
     (datos.email_autorelleno || datos.email || '').toLowerCase() + '-' +
     (datos.nombreProducto || 'producto') + '-' +
     (Date.now());
 
   const docRef = firestore.collection('comprasProcesadas').doc(compraId);
-
-  // Abortamos si ya está procesado (idempotencia estricta)
   const docSnap = await docRef.get();
+
   if (docSnap.exists) {
     console.warn(`⛔️ [procesarCompra] Abortando proceso por duplicado: ${compraId}`);
     return { duplicate: true };
   }
 
-  // Marcamos como procesando para bloquear otras ejecuciones concurrentes
   await docRef.set({
     compraId,
     estado: 'procesando',
@@ -33,15 +30,8 @@ module.exports = async function procesarCompra(datos) {
   try {
     const nombre = datos.nombre || datos.Nombre || '';
     const apellidos = datos.apellidos || datos.Apellidos || '';
-    console.log('🚦 [procesarCompra] Datos recibidos:', {
-      email_autorelleno: datos.email_autorelleno,
-      email: datos.email,
-      alias: datos.alias || datos.userAlias || ''
-    });
-
     let email = (datos.email_autorelleno || datos.email || '').trim().toLowerCase();
 
-    // Si email inválido, intentamos recuperar por alias en Firestore
     if (!email.includes('@')) {
       const alias = (datos.alias || datos.userAlias || '').trim();
       if (alias) {
@@ -49,10 +39,9 @@ module.exports = async function procesarCompra(datos) {
           const userSnap = await firestore.collection('usuariosClub').doc(alias).get();
           if (userSnap.exists) {
             email = (userSnap.data().email || '').trim().toLowerCase();
-            console.log(`📩 [procesarCompra] Email recuperado por alias "${alias}": ${email}`);
           }
         } catch (err) {
-          console.error(`❌ [procesarCompra] Error accediendo a Firestore para alias "${alias}":`, err);
+          console.error(`❌ Error recuperando email por alias "${alias}":`, err);
         }
       }
     }
@@ -89,27 +78,30 @@ module.exports = async function procesarCompra(datos) {
     console.time(`🕒 Compra ${email}`);
     console.log('📦 [procesarCompra] Datos facturación finales:\n', JSON.stringify(datosCliente, null, 2));
 
-    // Guardar en Google Sheets (intento controlado)
+    // Guardar en Google Sheets
     try {
       console.log('📄 → Guardando en Google Sheets...');
-      await guardarEnGoogleSheets(datosCliente);
+      await guardarEnGoogleSheets({
+        ...datosCliente,
+        importe: `${importe.toFixed(2)} €`
+      });
       console.log('✅ Guardado en Sheets');
     } catch (sheetsErr) {
-      console.error('❌ Error guardando en Google Sheets:', sheetsErr);
+      console.error('❌ Error guardando en Sheets:', sheetsErr);
     }
 
-    // Generar factura PDF
+    // Crear factura PDF
     let pdfBuffer;
     try {
       console.log('🧾 → Generando factura...');
       pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
       console.log(`✅ Factura PDF generada (${pdfBuffer.length} bytes)`);
-    } catch (facturaErr) {
-      console.error('❌ Error generando factura:', facturaErr);
-      throw facturaErr;
+    } catch (err) {
+      console.error('❌ Error al crear factura:', err);
+      throw err;
     }
 
-    // Subir PDF a Google Cloud Storage
+    // Subir a GCS
     try {
       const nombreArchivo = `facturas/${email}/Factura Laboroteca.pdf`;
       console.log('☁️ → Subiendo a GCS:', nombreArchivo);
@@ -120,24 +112,23 @@ module.exports = async function procesarCompra(datos) {
         importe
       });
       console.log('✅ Subido a GCS');
-    } catch (gcsErr) {
-      console.error('❌ Error subiendo a GCS:', gcsErr);
+    } catch (err) {
+      console.error('❌ Error subiendo a GCS:', err);
     }
 
-    // Enviar email con factura (manejo error controlado)
+    // Enviar email
     try {
       console.log('📧 → Enviando email con factura...');
       const resultado = await enviarFacturaPorEmail(datosCliente, pdfBuffer);
       if (resultado === 'OK') {
         console.log('✅ Email enviado');
       } else {
-        console.warn('⚠️ Email enviado con respuesta inesperada:', resultado);
+        console.warn('⚠️ Resultado inesperado del envío de email:', resultado);
       }
-    } catch (emailErr) {
-      console.error('❌ Error enviando email:', emailErr);
+    } catch (err) {
+      console.error('❌ Error enviando email:', err);
     }
 
-    // Marcamos como finalizado con éxito
     await docRef.update({
       estado: 'finalizado',
       facturaGenerada: true,

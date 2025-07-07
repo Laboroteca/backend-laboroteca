@@ -1,12 +1,11 @@
+// routes/webhook.js
+
 const express = require('express');
 const router = express.Router();
 
 const Stripe = require('stripe');
 const admin = require('../firebase');
 const firestore = admin.firestore();
-const { desactivarMembresiaClub } = require('../services/desactivarMembresiaClub');
-const { syncMemberpressClub } = require('../services/syncMemberpressClub');
-const { registrarBajaClub } = require('../services/registrarBajaClub');
 const handleStripeEvent = require('../services/handleStripeEvent');
 
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
@@ -55,35 +54,7 @@ router.post(
         return res.status(200).json({ received: true, duplicate: true });
       }
 
-      // 🎯 GESTIÓN ESPECIAL: Baja por impago
-      if (event.type === 'customer.subscription.deleted') {
-        const subscription = event.data.object;
-        const email = (subscription.metadata?.email || subscription.customer_email || '').toLowerCase().trim();
-
-        if (!email || !email.includes('@')) {
-          console.warn('⚠️ Baja sin email válido:', email);
-          return res.status(200).json({ received: true, ignored: true });
-        }
-
-        try {
-          await desactivarMembresiaClub(email);
-          await syncMemberpressClub({ email, accion: 'desactivar' });
-
-          await registrarBajaClub({
-            email,
-            nombre: '',
-            motivo: 'impago'
-          });
-
-          console.log(`✅ Baja por impago registrada correctamente para ${email}`);
-        } catch (err) {
-          console.error('❌ Error al procesar baja por impago:', err.message);
-        }
-
-        return res.status(200).json({ received: true });
-      }
-
-      // 🧠 Otras gestiones delegadas a handler central
+      // 🧠 Delegar gestión al handler central
       const result = await handleStripeEvent(event);
       return res.status(200).json({ received: true, ...result });
 

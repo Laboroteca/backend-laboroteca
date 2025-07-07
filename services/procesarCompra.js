@@ -2,7 +2,6 @@ const admin = require('../firebase');
 const firestore = admin.firestore();
 
 const { crearFacturaEnFacturaCity } = require('./facturaCity');
-const { guardarEnGoogleSheets } = require('./googleSheets');
 const { enviarFacturaPorEmail } = require('./email');
 const { subirFactura } = require('./gcs');
 
@@ -77,18 +76,6 @@ module.exports = async function procesarCompra(datos) {
 
     console.time(`🕒 Compra ${email}`);
     console.log('📦 [procesarCompra] Datos facturación finales:\n', JSON.stringify(datosCliente, null, 2));
-
-    // Guardar en Google Sheets
-    try {
-      console.log('📄 → Guardando en Google Sheets...');
-      await guardarEnGoogleSheets({
-        ...datosCliente,
-        importe: `${importe.toFixed(2)} €`
-      });
-      console.log('✅ Guardado en Sheets');
-    } catch (sheetsErr) {
-      console.error('❌ Error guardando en Sheets:', sheetsErr);
-    }
 
     // Crear factura PDF
     let pdfBuffer;

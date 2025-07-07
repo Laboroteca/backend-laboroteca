@@ -1,3 +1,5 @@
+// /services/googleSheets.js
+
 const { google } = require('googleapis');
 
 const credentialsBase64 = process.env.GCP_CREDENTIALS_BASE64;
@@ -19,15 +21,16 @@ async function guardarEnGoogleSheets(datos) {
     const client = await auth.getClient();
     const sheets = google.sheets({ version: 'v4', auth: client });
 
-    const now = new Date().toLocaleString('es-ES');
-    const email = datos.email_autorelleno || datos.email || '';
+    const now = new Date().toLocaleString('es-ES', { timeZone: 'Europe/Madrid' });
+
+    const email = (datos.email || '').trim().toLowerCase();
 
     const fila = [
       datos.nombre || '',
       datos.apellidos || '',
       datos.dni || '',
       datos.descripcionProducto || datos.nombreProducto || '',
-      datos.importe || '',
+      typeof datos.importe === 'number' ? datos.importe.toFixed(2) : '',
       now,
       email,
       datos.direccion || '',
@@ -45,6 +48,8 @@ async function guardarEnGoogleSheets(datos) {
         values: [fila],
       },
     });
+
+    console.log(`✅ Compra registrada en Sheets para ${email}`);
   } catch (error) {
     console.error('❌ Error al guardar en Google Sheets:', error);
     throw error;

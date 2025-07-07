@@ -1,5 +1,3 @@
-// services/syncMemberpressClub.js
-
 const fetch = require('node-fetch');
 
 const API_KEY = 'laboroteca_club_sync_2024supersegura';
@@ -15,7 +13,6 @@ const API_URL = 'https://www.laboroteca.es/wp-json/laboroteca/v1/club-membership
  * @returns {Promise<Object>} - Respuesta del servidor
  */
 async function syncMemberpressClub({ email, accion, membership_id, importe = 0.01 }) {
-  // Validaciones básicas
   if (!email || typeof email !== 'string' || !email.includes('@')) {
     throw new Error('❌ Email inválido en syncMemberpressClub');
   }
@@ -26,7 +23,6 @@ async function syncMemberpressClub({ email, accion, membership_id, importe = 0.0
     throw new Error('❌ membership_id debe ser un número entero');
   }
 
-  // Construcción de payload
   const payload = {
     email,
     accion,
@@ -56,12 +52,10 @@ async function syncMemberpressClub({ email, accion, membership_id, importe = 0.0
     }
 
     if (!response.ok) {
-      // Extrae error con detalle si lo hay
       const errorMsg = (data && data.error) ? data.error : response.statusText;
       throw new Error(`❌ Error HTTP ${response.status} en syncMemberpressClub: ${errorMsg}`);
     }
 
-    // Todo OK
     console.log(`✅ [MemberPress] Acción '${accion}' completada para ${email}:`, data);
     return data;
 

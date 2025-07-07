@@ -10,13 +10,30 @@ async function enviarEmailPersonalizado({ to, subject, html, text, pdfBuffer = n
   const destinatarios = Array.isArray(to) ? [...to] : [to];
   if (enviarACopy) destinatarios.push('laboroteca@gmail.com');
 
+  const pieHtml = `
+    <hr style="margin-top: 40px; margin-bottom: 10px;" />
+    <div style="font-size: 12px; color: #777; line-height: 1.5;">
+      En cumplimiento del Reglamento (UE) 2016/679, le informamos que su dirección de correo electrónico forma parte de la base de datos de Ignacio Solsona Fernández-Pedrera, DNI 20481042W, con domicilio en calle Enmedio nº 22, piso 3, puerta E, Castellón de la Plana, CP 12001.<br /><br />
+      Su dirección se utiliza con la finalidad de prestarle servicios jurídicos. Usted tiene derecho a retirar su consentimiento en cualquier momento.<br /><br />
+      Puede ejercer sus derechos de acceso, rectificación, supresión, portabilidad, limitación y oposición contactando con: ignacio.solsona@icacs.com. También puede presentar una reclamación ante la autoridad de control competente.
+    </div>
+  `;
+
+  const pieText = `
+------------------------------------------------------------
+En cumplimiento del Reglamento (UE) 2016/679 (RGPD), su email forma parte de la base de datos de Ignacio Solsona Fernández-Pedrera, DNI 20481042W, con domicilio en calle Enmedio nº 22, piso 3, puerta E, Castellón de la Plana, CP 12001.
+
+Puede ejercer sus derechos en: ignacio.solsona@icacs.com
+También puede reclamar ante la autoridad de control si lo considera necesario.
+  `;
+
   const body = {
     api_key: process.env.SMTP2GO_API_KEY,
     to: destinatarios,
     sender: `"Laboroteca" <${process.env.SMTP2GO_FROM_EMAIL}>`,
     subject,
-    html_body: html,
-    text_body: text
+    html_body: html + pieHtml,
+    text_body: text + '\n\n' + pieText
   };
 
   if (pdfBuffer && Buffer.isBuffer(pdfBuffer) && pdfBuffer.length > 5000) {
@@ -54,11 +71,27 @@ async function enviarEmailPersonalizado({ to, subject, html, text, pdfBuffer = n
 async function enviarFacturaPorEmail(datos, pdfBuffer) {
   const importeTexto = datos.importe ? `${Number(datos.importe).toFixed(2)} €` : 'importe no disponible';
   const nombre = datos.nombre || '';
+  const producto = (datos.producto || '').toLowerCase();
 
-  return enviarEmailPersonalizado({
-    to: datos.email,
-    subject: 'Factura de tu compra en Laboroteca',
-    html: `
+  const esClub = producto.includes('club laboroteca');
+
+  const subject = esClub
+    ? 'Factura mensual de tu suscripción al Club Laboroteca'
+    : 'Factura de tu compra en Laboroteca';
+
+  const html = esClub
+    ? `
+      <div style="font-family: Arial, sans-serif; font-size: 16px; color: #333;">
+        <p>Estimado miembro del Club Laboroteca,</p>
+        <p>Adjuntamos a este correo la factura correspondiente a tu suscripción mensual.</p>
+        <p>Importe: <strong>${importeTexto}</strong></p>
+        <p>Muchas gracias por pertenecer al Club Laboroteca.</p>
+        <p>Puedes acceder a todas las novedades desde:<br>
+        <a href="https://www.laboroteca.es/club-laboroteca/">https://www.laboroteca.es/club-laboroteca/</a></p>
+        <p>Un saludo,<br>Ignacio Solsona<br>Abogado</p>
+      </div>
+    `
+    : `
       <div style="font-family: Arial, sans-serif; font-size: 16px; color: #333;">
         <p>Hola ${nombre},</p>
         <p>Gracias por tu compra. Adjuntamos en este correo la factura correspondiente al producto:</p>
@@ -66,16 +99,22 @@ async function enviarFacturaPorEmail(datos, pdfBuffer) {
         <p>Importe: <strong>${importeTexto}</strong></p>
         <p>Puedes acceder a tu contenido desde <a href="https://laboroteca.es/mi-cuenta">www.laboroteca.es/mi-cuenta</a></p>
         <p>Un afectuoso saludo,<br>Ignacio Solsona</p>
-        <hr style="margin-top: 40px; margin-bottom: 10px;" />
-        <div style="font-size: 12px; color: #777; line-height: 1.5;">
-          En cumplimiento del Reglamento (UE) 2016/679, le informamos que su dirección de correo electrónico forma parte de la base de datos de Ignacio Solsona Fernández-Pedrera, DNI 20481042W, con domicilio en calle Enmedio nº 22, piso 3, puerta E, Castellón de la Plana, CP 12001.<br /><br />
-          Su dirección se utiliza con la finalidad de prestarle servicios jurídicos. Usted tiene derecho a retirar su consentimiento en cualquier momento.<br /><br />
-          Puede ejercer sus derechos de acceso, rectificación, supresión, portabilidad, limitación y oposición contactando con: ignacio.solsona@icacs.com. También puede presentar una reclamación ante la autoridad de control competente.
-        </div>
       </div>
-    `,
-    text: `
-Hola ${nombre},
+    `;
+
+  const text = esClub
+    ? `Estimado miembro del Club Laboroteca,
+
+Adjuntamos a este correo la factura correspondiente a tu suscripción mensual.
+Importe: ${importeTexto}
+
+Muchas gracias por pertenecer al Club Laboroteca.
+Puedes acceder a todas las novedades desde: https://www.laboroteca.es/club-laboroteca/
+
+Un saludo,
+Ignacio Solsona
+Abogado`
+    : `Hola ${nombre},
 
 Gracias por tu compra. Adjuntamos en este correo la factura correspondiente al producto:
 - ${datos.producto}
@@ -84,40 +123,53 @@ Gracias por tu compra. Adjuntamos en este correo la factura correspondiente al p
 Puedes acceder a tu contenido desde: https://laboroteca.es/mi-cuenta
 
 Un afectuoso saludo,
-Ignacio Solsona
+Ignacio Solsona`;
 
-------------------------------------------------------------
-En cumplimiento del Reglamento (UE) 2016/679 (RGPD), su email forma parte de la base de datos de Ignacio Solsona Fernández-Pedrera, DNI 20481042W, con domicilio en calle Enmedio nº 22, piso 3, puerta E, Castellón de la Plana, CP 12001.
-
-Puede ejercer sus derechos en: ignacio.solsona@icacs.com
-También puede reclamar ante la autoridad de control si lo considera necesario.
-    `.trim(),
+  return enviarEmailPersonalizado({
+    to: datos.email,
+    subject,
+    html,
+    text,
     pdfBuffer
   });
 }
 
-// ✅ AVISO DE IMPAGO
+// ✅ AVISO DE IMPAGO (hasta 3 intentos)
 async function enviarAvisoImpago(email, nombre, intento, enlacePago) {
   let subject, html, text;
 
   if (intento === 1) {
     subject = 'Primer aviso: fallo en el cobro de tu suscripción Club Laboroteca';
     html = `
-      <p>Estimado/a ${nombre},</p>
-      <p>Tu pago de la membresía Club Laboroteca no se ha podido procesar. Lo intentaremos de nuevo en 2 días.</p>
-      <p>Si quieres, puedes actualizar tu método de pago aquí:<br>
-      <a href="${enlacePago}">${enlacePago}</a></p>
+      <p>Hola ${nombre},</p>
+      <p>Tu pago de la membresía del Club Laboroteca no se ha podido procesar. Lo intentaremos de nuevo en 3 días.</p>
+      <p>Puedes actualizar tu método de pago aquí:<br><a href="${enlacePago}">${enlacePago}</a></p>
     `;
-    text = `Estimado/a ${nombre},\n\nTu pago no se ha podido procesar. Lo intentaremos de nuevo en 2 días.\nActualizar método de pago: ${enlacePago}`;
-  } else {
-    subject = 'Segundo aviso: fallo en el cobro de tu suscripción Club Laboroteca';
+    text = `Hola ${nombre},\n\nTu pago no se ha podido procesar. Lo intentaremos de nuevo en 3 días.\nActualizar método de pago: ${enlacePago}`;
+  } else if (intento === 2) {
+    subject = 'Segundo aviso: segundo intento de cobro fallido';
     html = `
-      <p>Estimado/a ${nombre},</p>
-      <p>Segundo intento de cobro fallido. Si el próximo pago falla, lamentamos decirte que tendremos que cancelar tu suscripción.</p>
-      <p>Si quieres, puedes actualizar tu método de pago aquí:<br>
-      <a href="${enlacePago}">${enlacePago}</a></p>
+      <p>Hola ${nombre},</p>
+      <p>Seguimos sin poder procesar tu suscripción al Club Laboroteca. Queda un último intento antes de que se cancele automáticamente.</p>
+      <p>Actualiza tu método de pago aquí:<br><a href="${enlacePago}">${enlacePago}</a></p>
     `;
-    text = `Estimado/a ${nombre},\n\nSegundo intento fallido. Si el próximo pago falla, se cancelará tu suscripción.\nActualizar método de pago: ${enlacePago}`;
+    text = `Hola ${nombre},\n\nSeguimos sin poder cobrar tu suscripción. Queda un último intento antes de cancelarse.\nActualizar método de pago: ${enlacePago}`;
+  } else if (intento === 3) {
+    subject = 'Último aviso: último intento antes de la cancelación';
+    html = `
+      <p>Hola ${nombre},</p>
+      <p>Este es el último intento para cobrar tu suscripción al Club Laboroteca. Si vuelve a fallar, se cancelará automáticamente.</p>
+      <p>Aún estás a tiempo de evitarlo:<br><a href="${enlacePago}">${enlacePago}</a></p>
+    `;
+    text = `Hola ${nombre},\n\nÚltimo intento para cobrar tu suscripción. Si falla, se cancelará automáticamente.\nActualizar método de pago: ${enlacePago}`;
+  } else {
+    subject = 'Fallo de pago en tu suscripción Club Laboroteca';
+    html = `
+      <p>Hola ${nombre},</p>
+      <p>Se ha producido un fallo en el cobro de tu suscripción al Club Laboroteca.</p>
+      <p>Puedes revisar tu método de pago aquí:<br><a href="${enlacePago}">${enlacePago}</a></p>
+    `;
+    text = `Hola ${nombre},\n\nFallo en el cobro de tu suscripción.\nActualizar método de pago: ${enlacePago}`;
   }
 
   return enviarEmailPersonalizado({ to: email, subject, html, text });
@@ -127,12 +179,11 @@ async function enviarAvisoImpago(email, nombre, intento, enlacePago) {
 async function enviarAvisoCancelacion(email, nombre, enlacePago) {
   const subject = 'Tu suscripción Club Laboroteca ha sido cancelada por impago';
   const html = `
-    <p>Estimado/a ${nombre},</p>
+    <p>Hola ${nombre},</p>
     <p>Tu suscripción ha sido cancelada por impago. Puedes reactivarla en cualquier momento.</p>
-    <p>Enlace para reactivación:<br>
-    <a href="${enlacePago}">${enlacePago}</a></p>
+    <p>Enlace para reactivación:<br><a href="${enlacePago}">${enlacePago}</a></p>
   `;
-  const text = `Estimado/a ${nombre},\n\nTu suscripción ha sido cancelada por impago. Puedes reactivarla en cualquier momento.\nEnlace: ${enlacePago}`;
+  const text = `Hola ${nombre},\n\nTu suscripción ha sido cancelada por impago. Puedes reactivarla en cualquier momento.\nEnlace: ${enlacePago}`;
 
   return enviarEmailPersonalizado({
     to: [email],
@@ -148,20 +199,11 @@ async function enviarConfirmacionBajaClub(email, nombre = '') {
   const subject = 'Confirmación de baja del Club Laboroteca';
   const html = `
     <p>Hola ${nombre},</p>
-    <p>Te confirmamos que se ha cursado correctamente tu baja del <strong>Club Laboroteca</strong>.</p>
+    <p><strong>Te confirmamos que se ha cursado correctamente tu baja del Club Laboroteca</strong>.</p>
     <p>Puedes volver a hacerte miembro en cualquier momento, por el mismo precio y sin compromiso de permanencia.</p>
     <p>Un saludo,<br>Laboroteca</p>
   `;
-  const text = `
-Hola ${nombre},
-
-Te confirmamos que se ha cursado correctamente tu baja del Club Laboroteca.
-
-Puedes volver a hacerte miembro en cualquier momento, por el mismo precio y sin compromiso de permanencia.
-
-Un saludo,
-Laboroteca
-  `.trim();
+  const text = `Hola ${nombre},\n\nTe confirmamos que se ha cursado correctamente tu baja del Club Laboroteca.\n\nPuedes volver a hacerte miembro en cualquier momento, por el mismo precio y sin compromiso de permanencia.\n\nUn saludo,\nLaboroteca`;
 
   return enviarEmailPersonalizado({
     to: [email],

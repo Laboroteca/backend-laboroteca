@@ -21,6 +21,7 @@ const procesarCompra = require('./services/procesarCompra');
 const { activarMembresiaClub } = require('./services/activarMembresiaClub');
 const { syncMemberpressClub } = require('./services/syncMemberpressClub');
 const desactivarMembresiaClub = require('./services/desactivarMembresiaClub');
+const { registrarBajaClub } = require('./services/registrarBajaClub'); // 🆕 REGISTRO EN SHEETS
 
 const app = express();
 app.set('trust proxy', 1);
@@ -34,7 +35,7 @@ const corsOptions = {
 app.use(cors(corsOptions));
 
 // ⚠️ WEBHOOK: SIEMPRE EL PRIMERO Y EN RAW
-app.use('/webhook', require('./routes/webhook')); // No poner .post aquí
+app.use('/webhook', require('./routes/webhook'));
 
 // DESPUÉS DEL WEBHOOK, LOS BODY PARSERS
 app.use(express.json());
@@ -87,17 +88,12 @@ async function verificarEmailEnWordPress(email) {
   return true;
 }
 
-// ✅ Rutas
-
 app.get('/', (req, res) => {
   res.send('✔️ API de Laboroteca activa');
 });
 
-// FLUJO PAGO ÚNICO (LIBRO, CURSO, ETC.)
 app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   const datos = req.body;
-
-  // Siempre priorizamos el email oculto (autorrelleno)
   const email = (typeof datos.email_autorelleno === 'string' && datos.email_autorelleno.includes('@'))
     ? datos.email_autorelleno.trim().toLowerCase()
     : (typeof datos.email === 'string' && datos.email.includes('@') ? datos.email.trim().toLowerCase() : '');
@@ -111,7 +107,6 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   const cp = datos.cp || '';
   const tipoProducto = datos.tipoProducto || '';
   const nombreProducto = datos.nombreProducto || '';
-
   const key = normalizarProducto(nombreProducto);
   const producto = PRODUCTOS[key];
 
@@ -119,7 +114,6 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
     return res.status(400).json({ error: 'Faltan campos obligatorios o producto no disponible.' });
   }
 
-  // El login previo ya garantiza el email, pero añadimos validación extra
   if (!/^[^@]+@[^@]+\.[^@]+$/.test(email)) {
     console.warn('❌ Email inválido antes de Stripe:', email);
     return res.status(400).json({ error: 'Email inválido' });
@@ -162,10 +156,8 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   }
 });
 
-// FLUJO SUSCRIPCIÓN CLUB
 app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
   const datos = req.body;
-
   const email = (typeof datos.email_autorelleno === 'string' && datos.email_autorelleno.includes('@'))
     ? datos.email_autorelleno.trim().toLowerCase()
     : (typeof datos.email === 'string' && datos.email.includes('@') ? datos.email.trim().toLowerCase() : '');
@@ -179,7 +171,6 @@ app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
   const cp = datos.cp || '';
   const tipoProducto = datos.tipoProducto || '';
   const nombreProducto = datos.nombreProducto || '';
-
   const key = normalizarProducto(nombreProducto);
   const producto = PRODUCTOS[key];
 
@@ -256,6 +247,15 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), async (req, res) => {
     return res.status(400).json({ cancelada: false, mensaje: 'Faltan datos obligatorios' });
   }
 
+  // 🟨 REGISTRO EN SHEETS
+  registrarBajaClub({
+    email,
+    nombre: '', // Puedes completarlo más adelante
+    motivo: 'baja voluntaria'
+  }).catch((e) => {
+    console.warn('⚠️ No se pudo registrar la baja en Sheets:', e.message);
+  });
+
   try {
     const resultado = await desactivarMembresiaClub(email, password);
     if (resultado.ok) {
@@ -301,3 +301,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Backend funcionando en http://localhost:${PORT}`);
 });
+

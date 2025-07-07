@@ -3,11 +3,12 @@ const firestore = admin.firestore();
 
 const { guardarEnGoogleSheets } = require('./googleSheets');
 const { crearFacturaEnFacturaCity } = require('./facturaCity');
-const { enviarFacturaPorEmail } = require('./email');
+const { enviarFacturaPorEmail, enviarAvisoImpago, enviarAvisoCancelacion } = require('./email');
 const { subirFactura } = require('./gcs');
 const { activarMembresiaClub } = require('./activarMembresiaClub');
 const { syncMemberpressClub } = require('./syncMemberpressClub');
 const { syncMemberpressLibro } = require('./syncMemberpressLibro');
+const { registrarBajaClub } = require('./registrarBajaClub');
 const fs = require('fs').promises;
 const path = require('path');
 const Stripe = require('stripe');
@@ -18,8 +19,8 @@ const RUTA_CUPONES = path.join(__dirname, '../data/cupones.json');
 function normalizarProducto(str) {
   return (str || '')
     .toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/[\s\-]+/g, ' ')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
     .trim();
 }
 
@@ -29,9 +30,116 @@ const MEMBERPRESS_IDS = {
 };
 
 async function handleStripeEvent(event) {
-  if (event.type !== 'checkout.session.completed') {
-    return { ignored: true };
+  // 🟥 INTENTO FALLIDO DE COBRO
+  if (event.type === 'invoice.payment_failed') {
+    const invoice = event.data.object;
+    const email = (
+      invoice.customer_email ||
+      invoice.customer_details?.email ||
+      invoice.subscription_details?.metadata?.email ||
+      invoice.metadata?.email
+    )?.toLowerCase().trim();
+
+    const intento = invoice.attempt_count || 1;
+    const nombre = invoice.customer_details?.name || '';
+    const enlacePago = 'https://www.laboroteca.es/gestion-pago-club/';
+
+    if (email && intento >= 1 && intento <= 3) {
+      try {
+        console.log(`⚠️ Intento de cobro fallido (${intento}) para:`, email);
+        await enviarAvisoImpago(email, nombre, intento, enlacePago);
+      } catch (err) {
+        console.error('❌ Error al enviar aviso de impago:', err?.message);
+      }
+    } else if (!email) {
+      console.warn('⚠️ No se pudo extraer email para aviso de impago');
+    } else {
+      console.log(`ℹ️ Intento de cobro fallido (${intento}) ignorado (fuera de rango)`);
+    }
+    return { warning: true };
   }
+
+  // ✅ COBRO DE RENOVACIÓN CLUB
+  if (event.type === 'invoice.paid') {
+    const invoice = event.data.object;
+    const subscriptionId = invoice.subscription;
+    const email = (
+      invoice.customer_email ||
+      invoice.customer_details?.email ||
+      invoice.subscription_details?.metadata?.email ||
+      invoice.metadata?.email
+    )?.toLowerCase().trim();
+
+    const nombre = invoice.customer_details?.name || '';
+    const importe = parseFloat((invoice.amount_paid / 100).toFixed(2));
+
+    if (email && importe === 4.99) {
+      try {
+        console.log('💰 Renovación mensual pagada - Club Laboroteca:', email);
+
+        const datosCliente = {
+          nombre,
+          apellidos: '',
+          dni: '',
+          email,
+          direccion: '',
+          ciudad: '',
+          provincia: '',
+          cp: '',
+          importe,
+          tipoProducto: 'Renovación Club',
+          nombreProducto: 'el club laboroteca',
+          descripcionProducto: 'Suscripción mensual al Club Laboroteca',
+          producto: 'club_laboroteca_renovacion'
+        };
+
+        await guardarEnGoogleSheets(datosCliente);
+        const pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
+
+        const nombreArchivo = `facturas/${email}/${Date.now()}-club-renovacion.pdf`;
+        await subirFactura(nombreArchivo, pdfBuffer, {
+          email,
+          nombreProducto: 'el club laboroteca',
+          tipoProducto: 'Renovación Club',
+          importe
+        });
+
+        await enviarFacturaPorEmail(datosCliente, pdfBuffer);
+      } catch (err) {
+        console.error('❌ Error en factura de renovación:', err?.message);
+      }
+    }
+    return { success: true, renovacion: true };
+  }
+
+  // ❌ CANCELACIÓN POR IMPAGO
+  if (event.type === 'customer.subscription.deleted') {
+    const subscription = event.data.object;
+    const email = (
+      subscription.metadata?.email ||
+      subscription.customer_email ||
+      subscription.customer_details?.email
+    )?.toLowerCase().trim();
+
+    const nombre = subscription.customer_details?.name || '';
+    const enlacePago = 'https://www.laboroteca.es/gestion-pago-club/';
+
+    if (email) {
+      try {
+        console.log('❌ Suscripción cancelada por impago:', email);
+        await registrarBajaClub({ email, motivo: 'impago' });
+        await enviarAvisoCancelacion(email, nombre, enlacePago);
+      } catch (err) {
+        console.error('❌ Error al registrar baja por impago:', err?.message);
+      }
+    } else {
+      console.warn('⚠️ No se pudo extraer email en cancelación por impago');
+    }
+    return { success: true, baja: true };
+  }
+
+  // 🟩 NUEVA COMPRA
+  if (event.type !== 'checkout.session.completed') return { ignored: true };
 
   const session = event.data.object;
   const sessionId = session.id;
@@ -114,37 +222,19 @@ async function handleStripeEvent(event) {
       console.error('❌ Error al enviar factura por email:', err?.message);
     }
 
-    // 🎯 Activar CLUB (membresía recurrente)
     if (memberpressId === 10663) {
-      console.log('🟦 Activando CLUB para', email);
-      await syncMemberpressClub({
-        email,
-        accion: 'activar',
-        membership_id: memberpressId,
-        importe: datosCliente.importe
-      });
+      await syncMemberpressClub({ email, accion: 'activar', membership_id: memberpressId, importe: datosCliente.importe });
       await activarMembresiaClub(email);
-      console.log('✅ CLUB activado para', email);
     }
 
-    // 📘 Activar LIBRO (transacción no recurrente)
     if (memberpressId === 7994) {
-      console.log('🟨 Activando LIBRO para', email);
-      const result = await syncMemberpressLibro({
-        email,
-        accion: 'activar',
-        membership_id: memberpressId,
-        importe: datosCliente.importe
-      });
-      console.log('📗 Resultado libro:', result);
+      await syncMemberpressLibro({ email, accion: 'activar', membership_id: memberpressId, importe: datosCliente.importe });
     }
 
-    // ❓ Producto no reconocido
     if (!memberpressId) {
-      console.log('🟥 Producto desconocido:', productoSlug, rawNombreProducto);
+      console.warn('⚠️ Producto desconocido:', productoSlug);
     }
 
-    // 🎟 Marcar cupón como usado (si procede)
     if (m.codigoDescuento) {
       try {
         const raw = await fs.readFile(RUTA_CUPONES, 'utf8');

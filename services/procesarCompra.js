@@ -6,10 +6,11 @@ const { enviarFacturaPorEmail } = require('./email');
 const { subirFactura } = require('./gcs');
 
 module.exports = async function procesarCompra(datos) {
-  const compraId = datos.session_id || datos.sessionId ||
-    (datos.email_autorelleno || datos.email || '').toLowerCase() + '-' +
-    (datos.nombreProducto || 'producto') + '-' +
-    (Date.now());
+  const sessionId = datos.session_id || datos.sessionId || null;
+
+  const emailCrudo = (datos.email_autorelleno || datos.email || '').toLowerCase().trim();
+  const productoCrudo = (datos.nombreProducto || 'producto').toLowerCase().trim();
+  const compraId = sessionId || `${emailCrudo}-${productoCrudo}`;
 
   const docRef = firestore.collection('comprasProcesadas').doc(compraId);
   const docSnap = await docRef.get();
@@ -22,14 +23,14 @@ module.exports = async function procesarCompra(datos) {
   await docRef.set({
     compraId,
     estado: 'procesando',
-    email: datos.email || datos.email_autorelleno || '',
+    email: emailCrudo || '',
     fechaInicio: new Date().toISOString()
   });
 
   try {
     const nombre = datos.nombre || datos.Nombre || '';
     const apellidos = datos.apellidos || datos.Apellidos || '';
-    let email = (datos.email_autorelleno || datos.email || '').trim().toLowerCase();
+    let email = emailCrudo;
 
     if (!email.includes('@')) {
       const alias = (datos.alias || datos.userAlias || '').trim();

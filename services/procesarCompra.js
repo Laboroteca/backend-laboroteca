@@ -1,16 +1,18 @@
 const admin = require('../firebase');
 const firestore = admin.firestore();
+const crypto = require('crypto');
 
 const { crearFacturaEnFacturaCity } = require('./facturaCity');
 const { enviarFacturaPorEmail } = require('./email');
 const { subirFactura } = require('./gcs');
 
 module.exports = async function procesarCompra(datos) {
-  const sessionId = datos.session_id || datos.sessionId || null;
+  let email = (datos.email_autorelleno || datos.email || '').trim().toLowerCase();
+  const producto = (datos.nombreProducto || 'producto').trim().toLowerCase();
 
-  const emailCrudo = (datos.email_autorelleno || datos.email || '').toLowerCase().trim();
-  const productoCrudo = (datos.nombreProducto || 'producto').toLowerCase().trim();
-  const compraId = sessionId || `${emailCrudo}-${productoCrudo}`;
+  // Crear ID único determinista basado en email y producto
+  const hash = crypto.createHash('md5').update(`${email}-${producto}`).digest('hex');
+  const compraId = `compra-${hash}`;
 
   const docRef = firestore.collection('comprasProcesadas').doc(compraId);
   const docSnap = await docRef.get();
@@ -23,14 +25,13 @@ module.exports = async function procesarCompra(datos) {
   await docRef.set({
     compraId,
     estado: 'procesando',
-    email: emailCrudo || '',
+    email,
     fechaInicio: new Date().toISOString()
   });
 
   try {
     const nombre = datos.nombre || datos.Nombre || '';
     const apellidos = datos.apellidos || datos.Apellidos || '';
-    let email = emailCrudo;
 
     if (!email.includes('@')) {
       const alias = (datos.alias || datos.userAlias || '').trim();
@@ -55,7 +56,6 @@ module.exports = async function procesarCompra(datos) {
     const ciudad = datos.ciudad || datos['Municipio'] || '';
     const provincia = datos.provincia || datos['Provincia'] || '';
     const cp = datos.cp || datos['Código postal'] || '';
-    const producto = datos.nombreProducto || 'producto_desconocido';
     const descripcionProducto = datos.descripcionProducto || '';
     const tipoProducto = datos.tipoProducto || 'Otro';
     const importe = parseFloat((datos.importe || '22.90').toString().replace(',', '.'));

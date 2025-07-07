@@ -1,5 +1,3 @@
-// /services/googleSheets.js
-
 const { google } = require('googleapis');
 
 const credentialsBase64 = process.env.GCP_CREDENTIALS_BASE64;
@@ -30,7 +28,9 @@ async function guardarEnGoogleSheets(datos) {
       datos.apellidos || '',
       datos.dni || '',
       datos.descripcionProducto || datos.nombreProducto || '',
-      typeof datos.importe === 'number' ? datos.importe.toFixed(2) : '',
+      typeof datos.importe === 'number'
+        ? `${datos.importe.toFixed(2)} €`
+        : (datos.importe || ''),
       now,
       email,
       datos.direccion || '',

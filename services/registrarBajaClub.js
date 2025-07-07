@@ -1,4 +1,4 @@
-const { google } = require('googleapis');
+const { google } = require('googleapis'); 
 
 // Validar credenciales
 const credentialsBase64 = process.env.GCP_CREDENTIALS_BASE64;
@@ -64,7 +64,7 @@ async function registrarBajaClub({ email, nombre = '', motivo = 'desconocido' })
       requestBody: { values: [fila] }
     });
 
-    console.log(`📉 Baja registrada en Sheets: ${email} (${motivo})`);
+console.log(`📉 Baja registrada en Sheets: ${email} (${motivo})`);
 
   } catch (error) {
     console.error('❌ Error al registrar baja en Sheets:', error.message);

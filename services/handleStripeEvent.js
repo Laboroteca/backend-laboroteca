@@ -19,7 +19,10 @@ const RUTA_CUPONES = path.join(__dirname, '../data/cupones.json');
 function normalizarProducto(str) {
   return (str || '')
     .toLowerCase()
-    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/suscripcion mensual a el club laboroteca.*$/i, 'club laboroteca')
+    .replace(/suscripcion mensual al club laboroteca.*$/i, 'club laboroteca')
+    .replace(/el club laboroteca.*$/i, 'club laboroteca')
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
 }
@@ -84,8 +87,8 @@ async function handleStripeEvent(event) {
           importe,
           tipoProducto: 'Renovación Club',
           nombreProducto: 'el club laboroteca',
-          descripcionProducto: 'Suscripción mensual al Club Laboroteca',
-          producto: 'club_laboroteca_renovacion'
+          descripcionProducto: 'suscripcion mensual a el club laboroteca acceso a contenido exclusivo',
+          producto: 'club laboroteca'
         };
 
         await guardarEnGoogleSheets(datosCliente);
@@ -174,8 +177,8 @@ async function handleStripeEvent(event) {
   const productoSlug = amountTotal === 499 ? 'el club laboroteca' : normalizarProducto(rawNombreProducto);
   const memberpressId = MEMBERPRESS_IDS[productoSlug];
 
-  const descripcionNormalizada = normalizarProducto(m.descripcionProducto || rawNombreProducto);
-  const productoNormalizado = descripcionNormalizada;
+  const descripcionProducto = 'suscripcion mensual a el club laboroteca acceso a contenido exclusivo';
+  const productoNormalizado = normalizarProducto(descripcionProducto);
 
   const datosCliente = {
     nombre: m.nombre || name,
@@ -189,7 +192,7 @@ async function handleStripeEvent(event) {
     importe: parseFloat((amountTotal / 100).toFixed(2)),
     tipoProducto: m.tipoProducto || 'Otro',
     nombreProducto: productoSlug,
-    descripcionProducto: descripcionNormalizada,
+    descripcionProducto,
     producto: productoNormalizado
   };
 

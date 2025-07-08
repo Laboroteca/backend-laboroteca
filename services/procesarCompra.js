@@ -22,9 +22,10 @@ module.exports = async function procesarCompra(datos) {
   let email = (datos.email_autorelleno || datos.email || '').trim().toLowerCase();
   let rawProducto = (datos.nombreProducto || 'producto').trim();
 
-  let importe = parseFloat((datos.importe || '22.90').toString().replace(',', '.'));
+  // 🧮 Importe en coma o punto
+  let importe = parseFloat((datos.importe || '22,90').toString().replace(',', '.'));
 
-  // 💡 Si es 4.99€, asumimos que es el Club
+  // 💡 Si es 4,99€ asumimos que es el Club y forzamos nombre estándar
   if (importe === 4.99) {
     rawProducto = 'el club laboroteca';
   }

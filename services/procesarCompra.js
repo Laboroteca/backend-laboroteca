@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const { crearFacturaEnFacturaCity } = require('./facturaCity');
 const { enviarFacturaPorEmail } = require('./email');
 const { subirFactura } = require('./gcs');
+const { guardarEnGoogleSheets } = require('./googleSheets');
 
 // 🔧 Normalización consistente
 function normalizarProducto(str) {
@@ -140,6 +141,14 @@ module.exports = async function procesarCompra(datos) {
       }
     } catch (err) {
       console.error('❌ Error enviando email:', err);
+    }
+
+    // 4. Registrar en Google Sheets (evita duplicados internamente)
+    try {
+      console.log('📝 → Registrando en Google Sheets...');
+      await guardarEnGoogleSheets(datosCliente);
+    } catch (err) {
+      console.error('❌ Error al registrar en Google Sheets:', err);
     }
 
     await docRef.update({

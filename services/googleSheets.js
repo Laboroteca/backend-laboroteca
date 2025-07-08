@@ -15,14 +15,6 @@ const auth = new google.auth.GoogleAuth({
 const spreadsheetId = '1ShSiaz_TtODbVkczI1mfqTBj5nHb3xSEywyB0E6BL9I';
 const HOJA = 'Hoja 1';
 
-// 🧽 Normalización de texto para comparación robusta
-const normalizarTexto = str =>
-  (str || '')
-    .toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
-
 async function guardarEnGoogleSheets(datos) {
   try {
     const client = await auth.getClient();
@@ -31,10 +23,18 @@ async function guardarEnGoogleSheets(datos) {
     const now = new Date();
     const nowString = now.toLocaleString('es-ES', { timeZone: 'Europe/Madrid' });
     const email = (datos.email || '').trim().toLowerCase();
-    const descripcion = datos.descripcionProducto || datos.nombreProducto || 'Producto Laboroteca';
     const importe = typeof datos.importe === 'number'
       ? `${datos.importe.toFixed(2)} €`
       : (datos.importe || '');
+
+    // 🧠 Descripción condicional para el Club Laboroteca
+    const normalizado = (datos.nombreProducto || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    let descripcion;
+    if (normalizado.includes('club laboroteca')) {
+      descripcion = 'Suscripción El Club Laboroteca';
+    } else {
+      descripcion = datos.descripcionProducto || datos.tipoProducto || datos.nombreProducto || 'Producto Laboroteca';
+    }
 
     // Leer filas existentes
     const res = await sheets.spreadsheets.values.get({
@@ -48,7 +48,7 @@ async function guardarEnGoogleSheets(datos) {
       const [,, , desc, imp, fecha, em] = fila;
       return (
         (em || '').toLowerCase() === email &&
-        normalizarTexto(desc) === normalizarTexto(descripcion) &&
+        (desc || '').trim() === descripcion.trim() &&
         (imp || '') === importe &&
         (fecha || '').slice(0, 16) === nowString.slice(0, 16)
       );

@@ -10,7 +10,10 @@ const { subirFactura } = require('./gcs');
 function normalizarProducto(str) {
   return (str || '')
     .toLowerCase()
-    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // quitar tildes
+    .replace(/suscripcion mensual a el club laboroteca.*$/i, 'club laboroteca')
+    .replace(/suscripcion mensual al club laboroteca.*$/i, 'club laboroteca')
+    .replace(/el club laboroteca.*$/i, 'club laboroteca')
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
 }

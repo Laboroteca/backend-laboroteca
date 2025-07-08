@@ -81,8 +81,8 @@ module.exports = async function procesarCompra(datos) {
     const provincia = datos.provincia || datos['Provincia'] || '';
     const cp = datos.cp || datos['Código postal'] || '';
 
-    // 📌 Siempre usamos la descripción larga como descripción oficial
-    const descripcionProducto = 'suscripcion mensual a el club laboroteca acceso a contenido exclusivo';
+    // 📝 Descripción real del producto
+    const descripcionProducto = datos.descripcionProducto || rawProducto || 'Producto Laboroteca';
     const tipoProducto = datos.tipoProducto || 'Otro';
 
     const datosCliente = {
@@ -96,7 +96,7 @@ module.exports = async function procesarCompra(datos) {
       cp,
       provincia,
       producto,
-      nombreProducto: producto,
+      nombreProducto: rawProducto,
       descripcionProducto,
       tipoProducto
     };

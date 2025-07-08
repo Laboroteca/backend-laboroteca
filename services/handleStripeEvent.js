@@ -87,7 +87,7 @@ async function handleStripeEvent(event) {
           importe,
           tipoProducto: 'Renovación Club',
           nombreProducto: 'el club laboroteca',
-          descripcionProducto: 'suscripcion mensual a el club laboroteca acceso a contenido exclusivo',
+          descripcionProducto: 'Suscripción mensual al Club Laboroteca',
           producto: 'club laboroteca'
         };
 
@@ -177,7 +177,7 @@ async function handleStripeEvent(event) {
   const productoSlug = amountTotal === 499 ? 'el club laboroteca' : normalizarProducto(rawNombreProducto);
   const memberpressId = MEMBERPRESS_IDS[productoSlug];
 
-  const descripcionProducto = 'suscripcion mensual a el club laboroteca acceso a contenido exclusivo';
+  const descripcionProducto = m.descripcionProducto || rawNombreProducto || 'Producto Laboroteca';
   const productoNormalizado = normalizarProducto(descripcionProducto);
 
   const datosCliente = {
@@ -191,7 +191,7 @@ async function handleStripeEvent(event) {
     cp: m.cp || '',
     importe: parseFloat((amountTotal / 100).toFixed(2)),
     tipoProducto: m.tipoProducto || 'Otro',
-    nombreProducto: productoSlug,
+    nombreProducto: rawNombreProducto,
     descripcionProducto,
     producto: productoNormalizado
   };

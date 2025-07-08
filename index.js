@@ -115,7 +115,7 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   const cp = datos.cp || '';
   const tipoProducto = datos.tipoProducto || '';
   const nombreProducto = datos.nombreProducto || '';
-  const key = normalizarProducto(nombreProducto);
+  const key = normalizarProducto(tipoProducto || nombreProducto);
   const producto = PRODUCTOS[key];
 
   if (!producto || !nombre || !email) {
@@ -179,7 +179,7 @@ app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
   const cp = datos.cp || '';
   const tipoProducto = datos.tipoProducto || '';
   const nombreProducto = datos.nombreProducto || '';
-  const key = normalizarProducto(nombreProducto);
+  const key = normalizarProducto(tipoProducto || nombreProducto);
   const producto = PRODUCTOS[key];
 
   if (!producto || !nombre || !email) {

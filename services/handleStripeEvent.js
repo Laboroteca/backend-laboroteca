@@ -30,7 +30,6 @@ const MEMBERPRESS_IDS = {
 };
 
 async function handleStripeEvent(event) {
-  // 🟥 INTENTO FALLIDO DE COBRO
   if (event.type === 'invoice.payment_failed') {
     const invoice = event.data.object;
     const email = (
@@ -51,18 +50,14 @@ async function handleStripeEvent(event) {
       } catch (err) {
         console.error('❌ Error al enviar aviso de impago:', err?.message);
       }
-    } else if (!email) {
-      console.warn('⚠️ No se pudo extraer email para aviso de impago');
     } else {
-      console.log(`ℹ️ Intento de cobro fallido (${intento}) ignorado (fuera de rango)`);
+      console.warn('⚠️ Email no válido o intento fuera de rango');
     }
     return { warning: true };
   }
 
-  // ✅ COBRO DE RENOVACIÓN CLUB
   if (event.type === 'invoice.paid') {
     const invoice = event.data.object;
-    const subscriptionId = invoice.subscription;
     const email = (
       invoice.customer_email ||
       invoice.customer_details?.email ||
@@ -95,8 +90,8 @@ async function handleStripeEvent(event) {
 
         await guardarEnGoogleSheets(datosCliente);
         const pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
-
         const nombreArchivo = `facturas/${email}/${Date.now()}-club-renovacion.pdf`;
+
         await subirFactura(nombreArchivo, pdfBuffer, {
           email,
           nombreProducto: 'el club laboroteca',
@@ -112,7 +107,6 @@ async function handleStripeEvent(event) {
     return { success: true, renovacion: true };
   }
 
-  // ❌ CANCELACIÓN POR IMPAGO
   if (event.type === 'customer.subscription.deleted') {
     const subscription = event.data.object;
     const email = (
@@ -132,19 +126,16 @@ async function handleStripeEvent(event) {
       } catch (err) {
         console.error('❌ Error al registrar baja por impago:', err?.message);
       }
-    } else {
-      console.warn('⚠️ No se pudo extraer email en cancelación por impago');
     }
     return { success: true, baja: true };
   }
 
-  // 🟩 NUEVA COMPRA
   if (event.type !== 'checkout.session.completed') return { ignored: true };
 
   const session = event.data.object;
-  const sessionId = session.id;
   if (session.payment_status !== 'paid') return { ignored: true };
 
+  const sessionId = session.id;
   const docRef = firestore.collection('comprasProcesadas').doc(sessionId);
   const yaProcesado = await firestore.runTransaction(async (tx) => {
     const doc = await tx.get(docRef);
@@ -163,8 +154,6 @@ async function handleStripeEvent(event) {
   if (yaProcesado) return { duplicate: true };
 
   const m = session.metadata || {};
-  console.log('🧐 Stripe metadata recibida:', m);
-
   const email = (
     (m.email_autorelleno && m.email_autorelleno.includes('@') && m.email_autorelleno) ||
     (m.email && m.email.includes('@') && m.email) ||
@@ -180,9 +169,13 @@ async function handleStripeEvent(event) {
 
   const name = session.customer_details?.name || `${m.nombre || ''} ${m.apellidos || ''}`.trim();
   const amountTotal = session.amount_total || 0;
-  const rawNombreProducto = (m.nombreProducto || '').toLowerCase().trim();
-  const productoSlug = normalizarProducto(rawNombreProducto);
+
+  const rawNombreProducto = m.nombreProducto || '';
+  const productoSlug = amountTotal === 499 ? 'el club laboroteca' : normalizarProducto(rawNombreProducto);
   const memberpressId = MEMBERPRESS_IDS[productoSlug];
+
+  const descripcionNormalizada = normalizarProducto(m.descripcionProducto || rawNombreProducto);
+  const productoNormalizado = descripcionNormalizada;
 
   const datosCliente = {
     nombre: m.nombre || name,
@@ -196,11 +189,11 @@ async function handleStripeEvent(event) {
     importe: parseFloat((amountTotal / 100).toFixed(2)),
     tipoProducto: m.tipoProducto || 'Otro',
     nombreProducto: productoSlug,
-    descripcionProducto: m.descripcionProducto || m.nombreProducto || 'producto_desconocido',
-    producto: m.descripcionProducto || m.nombreProducto || 'producto_desconocido'
+    descripcionProducto: descripcionNormalizada,
+    producto: productoNormalizado
   };
 
-  console.log('📦 Procesando producto:', datosCliente.nombreProducto, '-', datosCliente.importe, '€');
+  console.log('📦 Procesando producto:', productoSlug, '-', datosCliente.importe, '€');
 
   let errorProcesando = false;
 
@@ -216,11 +209,7 @@ async function handleStripeEvent(event) {
       importe: datosCliente.importe
     });
 
-    try {
-      await enviarFacturaPorEmail(datosCliente, pdfBuffer);
-    } catch (err) {
-      console.error('❌ Error al enviar factura por email:', err?.message);
-    }
+    await enviarFacturaPorEmail(datosCliente, pdfBuffer);
 
     if (memberpressId === 10663) {
       await syncMemberpressClub({ email, accion: 'activar', membership_id: memberpressId, importe: datosCliente.importe });
@@ -232,7 +221,7 @@ async function handleStripeEvent(event) {
     }
 
     if (!memberpressId) {
-      console.warn('⚠️ Producto desconocido:', productoSlug);
+      console.warn('⚠️ Producto no reconocido en MemberPress:', productoSlug);
     }
 
     if (m.codigoDescuento) {

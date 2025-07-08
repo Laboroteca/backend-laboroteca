@@ -6,11 +6,29 @@ const { crearFacturaEnFacturaCity } = require('./facturaCity');
 const { enviarFacturaPorEmail } = require('./email');
 const { subirFactura } = require('./gcs');
 
+// 🔧 Normalización consistente
+function normalizarProducto(str) {
+  return (str || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
 module.exports = async function procesarCompra(datos) {
   let email = (datos.email_autorelleno || datos.email || '').trim().toLowerCase();
-  const producto = (datos.nombreProducto || 'producto').trim().toLowerCase();
+  let rawProducto = (datos.nombreProducto || 'producto').trim();
 
-  // Crear ID único determinista basado en email y producto
+  let importe = parseFloat((datos.importe || '22.90').toString().replace(',', '.'));
+
+  // 💡 Si es 4.99€, asumimos que es el Club
+  if (importe === 4.99) {
+    rawProducto = 'el club laboroteca';
+  }
+
+  const producto = normalizarProducto(rawProducto);
+
+  // ID único por email + producto
   const hash = crypto.createHash('md5').update(`${email}-${producto}`).digest('hex');
   const compraId = `compra-${hash}`;
 
@@ -33,6 +51,7 @@ module.exports = async function procesarCompra(datos) {
     const nombre = datos.nombre || datos.Nombre || '';
     const apellidos = datos.apellidos || datos.Apellidos || '';
 
+    // 🔍 Buscar email por alias si no es válido
     if (!email.includes('@')) {
       const alias = (datos.alias || datos.userAlias || '').trim();
       if (alias) {
@@ -56,9 +75,8 @@ module.exports = async function procesarCompra(datos) {
     const ciudad = datos.ciudad || datos['Municipio'] || '';
     const provincia = datos.provincia || datos['Provincia'] || '';
     const cp = datos.cp || datos['Código postal'] || '';
-    const descripcionProducto = datos.descripcionProducto || '';
+    const descripcionProducto = datos.descripcionProducto || rawProducto;
     const tipoProducto = datos.tipoProducto || 'Otro';
-    const importe = parseFloat((datos.importe || '22.90').toString().replace(',', '.'));
 
     const datosCliente = {
       nombre,
@@ -71,6 +89,7 @@ module.exports = async function procesarCompra(datos) {
       cp,
       provincia,
       producto,
+      nombreProducto: producto,
       descripcionProducto,
       tipoProducto
     };
@@ -78,7 +97,7 @@ module.exports = async function procesarCompra(datos) {
     console.time(`🕒 Compra ${email}`);
     console.log('📦 [procesarCompra] Datos facturación finales:\n', JSON.stringify(datosCliente, null, 2));
 
-    // Crear factura PDF
+    // 1. Crear factura PDF
     let pdfBuffer;
     try {
       console.log('🧾 → Generando factura...');
@@ -89,7 +108,7 @@ module.exports = async function procesarCompra(datos) {
       throw err;
     }
 
-    // Subir a GCS
+    // 2. Subir a GCS
     try {
       const nombreArchivo = `facturas/${email}/Factura Laboroteca.pdf`;
       console.log('☁️ → Subiendo a GCS:', nombreArchivo);
@@ -104,7 +123,7 @@ module.exports = async function procesarCompra(datos) {
       console.error('❌ Error subiendo a GCS:', err);
     }
 
-    // Enviar email
+    // 3. Enviar email con factura
     try {
       console.log('📧 → Enviando email con factura...');
       const resultado = await enviarFacturaPorEmail(datosCliente, pdfBuffer);

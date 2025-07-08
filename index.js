@@ -71,6 +71,14 @@ const PRODUCTOS = {
     precio: 499,
     imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/06/club-laboroteca-membresia-precio-sin-permanencia.webp',
     descripcion: 'Suscripción mensual a El Club Laboroteca. Acceso a contenido exclusivo.'
+  },
+  'club-test': {
+    nombre: 'Test diario Club Laboroteca',
+    precio: 200,
+    imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/06/club-laboroteca-membresia-precio-sin-permanencia.webp',
+    descripcion: 'Suscripción diaria al Club Laboroteca. Solo para pruebas técnicas.',
+    price_id: 'price_1RiaISEe6Cd77jenOBW7Lk8z', // diario
+    membership_id: 10663
   }
 };
 
@@ -186,23 +194,27 @@ app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
   const emailValido = await verificarEmailEnWordPress(email);
   if (!emailValido) return res.status(403).json({ error: 'Este email no está registrado.' });
 
-  try {
+    try {
+    const line_items = producto.price_id
+      ? [{ price: producto.price_id, quantity: 1 }]
+      : [{
+          price_data: {
+            currency: 'eur',
+            recurring: { interval: 'month' },
+            product_data: {
+              name: producto.nombre,
+              images: [producto.imagen]
+            },
+            unit_amount: producto.precio
+          },
+          quantity: 1
+        }];
+
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
       mode: 'subscription',
       customer_email: email,
-      line_items: [{
-        price_data: {
-          currency: 'eur',
-          recurring: { interval: 'month' },
-          product_data: {
-            name: producto.nombre,
-            images: [producto.imagen]
-          },
-          unit_amount: producto.precio
-        },
-        quantity: 1
-      }],
+      line_items,
       metadata: {
         nombre, apellidos, email, email_autorelleno: email, dni, direccion, ciudad, provincia, cp,
         tipoProducto, nombreProducto: producto.nombre,
@@ -213,11 +225,11 @@ app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
     });
 
     return res.json({ url: session.url });
-
   } catch (error) {
     console.error('❌ Error Stripe (crear-suscripcion-club):', error.message);
     return res.status(500).json({ error: 'Error al crear la suscripción' });
   }
+
 });
 
 app.post('/activar-membresia-club', async (req, res) => {

@@ -64,7 +64,7 @@ router.post('/confirmar-eliminacion', async (req, res) => {
     return res.json({ ok: true });
   } catch (err) {
     console.error('❌ Error al confirmar eliminación:', err);
-    return res.status(500).json({ ok: false, mensaje: 'Error interno chat gpt atontao' });
+    return res.status(500).json({ ok: false, mensaje: 'Error interno del servidor' });
   }
 });
 

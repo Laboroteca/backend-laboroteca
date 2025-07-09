@@ -3,17 +3,16 @@ const fetch = require('node-fetch');
 
 /**
  * Elimina un usuario en WordPress desde su email y contraseña.
- * Requiere un endpoint personalizado con permisos administrativos.
  * @param {string} email
  * @param {string} password
- * @returns {Promise<void>}
+ * @returns {Promise<{ok: boolean, mensaje?: string}>}
  */
 async function eliminarUsuarioWordPress(email, password) {
   if (!email || typeof email !== 'string' || !email.includes('@')) {
-    throw new Error('❌ Email inválido al intentar eliminar usuario');
+    return { ok: false, mensaje: 'Email inválido' };
   }
   if (!password || typeof password !== 'string') {
-    throw new Error('❌ Contraseña no proporcionada');
+    return { ok: false, mensaje: 'Contraseña no proporcionada' };
   }
 
   try {
@@ -29,13 +28,14 @@ async function eliminarUsuarioWordPress(email, password) {
     const data = await res.json();
 
     if (!res.ok || !data.ok) {
-      console.error('❌ Error al eliminar usuario en WP:', data);
-      const msg = data?.error || 'Error al eliminar usuario en WordPress';
-      throw new Error(msg);
+      const msg = data?.mensaje || data?.error || 'Error al eliminar usuario en WordPress';
+      return { ok: false, mensaje: msg };
     }
+
+    return { ok: true };
   } catch (err) {
-    console.error('❌ Error conexión WP:', err);
-    throw err;
+    console.error('❌ Error al conectar con WordPress:', err);
+    return { ok: false, mensaje: 'No se pudo conectar con WordPress' };
   }
 }
 

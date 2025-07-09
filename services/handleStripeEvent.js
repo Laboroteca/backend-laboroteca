@@ -29,6 +29,7 @@ function normalizarProducto(str) {
 
 const MEMBERPRESS_IDS = {
   'el club laboroteca': 10663,
+  'test diario club laboroteca': 10663,
   'de cara a la jubilacion': 7994
 };
 

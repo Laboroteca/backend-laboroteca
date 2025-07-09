@@ -1,9 +1,11 @@
 const admin = require('../firebase');
 const firestore = admin.firestore();
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const fetch = require('node-fetch');
+const axios = require('axios');
+
 const { enviarConfirmacionBajaClub } = require('./email');
 const { syncMemberpressClub } = require('./syncMemberpressClub');
-const fetch = require('node-fetch');
 
 /**
  * Verifica email+password en WordPress (único método, siempre WP)
@@ -31,7 +33,7 @@ async function verificarLoginWordPress(email, password) {
 }
 
 /**
- * Desactiva la membresía del Club Laboroteca para un usuario dado.
+ * Desactiva la membresía del Club Laboroteca y elimina el usuario de WordPress.
  * @param {string} email
  * @param {string} password
  * @returns {Promise<{ok: boolean, mensaje?: string}>}
@@ -105,6 +107,26 @@ async function desactivarMembresiaClub(email, password) {
     console.log(`📩 Email de baja enviado a ${email}`);
   } catch (errEmail) {
     console.error(`❌ Error al enviar email de baja: ${errEmail.message}`);
+  }
+
+  // 6. Eliminar cuenta en WordPress
+  try {
+    const resp = await axios.post('https://www.laboroteca.es/wp-json/laboroteca/v1/eliminar-usuario', {
+      email
+    }, {
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.LABOROTECA_API_KEY
+      }
+    });
+
+    if (resp.data?.ok) {
+      console.log(`🗑️ Usuario eliminado en WordPress: ${email}`);
+    } else {
+      console.warn(`⚠️ Error eliminando usuario en WP:`, resp.data);
+    }
+  } catch (errWP) {
+    console.error(`❌ Error conectando a WP para eliminar usuario:`, errWP.message);
   }
 
   return { ok: true };

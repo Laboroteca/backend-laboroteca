@@ -8,7 +8,7 @@ const { syncMemberpressClub } = require('./syncMemberpressClub');
 
 /**
  * Desactiva la membresía del Club Laboroteca para un usuario dado.
- * Verifica la contraseña real en WordPress y, si es correcta, desactiva en Stripe, Firestore y MemberPress.
+ * Verifica la contraseña real en WordPress y, si es correcta, desactiva en Stripe, Firestore, MemberPress y borra cuenta WP.
  * @param {string} email - Email del usuario
  * @param {string} password - Contraseña para verificar identidad
  * @returns {Promise<{ok: boolean, mensaje?: string}>}
@@ -22,7 +22,7 @@ async function desactivarMembresiaClub(email, password) {
   }
 
   try {
-    // 🔐 Verificar login contra WordPress
+    // 🔐 1. Verificar login contra WordPress
     console.log('[BajaClub] Verificando login en WordPress...');
     const wpResp = await axios.post('https://www.laboroteca.es/wp-json/laboroteca/v1/verificar-login', {
       email,
@@ -31,7 +31,6 @@ async function desactivarMembresiaClub(email, password) {
       headers: { 'Content-Type': 'application/json' }
     });
 
-    // Normalizar mensaje de error de contraseña
     if (!wpResp.data?.ok) {
       let msg = wpResp.data?.mensaje || '';
       if (msg.toLowerCase().includes('contraseña') || msg.toLowerCase().includes('password')) {
@@ -41,7 +40,7 @@ async function desactivarMembresiaClub(email, password) {
       return { ok: false, mensaje: msg || 'Contraseña incorrecta' };
     }
 
-    // 🔎 Buscar en Firestore
+    // 🔍 2. Buscar en Firestore
     const ref = firestore.collection('usuariosClub').doc(email);
     const doc = await ref.get();
 
@@ -53,7 +52,7 @@ async function desactivarMembresiaClub(email, password) {
     const datos = doc.data();
     const nombre = datos?.nombre || '';
 
-    // 🔴 1. Cancelar suscripciones activas en Stripe
+    // 🔴 3. Cancelar suscripciones activas en Stripe
     try {
       const clientes = await stripe.customers.list({ email, limit: 1 });
       if (clientes.data.length === 0) {
@@ -75,7 +74,7 @@ async function desactivarMembresiaClub(email, password) {
       console.error(`❌ Error cancelando suscripción en Stripe:`, errStripe.message);
     }
 
-    // 🔴 2. Marcar como inactivo en Firestore
+    // 🔴 4. Marcar como inactivo en Firestore
     try {
       await ref.set({
         activo: false,
@@ -87,12 +86,12 @@ async function desactivarMembresiaClub(email, password) {
       console.error(`❌ Error actualizando Firestore:`, errFS.message);
     }
 
-    // 🔴 3. Desactivar en MemberPress
+    // 🔴 5. Desactivar en MemberPress
     try {
       const mpResp = await syncMemberpressClub({
         email,
         accion: 'desactivar',
-        membership_id: 10663 // ✅ ID fijo del Club Laboroteca
+        membership_id: 10663 // ID del Club Laboroteca
       });
       console.log(`🧩 MemberPress desactivado para ${email}`, mpResp);
       if (!mpResp.ok) {
@@ -103,7 +102,7 @@ async function desactivarMembresiaClub(email, password) {
       return { ok: false, mensaje: `Error al desactivar en MemberPress: ${errMP.message || errMP}` };
     }
 
-    // 🔴 4. Enviar email de confirmación
+    // 🔴 6. Email de confirmación
     try {
       const resultadoEmail = await enviarConfirmacionBajaClub(email, nombre);
       if (resultadoEmail?.data?.succeeded === 1) {
@@ -115,10 +114,30 @@ async function desactivarMembresiaClub(email, password) {
       console.error(`❌ Error al enviar email de baja:`, errEmail.message);
     }
 
+    // 🔴 7. Eliminar cuenta en WordPress (final)
+    try {
+      const eliminarResp = await axios.post('https://www.laboroteca.es/wp-json/laboroteca/v1/eliminar-usuario', {
+        email
+      }, {
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.LABOROTECA_API_KEY
+        }
+      });
+
+      if (eliminarResp.data?.ok) {
+        console.log(`🗑️ Usuario eliminado en WordPress: ${email}`);
+      } else {
+        console.warn(`⚠️ Error eliminando usuario en WP:`, eliminarResp.data);
+      }
+    } catch (errWP) {
+      console.error(`❌ Error conectando a WP para eliminar usuario:`, errWP.message);
+    }
+
     return { ok: true };
 
   } catch (error) {
-    // Si el error viene de axios (por ejemplo, 401 desde WordPress), forzar mensaje de contraseña incorrecta
+    // Error externo (como 401 desde WP login)
     if (error.response && error.response.data && typeof error.response.data.mensaje !== 'undefined') {
       let msg = error.response.data.mensaje || '';
       if (msg.toLowerCase().includes('contraseña') || msg.toLowerCase().includes('password')) {

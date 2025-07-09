@@ -72,9 +72,14 @@ async function handleStripeEvent(event) {
     const nombre = invoice.customer_details?.name || '';
     const importe = parseFloat((invoice.amount_paid / 100).toFixed(2));
 
-    if (email && importe === 4.99) {
+    const lineas = invoice.lines?.data || [];
+    const productoClub = lineas.find(line =>
+      line.description?.toLowerCase().includes('club laboroteca')
+    );
+
+    if (email && productoClub) {
       try {
-        console.log('💰 Renovación mensual pagada - Club Laboroteca:', email);
+        console.log('💰 Renovación pagada - Club Laboroteca:', email, '-', importe, '€');
 
         const datosCliente = {
           nombre,

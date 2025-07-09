@@ -33,23 +33,24 @@ router.post('/confirmar-eliminacion', async (req, res) => {
       return res.status(410).json({ ok: false, mensaje: 'El enlace ha caducado.' });
     }
 
-    // ✅ Primero desactivar membresía
+    // ✅ Desactivar membresía (si aplica)
     await desactivarMembresiaClub(email);
 
-    // 🔐 Intentamos eliminar usuario en WordPress (verifica la contraseña)
-    const resultado = await eliminarUsuarioWordPress(email, password);
-
-    if (!resultado.ok) {
-      return res.status(401).json({ ok: false, mensaje: resultado.mensaje || 'Contraseña incorrecta' });
+    // 🔐 Eliminar en WordPress (verifica contraseña)
+    try {
+      await eliminarUsuarioWordPress(email, password);
+    } catch (err) {
+      console.error('❌ Error eliminando usuario en WP:', err.message);
+      return res.status(401).json({ ok: false, mensaje: err.message || 'Contraseña incorrecta' });
     }
 
     // 🧹 Borrar datos en Firestore
     await borrarDatosUsuarioFirestore(email);
 
-    // 🔒 Borrar el token usado
+    // 🔒 Eliminar token usado
     await ref.delete();
 
-    // 📩 Email de confirmación
+    // 📩 Enviar confirmación
     await enviarEmailPersonalizado({
       to: email,
       subject: 'Cuenta eliminada con éxito',
@@ -64,7 +65,7 @@ router.post('/confirmar-eliminacion', async (req, res) => {
     return res.json({ ok: true });
   } catch (err) {
     console.error('❌ Error al confirmar eliminación:', err);
-    return res.status(500).json({ ok: false, mensaje: 'Error interno del servidor' });
+    return res.status(500).json({ ok: false, mensaje: 'Error interno del servidor.' });
   }
 });
 

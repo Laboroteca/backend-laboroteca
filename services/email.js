@@ -15,7 +15,7 @@ async function enviarEmailPersonalizado({ to, subject, html, text, pdfBuffer = n
     <div style="font-size: 12px; color: #777; line-height: 1.5;">
       En cumplimiento del Reglamento (UE) 2016/679, le informamos que su dirección de correo electrónico forma parte de la base de datos de Ignacio Solsona Fernández-Pedrera, DNI 20481042W, con domicilio en calle Enmedio nº 22, piso 3, puerta E, Castellón de la Plana, CP 12001.<br /><br />
       Su dirección se utiliza con la finalidad de prestarle servicios jurídicos. Usted tiene derecho a retirar su consentimiento en cualquier momento.<br /><br />
-      Puede ejercer sus derechos de acceso, rectificación, supresión, portabilidad, limitación y oposición contactando con: ignacio.solsona@icacs.com. También puede presentar una reclamación ante la autoridad de control competente.
+      Puede ejercer sus derechos de acceso, rectificación, supresión, portabilidad, limitación y oposición contactando con: laboroteca@gmail.com. También puede presentar una reclamación ante la autoridad de control competente.
     </div>
   `;
 
@@ -23,7 +23,7 @@ async function enviarEmailPersonalizado({ to, subject, html, text, pdfBuffer = n
 ------------------------------------------------------------
 En cumplimiento del Reglamento (UE) 2016/679 (RGPD), su email forma parte de la base de datos de Ignacio Solsona Fernández-Pedrera, DNI 20481042W, con domicilio en calle Enmedio nº 22, piso 3, puerta E, Castellón de la Plana, CP 12001.
 
-Puede ejercer sus derechos en: ignacio.solsona@icacs.com
+Puede ejercer sus derechos en: laboroteca@gmail.com
 También puede reclamar ante la autoridad de control si lo considera necesario.
   `;
 
@@ -139,27 +139,27 @@ async function enviarAvisoImpago(email, nombre, intento, enlacePago) {
   let subject, html, text;
 
   if (intento === 1) {
-    subject = 'Primer aviso: fallo en el cobro de tu suscripción Club Laboroteca';
+    subject = 'Fallo en el cobro de tu suscripción Club Laboroteca';
     html = `
-      <p>Hola ${nombre},</p>
-      <p>Tu pago de la membresía del Club Laboroteca no se ha podido procesar. Lo intentaremos de nuevo en 3 días.</p>
-      <p>Puedes actualizar tu método de pago aquí:<br><a href="${enlacePago}">${enlacePago}</a></p>
+      <p>Estimado ${nombre},</p>
+      <p>El cobro de la cuota mensual del Club Laboroteca no se ha podido procesar. Lo intentaremos de nuevo en 3 días.</p>
+      <p>Si necesitas actualizar tu tarjeta o método de pago, puedes hacerlo aquí:<br><a href="${enlacePago}">${enlacePago}</a></p>
     `;
-    text = `Hola ${nombre},\n\nTu pago no se ha podido procesar. Lo intentaremos de nuevo en 3 días.\nActualizar método de pago: ${enlacePago}`;
+    text = `Estimado ${nombre},\n\nEl cobro de la cuota mensual del Club Laboroteca no se ha podido procesar. Lo intentaremos de nuevo en 3 días.\nSi necesitas actualizar tu tarjeta o método de pago, puedes hacerlo aquí:\n${enlacePago}`;
   } else if (intento === 2) {
-    subject = 'Segundo aviso: segundo intento de cobro fallido';
+    subject = 'Segundo intento de cobro fallido';
     html = `
       <p>Hola ${nombre},</p>
-      <p>Seguimos sin poder procesar tu suscripción al Club Laboroteca. Queda un último intento antes de que se cancele automáticamente.</p>
+      <p>Seguimos sin poder procesar el cobro de la cuota mensual del Club Laboroteca. Lo intentaremos de nuevo dentro de 2 días.</p>
       <p>Actualiza tu método de pago aquí:<br><a href="${enlacePago}">${enlacePago}</a></p>
     `;
     text = `Hola ${nombre},\n\nSeguimos sin poder cobrar tu suscripción. Queda un último intento antes de cancelarse.\nActualizar método de pago: ${enlacePago}`;
   } else if (intento === 3) {
-    subject = 'Último aviso: último intento antes de la cancelación';
+    subject = 'Último intento antes de la cancelación';
     html = `
       <p>Hola ${nombre},</p>
       <p>Este es el último intento para cobrar tu suscripción al Club Laboroteca. Si vuelve a fallar, se cancelará automáticamente.</p>
-      <p>Aún estás a tiempo de evitarlo:<br><a href="${enlacePago}">${enlacePago}</a></p>
+      <p>Si necesitas actualizar la tarjeta o el método de pago, puedes hacerlo en este enlace:<br><a href="${enlacePago}">${enlacePago}</a></p>
     `;
     text = `Hola ${nombre},\n\nÚltimo intento para cobrar tu suscripción. Si falla, se cancelará automáticamente.\nActualizar método de pago: ${enlacePago}`;
   } else {
@@ -180,10 +180,10 @@ async function enviarAvisoCancelacion(email, nombre, enlacePago) {
   const subject = 'Tu suscripción Club Laboroteca ha sido cancelada por impago';
   const html = `
     <p>Hola ${nombre},</p>
-    <p>Tu suscripción ha sido cancelada por impago. Puedes reactivarla en cualquier momento.</p>
+    <p>Tu suscripción ha sido cancelada por impago. Puedes reactivarla en cualquier momento por el mismo precio, sin ninguna penalización.</p>
     <p>Enlace para reactivación:<br><a href="${enlacePago}">${enlacePago}</a></p>
   `;
-  const text = `Hola ${nombre},\n\nTu suscripción ha sido cancelada por impago. Puedes reactivarla en cualquier momento.\nEnlace: ${enlacePago}`;
+  const text = `Hola ${nombre},\n\nTu suscripción ha sido cancelada por impago. Puedes reactivarla en cualquier momento por el mismo precio, sin ninguna penalización.\nEnlace: ${enlacePago}`;
 
   return enviarEmailPersonalizado({
     to: [email],
@@ -193,6 +193,7 @@ async function enviarAvisoCancelacion(email, nombre, enlacePago) {
     enviarACopy: true
   });
 }
+
 
 // ✅ CONFIRMACIÓN DE BAJA VOLUNTARIA
 async function enviarConfirmacionBajaClub(email, nombre = '') {

@@ -121,6 +121,11 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   const key = normalizarProducto(tipoProducto || nombreProducto);
   const producto = PRODUCTOS[key];
 
+  console.log('🧪 tipoProducto:', tipoProducto);
+  console.log('🧪 nombreProducto:', nombreProducto);
+  console.log('🔑 key normalizado:', key);
+  console.log('📦 producto encontrado:', !!producto);
+
   if (!producto || !nombre || !email) {
     return res.status(400).json({ error: 'Faltan campos obligatorios o producto no disponible.' });
   }
@@ -184,6 +189,11 @@ app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
   const nombreProducto = datos.nombreProducto || '';
   const key = normalizarProducto(tipoProducto || nombreProducto);
   const producto = PRODUCTOS[key];
+
+  console.log('🧪 tipoProducto:', tipoProducto);
+  console.log('🧪 nombreProducto:', nombreProducto);
+  console.log('🔑 key normalizado:', key);
+  console.log('📦 producto encontrado:', !!producto);
 
   if (!producto || !nombre || !email) {
     return res.status(400).json({ error: 'Faltan campos obligatorios o producto no disponible.' });

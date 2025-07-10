@@ -53,9 +53,8 @@ module.exports = async function procesarCompra(datos) {
 console.log('🧪 tipoProducto:', tipoProducto);
 console.log('🧪 nombreProducto:', nombreProducto);
 console.log('🔑 key normalizado:', key);
-const producto = PRODUCTOS[key];
+producto = PRODUCTOS[key]; // Ya está declarada antes
 console.log('📦 producto encontrado:', !!producto);
-
 
 
   if (docSnap.exists) {

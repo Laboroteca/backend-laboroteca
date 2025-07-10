@@ -284,6 +284,8 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), async (req, res) => {
 });
 
 // ✅ NUEVA RUTA /eliminar-cuenta
+const { eliminarUsuarioWordPress } = require('./services/eliminarUsuarioWordPress');
+
 app.post('/eliminar-cuenta', async (req, res) => {
   const { email, password, token } = req.body;
   const tokenEsperado = 'eliminarCuenta@2025!';
@@ -297,12 +299,12 @@ app.post('/eliminar-cuenta', async (req, res) => {
   }
 
   try {
-    const resultado = await verificarLoginWordPress(email, password);
+    const resultado = await eliminarUsuarioWordPress(email, password);
     if (!resultado.ok) {
-      return res.status(401).json({ eliminada: false, mensaje: resultado.mensaje || 'Contraseña incorrecta' });
+      return res.status(401).json({ eliminada: false, mensaje: resultado.mensaje });
     }
 
-    console.log(`🧨 Solicitud de eliminación de cuenta para: ${email}`);
+    console.log(`🧨 Cuenta eliminada correctamente en WordPress para: ${email}`);
     return res.json({ eliminada: true });
   } catch (error) {
     console.error('❌ Error al procesar eliminación:', error.message);

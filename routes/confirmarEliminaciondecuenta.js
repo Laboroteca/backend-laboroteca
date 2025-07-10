@@ -28,29 +28,32 @@ router.post('/confirmar-eliminacion', async (req, res) => {
     const { email, expira } = snap.data();
     const ahora = Date.now();
 
-    if (ahora > expira) {
+    if (!email || typeof email !== 'string' || !email.includes('@')) {
+      return res.status(400).json({ ok: false, mensaje: 'Email no válido.' });
+    }
+
+    if (!expira || ahora > expira) {
       await ref.delete();
       return res.status(410).json({ ok: false, mensaje: 'El enlace ha caducado.' });
     }
 
-    // ✅ Desactivar membresía (si aplica)
+    // ✅ Desactivar membresía del Club
     await desactivarMembresiaClub(email);
 
-    // 🔐 Eliminar en WordPress (verifica contraseña)
-    try {
-      await eliminarUsuarioWordPress(email, password);
-    } catch (err) {
-      console.error('❌ Error eliminando usuario en WP:', err.message);
-      return res.status(401).json({ ok: false, mensaje: err.message || 'Contraseña incorrecta' });
+    // 🔐 Eliminar usuario de WordPress (verifica contraseña)
+    const resultadoWP = await eliminarUsuarioWordPress(email, password);
+    if (!resultadoWP.ok) {
+      console.error('❌ Error WP:', resultadoWP.mensaje);
+      return res.status(401).json({ ok: false, mensaje: resultadoWP.mensaje || 'Contraseña incorrecta' });
     }
 
-    // 🧹 Borrar datos en Firestore
+    // 🧹 Borrar datos adicionales en Firestore
     await borrarDatosUsuarioFirestore(email);
 
     // 🔒 Eliminar token usado
     await ref.delete();
 
-    // 📩 Enviar confirmación
+    // 📩 Enviar email de confirmación
     await enviarEmailPersonalizado({
       to: email,
       subject: 'Cuenta eliminada con éxito',
@@ -63,6 +66,7 @@ router.post('/confirmar-eliminacion', async (req, res) => {
     });
 
     return res.json({ ok: true });
+
   } catch (err) {
     console.error('❌ Error al confirmar eliminación:', err);
     return res.status(500).json({ ok: false, mensaje: 'Error interno del servidor.' });

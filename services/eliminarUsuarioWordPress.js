@@ -11,8 +11,8 @@ async function eliminarUsuarioWordPress(email, password) {
   if (!email || typeof email !== 'string' || !email.includes('@')) {
     return { ok: false, mensaje: 'Email inválido' };
   }
-  if (!password || typeof password !== 'string') {
-    return { ok: false, mensaje: 'Contraseña no proporcionada' };
+  if (!password || typeof password !== 'string' || password.length < 4) {
+    return { ok: false, mensaje: 'Contraseña no válida' };
   }
 
   try {
@@ -27,14 +27,17 @@ async function eliminarUsuarioWordPress(email, password) {
 
     const data = await res.json();
 
-    if (!res.ok || !data.ok) {
+    if (!res.ok || !data?.ok) {
       const msg = data?.mensaje || data?.error || 'Error al eliminar usuario en WordPress';
+      console.warn(`⚠️ Fallo al eliminar usuario (${email}):`, msg);
       return { ok: false, mensaje: msg };
     }
 
+    console.log(`🗑️ Usuario eliminado en WordPress: ${email}`);
     return { ok: true };
+
   } catch (err) {
-    console.error('❌ Error al conectar con WordPress:', err);
+    console.error('❌ Error al conectar con WordPress:', err.message);
     return { ok: false, mensaje: 'No se pudo conectar con WordPress' };
   }
 }

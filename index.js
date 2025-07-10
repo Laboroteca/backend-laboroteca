@@ -44,7 +44,6 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(require('./routes/solicitarEliminacionCuenta'));
 
-
 const pagoLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,

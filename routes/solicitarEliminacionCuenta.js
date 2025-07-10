@@ -1,9 +1,11 @@
+// 📁 routes/solicitarEliminacionCuenta.js
 const express = require('express');
 const router = express.Router();
 const admin = require('../firebase');
 const firestore = admin.firestore();
-const { enviarEmailPersonalizado } = require('../services/email');
 const crypto = require('crypto');
+
+const { enviarEmailValidacionEliminacionCuenta } = require('../services/email');
 
 router.post('/solicitar-eliminacion', async (req, res) => {
   const { email } = req.body;
@@ -23,26 +25,8 @@ router.post('/solicitar-eliminacion', async (req, res) => {
       expira
     });
 
-    // Construir enlace
-    const url = `https://www.laboroteca.es/confirmar-eliminacion?token=${token}`;
-
-    // Enviar email
-    await enviarEmailPersonalizado({
-      to: email,
-      subject: 'Confirma la eliminación de tu cuenta',
-      html: `
-        <p>Has solicitado eliminar tu cuenta de Laboroteca.</p>
-        <p>Para confirmar la eliminación definitiva, haz clic en el siguiente botón:</p>
-        <p style="text-align: center; margin: 30px 0;">
-          <a href="${url}" style="background: #c62828; color: white; padding: 14px 24px; font-size: 18px; font-weight: bold; text-decoration: none; border-radius: 8px;">
-            Confirmar eliminación de cuenta
-          </a>
-        </p>
-        <p>Este enlace caduca en 2 horas.</p>
-      `,
-      text: `Has solicitado eliminar tu cuenta de Laboroteca. Para confirmarlo, visita: ${url}`,
-      enviarACopy: true
-    });
+    // Enviar email con enlace de validación
+    await enviarEmailValidacionEliminacionCuenta(email, token);
 
     return res.json({ ok: true });
 

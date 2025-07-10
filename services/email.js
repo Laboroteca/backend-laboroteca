@@ -215,9 +215,36 @@ async function enviarConfirmacionBajaClub(email, nombre = '') {
   });
 }
 
+// ✅ EMAIL DE VALIDACIÓN PARA ELIMINAR CUENTA
+async function enviarEmailValidacionEliminacionCuenta(email, token) {
+  const enlace = `https://www.laboroteca.es/confirmar-eliminacion-de-cuenta/?token=${token}`;
+  const subject = 'Confirmación de eliminación de tu cuenta en Laboroteca';
+  const html = `
+    <p>Hola,</p>
+    <p>Has solicitado eliminar tu cuenta en Laboroteca. Para confirmar esta acción, pulsa en el siguiente enlace:</p>
+    <p><a href="${enlace}" style="font-weight: bold;">Confirmar eliminación de cuenta</a></p>
+    <p>Si no has solicitado esta acción, ignora este correo. El enlace caducará en 1 hora.</p>
+  `;
+  const text = `Has solicitado eliminar tu cuenta en Laboroteca.
+
+Para confirmar esta acción, accede a este enlace (válido 1 hora):
+${enlace}
+
+Si no lo has solicitado tú, ignora este mensaje.`;
+
+  return enviarEmailPersonalizado({
+    to: email,
+    subject,
+    html,
+    text,
+    enviarACopy: true
+  });
+}
+
 module.exports = {
   enviarFacturaPorEmail,
   enviarAvisoImpago,
   enviarAvisoCancelacion,
-  enviarConfirmacionBajaClub
+  enviarConfirmacionBajaClub,
+  enviarEmailValidacionEliminacionCuenta //
 };

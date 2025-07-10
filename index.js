@@ -284,8 +284,6 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), async (req, res) => {
 });
 
 // ✅ NUEVA RUTA /eliminar-cuenta
-const { eliminarUsuarioWordPress } = require('./services/eliminarUsuarioWordPress');
-
 app.post('/eliminar-cuenta', async (req, res) => {
   const { email, password, token } = req.body;
   const tokenEsperado = 'eliminarCuenta@2025!';

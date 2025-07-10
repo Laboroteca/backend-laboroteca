@@ -281,6 +281,34 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), async (req, res) => {
   }
 });
 
+// ✅ NUEVA RUTA /eliminar-cuenta
+app.post('/eliminar-cuenta', async (req, res) => {
+  const { email, password, token } = req.body;
+  const tokenEsperado = 'eliminarCuenta@2025!';
+
+  if (token !== tokenEsperado) {
+    return res.status(403).json({ eliminada: false, mensaje: 'Token inválido' });
+  }
+
+  if (!email || !password) {
+    return res.status(400).json({ eliminada: false, mensaje: 'Faltan datos obligatorios' });
+  }
+
+  try {
+    const resultado = await verificarLoginWordPress(email, password);
+    if (!resultado.ok) {
+      return res.status(401).json({ eliminada: false, mensaje: resultado.mensaje || 'Contraseña incorrecta' });
+    }
+
+    console.log(`🧨 Solicitud de eliminación de cuenta para: ${email}`);
+    return res.json({ eliminada: true });
+  } catch (error) {
+    console.error('❌ Error al procesar eliminación:', error.message);
+    return res.status(500).json({ eliminada: false, mensaje: 'Error interno del servidor' });
+  }
+});
+
+
 app.post('/crear-portal-cliente', async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'Falta el email' });

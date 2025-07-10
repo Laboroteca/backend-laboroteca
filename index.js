@@ -16,6 +16,8 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
+const { verificarLoginWordPress } = require('./utils/wordpress'); // ✅ Añadir esta línea
+
 
 const procesarCompra = require('./services/procesarCompra');
 const { activarMembresiaClub } = require('./services/activarMembresiaClub');

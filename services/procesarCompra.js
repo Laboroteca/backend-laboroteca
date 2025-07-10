@@ -40,6 +40,24 @@ module.exports = async function procesarCompra(datos) {
   const docRef = firestore.collection('comprasProcesadas').doc(compraId);
   const docSnap = await docRef.get();
 
+  const descripcionProducto = datos.descripcionProducto || rawProducto || 'Producto Laboroteca';
+  const tipoProducto = datos.tipoProducto || '';
+  const nombreProducto = datos.nombreProducto || '';
+  const key = normalizarProducto(tipoProducto || nombreProducto);
+  const productoInfo = {
+  tipoProducto,
+  nombreProducto,
+  key,
+};
+
+console.log('🧪 tipoProducto:', tipoProducto);
+console.log('🧪 nombreProducto:', nombreProducto);
+console.log('🔑 key normalizado:', key);
+const producto = PRODUCTOS[key];
+console.log('📦 producto encontrado:', !!producto);
+
+
+
   if (docSnap.exists) {
     console.warn(`⛔️ [procesarCompra] Abortando proceso por duplicado: ${compraId}`);
     return { duplicate: true };

@@ -9,7 +9,6 @@ const desactivarMembresiaClub = require('../services/desactivarMembresiaClub');
 const { borrarDatosUsuarioFirestore } = require('../services/borrarDatosUsuarioFirestore');
 const { enviarEmailPersonalizado } = require('../services/email');
 
-// ✅ POST /confirmar-eliminacion
 router.post('/confirmar-eliminacion', async (req, res) => {
   const { token } = req.body;
 
@@ -37,12 +36,15 @@ router.post('/confirmar-eliminacion', async (req, res) => {
       return res.status(410).json({ ok: false, mensaje: 'El enlace ha caducado.' });
     }
 
-    // ✅ Desactivar membresías y eliminar datos
+    // 1. Cancelar membresías y borrar datos
     await desactivarMembresiaClub(email);
-    await eliminarUsuarioWordPress(email); // sin contraseña
+    await eliminarUsuarioWordPress(email);
     await borrarDatosUsuarioFirestore(email);
+
+    // 2. Eliminar el token
     await ref.delete();
 
+    // 3. Email de confirmación
     await enviarEmailPersonalizado({
       to: email,
       subject: 'Cuenta eliminada con éxito',
@@ -55,7 +57,6 @@ router.post('/confirmar-eliminacion', async (req, res) => {
     });
 
     return res.json({ ok: true });
-
   } catch (err) {
     console.error('❌ Error al confirmar eliminación:', err);
     return res.status(500).json({ ok: false, mensaje: 'Error interno del servidor.' });

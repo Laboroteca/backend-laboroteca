@@ -1,4 +1,3 @@
-// 📁 services/desactivarMembresiaClub.js
 const admin = require('../firebase');
 const firestore = admin.firestore();
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
@@ -36,19 +35,22 @@ async function verificarLoginWordPress(email, password) {
 /**
  * Desactiva la membresía del Club Laboroteca y elimina el usuario de WordPress.
  * @param {string} email
- * @param {string} password
+ * @param {string} [password] — Opcional si ya se ha verificado en otro punto
  * @returns {Promise<{ok: boolean, mensaje?: string}>}
  */
 async function desactivarMembresiaClub(email, password) {
-  if (!email || !password) {
-    return { ok: false, mensaje: 'Faltan datos obligatorios.' };
+  if (!email || typeof email !== 'string') {
+    return { ok: false, mensaje: 'Email obligatorio.' };
   }
 
-  const wpLogin = await verificarLoginWordPress(email, password);
-  if (!wpLogin.ok) {
-    return { ok: false, mensaje: wpLogin.mensaje || 'Contraseña incorrecta' };
+  if (password) {
+    const wpLogin = await verificarLoginWordPress(email, password);
+    if (!wpLogin.ok) {
+      return { ok: false, mensaje: wpLogin.mensaje || 'Contraseña incorrecta' };
+    }
   }
 
+  // 🔻 Paso 1: Cancelar suscripciones activas en Stripe
   try {
     const clientes = await stripe.customers.list({ email, limit: 1 });
     if (clientes.data.length > 0) {
@@ -69,6 +71,7 @@ async function desactivarMembresiaClub(email, password) {
     console.error('❌ Error cancelando suscripción en Stripe:', errStripe.message);
   }
 
+  // 🔻 Paso 2: Desactivar en Firestore
   try {
     const ref = firestore.collection('usuariosClub').doc(email);
     await ref.set({
@@ -80,6 +83,7 @@ async function desactivarMembresiaClub(email, password) {
     console.error('❌ Error actualizando Firestore:', errFS.message);
   }
 
+  // 🔻 Paso 3: Desactivar en MemberPress
   try {
     const mpResp = await syncMemberpressClub({
       email,
@@ -95,6 +99,7 @@ async function desactivarMembresiaClub(email, password) {
     return { ok: false, mensaje: `Error al desactivar en MemberPress: ${errMP.message || errMP}` };
   }
 
+  // 🔻 Paso 4: Enviar email de baja (opcional si ya se notificó)
   try {
     await enviarConfirmacionBajaClub(email, '');
     console.log(`📩 Email de baja enviado a ${email}`);
@@ -102,24 +107,27 @@ async function desactivarMembresiaClub(email, password) {
     console.error(`❌ Error al enviar email de baja: ${errEmail.message}`);
   }
 
-  try {
-    const resp = await axios.post('https://www.laboroteca.es/wp-json/laboroteca/v1/eliminar-usuario', {
-      email,
-      password
-    }, {
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.LABOROTECA_API_KEY
-      }
-    });
+  // 🔻 Paso 5: Eliminar en WordPress si se pasó contraseña
+  if (password) {
+    try {
+      const resp = await axios.post('https://www.laboroteca.es/wp-json/laboroteca/v1/eliminar-usuario', {
+        email,
+        password
+      }, {
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.LABOROTECA_API_KEY
+        }
+      });
 
-    if (resp.data?.ok) {
-      console.log(`🗑️ Usuario eliminado en WordPress: ${email}`);
-    } else {
-      console.warn('⚠️ Error eliminando usuario en WP:', resp.data);
+      if (resp.data?.ok) {
+        console.log(`🗑️ Usuario eliminado en WordPress: ${email}`);
+      } else {
+        console.warn('⚠️ Error eliminando usuario en WP:', resp.data);
+      }
+    } catch (errWP) {
+      console.error('❌ Error conectando a WP para eliminar usuario:', errWP.message);
     }
-  } catch (errWP) {
-    console.error('❌ Error conectando a WP para eliminar usuario:', errWP.message);
   }
 
   return { ok: true };

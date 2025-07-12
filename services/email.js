@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config(); 
 const fetch = require('node-fetch');
 
 /**
@@ -135,7 +135,7 @@ Ignacio Solsona`;
 }
 
 // ✅ AVISO DE IMPAGO (hasta 3 intentos)
-async function enviarAvisoImpago(email, nombre, intento, enlacePago) {
+async function enviarAvisoImpago(email, nombre, intento, enlacePago, enviarACopy = false) {
   let subject, html, text;
 
   if (intento === 1) {
@@ -155,13 +155,33 @@ async function enviarAvisoImpago(email, nombre, intento, enlacePago) {
     `;
     text = `Hola ${nombre},\n\nSeguimos sin poder cobrar tu suscripción. Queda un último intento antes de cancelarse.\nActualizar método de pago: ${enlacePago}`;
   } else if (intento === 3) {
-    subject = 'Último intento antes de la cancelación';
-    html = `
-      <p>Hola ${nombre},</p>
-      <p>Este es el último intento para cobrar tu suscripción al Club Laboroteca. Si vuelve a fallar, se cancelará automáticamente.</p>
-      <p>Si necesitas actualizar la tarjeta o el método de pago, puedes hacerlo en este enlace:<br><a href="${enlacePago}">${enlacePago}</a></p>
-    `;
-    text = `Hola ${nombre},\n\nÚltimo intento para cobrar tu suscripción. Si falla, se cancelará automáticamente.\nActualizar método de pago: ${enlacePago}`;
+    subject = enviarACopy
+      ? 'COPIA: Tu suscripción Club Laboroteca ha sido cancelada por impago reiterado'
+      : 'Último intento antes de la cancelación';
+    html = enviarACopy
+      ? `
+        <p>Hola Ignacio,</p>
+        <p>Este es un aviso de copia sobre la cancelación por impago reiterado de la suscripción al Club Laboroteca para el usuario ${nombre} (${email}).</p>
+        <p>Se ha producido el último intento fallido de cobro y la suscripción se ha cancelado automáticamente.</p>
+        <p>Puedes revisar la gestión en el panel de Laboroteca.</p>
+      `
+      : `
+        <p>Hola ${nombre},</p>
+        <p>Este es el último intento para cobrar tu suscripción al Club Laboroteca. Si vuelve a fallar, se cancelará automáticamente.</p>
+        <p>Si necesitas actualizar la tarjeta o el método de pago, puedes hacerlo en este enlace:<br><a href="${enlacePago}">${enlacePago}</a></p>
+      `;
+    text = enviarACopy
+      ? `Hola Ignacio,
+
+Este es un aviso de copia sobre la cancelación por impago reiterado de la suscripción al Club Laboroteca para el usuario ${nombre} (${email}).
+
+Se ha producido el último intento fallido de cobro y la suscripción se ha cancelado automáticamente.
+
+Puedes revisar la gestión en el panel de Laboroteca.`
+      : `Hola ${nombre},
+
+Último intento para cobrar tu suscripción. Si falla, se cancelará automáticamente.
+Actualizar método de pago: ${enlacePago}`;
   } else {
     subject = 'Fallo de pago en tu suscripción Club Laboroteca';
     html = `

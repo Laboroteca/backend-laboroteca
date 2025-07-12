@@ -23,39 +23,24 @@ module.exports = async function procesarCompra(datos) {
   let email = (datos.email_autorelleno || datos.email || '').trim().toLowerCase();
   let rawProducto = (datos.nombreProducto || 'producto').trim();
 
-  // 🧮 Importe en coma o punto
   let importe = parseFloat((datos.importe || '22,90').toString().replace(',', '.'));
-
-  // 💡 Si es 4,99€ asumimos que es el Club y forzamos nombre estándar
-  if (importe === 4.99) {
-    rawProducto = 'el club laboroteca';
-  }
-
-  const producto = normalizarProducto(rawProducto);
-
-  // ID único por email + producto
-  const hash = crypto.createHash('md5').update(`${email}-${producto}`).digest('hex');
-  const compraId = `compra-${hash}`;
-
-  const docRef = firestore.collection('comprasProcesadas').doc(compraId);
-  const docSnap = await docRef.get();
+  if (importe === 4.99) rawProducto = 'el club laboroteca';
 
   const descripcionProducto = datos.descripcionProducto || rawProducto || 'Producto Laboroteca';
   const tipoProducto = datos.tipoProducto || '';
   const nombreProducto = datos.nombreProducto || '';
-  const key = normalizarProducto(tipoProducto || nombreProducto);
-  const productoInfo = {
-  tipoProducto,
-  nombreProducto,
-  key,
-};
+  const key = normalizarProducto(nombreProducto);
+  const producto = PRODUCTOS[key];
 
-console.log('🧪 tipoProducto:', tipoProducto);
-console.log('🧪 nombreProducto:', nombreProducto);
-console.log('🔑 key normalizado:', key);
-producto = PRODUCTOS[key]; // Ya está declarada antes
-console.log('📦 producto encontrado:', !!producto);
+  console.log('🧪 tipoProducto:', tipoProducto);
+  console.log('🧪 nombreProducto:', nombreProducto);
+  console.log('🔑 key normalizado:', key);
+  console.log('📦 producto encontrado:', !!producto);
 
+  const hash = crypto.createHash('md5').update(`${email}-${producto?.nombre || key}`).digest('hex');
+  const compraId = `compra-${hash}`;
+  const docRef = firestore.collection('comprasProcesadas').doc(compraId);
+  const docSnap = await docRef.get();
 
   if (docSnap.exists) {
     console.warn(`⛔️ [procesarCompra] Abortando proceso por duplicado: ${compraId}`);
@@ -66,7 +51,7 @@ console.log('📦 producto encontrado:', !!producto);
     compraId,
     estado: 'procesando',
     email,
-    fechaInicio: new Date().toISOString()
+    fechaInicio: new Date().toISOString(),
   });
 
   try {
@@ -97,10 +82,6 @@ console.log('📦 producto encontrado:', !!producto);
     const ciudad = datos.ciudad || datos['Municipio'] || '';
     const provincia = datos.provincia || datos['Provincia'] || '';
     const cp = datos.cp || datos['Código postal'] || '';
-
-    // 📝 Descripción real del producto
-    const descripcionProducto = datos.descripcionProducto || rawProducto || 'Producto Laboroteca';
-    const tipoProducto = datos.tipoProducto || 'Otro';
 
     const datosCliente = {
       nombre,
@@ -160,7 +141,7 @@ console.log('📦 producto encontrado:', !!producto);
       console.error('❌ Error enviando email:', err);
     }
 
-    // 4. Registrar en Google Sheets (evita duplicados internamente)
+    // 4. Registrar en Google Sheets
     try {
       console.log('📝 → Registrando en Google Sheets...');
       await guardarEnGoogleSheets(datosCliente);

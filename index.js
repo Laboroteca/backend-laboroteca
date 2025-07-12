@@ -109,22 +109,20 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
     ? datos.email_autorelleno.trim().toLowerCase()
     : (typeof datos.email === 'string' && datos.email.includes('@') ? datos.email.trim().toLowerCase() : '');
 
-  const nombre = datos.nombre || datos.Nombre || '';
-  const apellidos = datos.apellidos || datos.Apellidos || '';
-  const dni = datos.dni || '';
-  const direccion = datos.direccion || '';
-  const ciudad = datos.ciudad || '';
-  const provincia = datos.provincia || '';
-  const cp = datos.cp || '';
-  const tipoProducto = datos.tipoProducto || '';
-  const nombreProducto = datos.nombreProducto || '';
-  const key = normalizarProducto(tipoProducto || nombreProducto);
-  const producto = PRODUCTOS[key];
+const nombre = datos.nombre || datos.Nombre || '';
+const apellidos = datos.apellidos || datos.Apellidos || '';
+const dni = datos.dni || '';
+const direccion = datos.direccion || '';
+const ciudad = datos.ciudad || '';
+const provincia = datos.provincia || '';
+const cp = datos.cp || '';
+const tipoProducto = datos.tipoProducto || '';
+const nombreProducto = datos.nombreProducto || '';
 
-  console.log('🧪 tipoProducto:', tipoProducto);
-  console.log('🧪 nombreProducto:', nombreProducto);
-  console.log('🔑 key normalizado:', key);
-  console.log('📦 producto encontrado:', !!producto);
+// Logs informativos
+console.log('🧪 tipoProducto:', tipoProducto);
+console.log('🧪 nombreProducto:', nombreProducto);
+
 
   if (!producto || !nombre || !email) {
     return res.status(400).json({ error: 'Faltan campos obligatorios o producto no disponible.' });
@@ -178,22 +176,19 @@ app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
     ? datos.email_autorelleno.trim().toLowerCase()
     : (typeof datos.email === 'string' && datos.email.includes('@') ? datos.email.trim().toLowerCase() : '');
 
-  const nombre = datos.nombre || datos.Nombre || '';
-  const apellidos = datos.apellidos || datos.Apellidos || '';
-  const dni = datos.dni || '';
-  const direccion = datos.direccion || '';
-  const ciudad = datos.ciudad || '';
-  const provincia = datos.provincia || '';
-  const cp = datos.cp || '';
-  const tipoProducto = datos.tipoProducto || '';
-  const nombreProducto = datos.nombreProducto || '';
-  const key = normalizarProducto(tipoProducto || nombreProducto);
-  const producto = PRODUCTOS[key];
+const nombre = datos.nombre || datos.Nombre || '';
+const apellidos = datos.apellidos || datos.Apellidos || '';
+const dni = datos.dni || '';
+const direccion = datos.direccion || '';
+const ciudad = datos.ciudad || '';
+const provincia = datos.provincia || '';
+const cp = datos.cp || '';
+const tipoProducto = datos.tipoProducto || '';
+const nombreProducto = datos.nombreProducto || '';
 
-  console.log('🧪 tipoProducto:', tipoProducto);
-  console.log('🧪 nombreProducto:', nombreProducto);
-  console.log('🔑 key normalizado:', key);
-  console.log('📦 producto encontrado:', !!producto);
+console.log('🧪 tipoProducto:', tipoProducto);
+console.log('🧪 nombreProducto:', nombreProducto);
+
 
   if (!producto || !nombre || !email) {
     return res.status(400).json({ error: 'Faltan campos obligatorios o producto no disponible.' });

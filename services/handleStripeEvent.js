@@ -3,12 +3,13 @@ const firestore = admin.firestore();
 
 const { guardarEnGoogleSheets } = require('./googleSheets');
 const { crearFacturaEnFacturaCity } = require('./facturaCity');
-const { enviarFacturaPorEmail, enviarAvisoImpago, enviarAvisoCancelacion } = require('./email');
+const { enviarFacturaPorEmail, enviarAvisoImpagoPrimerIntento, enviarAvisoImpagoSegundoIntento, enviarAvisoImpagoTercerIntento, enviarAvisoCancelacion } = require('./email');
 const { subirFactura } = require('./gcs');
 const { activarMembresiaClub } = require('./activarMembresiaClub');
 const { syncMemberpressClub } = require('./syncMemberpressClub');
 const { syncMemberpressLibro } = require('./syncMemberpressLibro');
 const { registrarBajaClub } = require('./registrarBajaClub');
+const { desactivarMembresiaClub } = require('./desactivarMembresiaClub'); // <--- IMPORTANTE: Importa aquí la función de desactivar membresía
 const fs = require('fs').promises;
 const path = require('path');
 const Stripe = require('stripe');
@@ -50,7 +51,13 @@ async function handleStripeEvent(event) {
     if (email && intento >= 1 && intento <= 3) {
       try {
         console.log(`⚠️ Intento de cobro fallido (${intento}) para:`, email);
-        await enviarAvisoImpago(email, nombre, intento, enlacePago);
+        if (intento === 1) {
+          await enviarAvisoImpagoPrimerIntento(email, nombre, enlacePago);
+        } else if (intento === 2) {
+          await enviarAvisoImpagoSegundoIntento(email, nombre, enlacePago);
+        } else if (intento === 3) {
+          await enviarAvisoImpagoTercerIntento(email, nombre, enlacePago);
+        }
       } catch (err) {
         console.error('❌ Error al enviar aviso de impago:', err?.message);
       }
@@ -60,34 +67,28 @@ async function handleStripeEvent(event) {
     return { warning: true };
   }
 
-  if (event.type === 'invoice.paid') {
-    const invoice = event.data.object;
-    const email = (
-      invoice.customer_email ||
-      invoice.customer_details?.email ||
-      invoice.subscription_details?.metadata?.email ||
-      invoice.metadata?.email
-    )?.toLowerCase().trim();
+if (event.type === 'invoice.paid') {
+  const invoice = event.data.object;
+  const email = (
+    invoice.customer_email ||
+    invoice.customer_details?.email ||
+    invoice.subscription_details?.metadata?.email ||
+    invoice.metadata?.email
+  )?.toLowerCase().trim();
 
-    const nombre = invoice.customer_details?.name || '';
-    const importe = parseFloat((invoice.amount_paid / 100).toFixed(2));
-    const lineas = invoice.lines?.data || [];
+  const nombre = invoice.customer_details?.name || '';
+  const importe = parseFloat((invoice.amount_paid / 100).toFixed(2));
+  const lineas = invoice.lines?.data || [];
 
-    console.log('📥 Evento invoice.paid recibido');
-    console.log('📧 Email:', email);
-    console.log('🧾 Líneas:', JSON.stringify(lineas, null, 2));
+  console.log('📥 Evento invoice.paid recibido');
+  console.log('📧 Email:', email);
+  console.log('🧾 Líneas:', JSON.stringify(lineas, null, 2));
 
-    const productoClub = lineas.find(line => {
-      const id = line.price?.id || '';
-      const desc = (line.description || '').toLowerCase();
-      return (
-        id === 'price_1RfHeAEe6Cd77jenDw9UUPCp' ||
-        id === 'price_1Rk6RCEe6Cd77jenm32p2nOI' ||
-        id === 'price_1Rk7z5Ee6Cd77jenS91eC3dA' ||
-        desc.includes('club laboroteca') ||
-        desc.includes('suscripción mensual')
-      );
-    });
+  const productoClub = lineas.find(line => {
+    const desc = (line.description || '').toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    return desc.includes('club laboroteca') || desc.includes('suscripcion mensual');
+  });
 
     if (email && productoClub) {
       try {
@@ -165,6 +166,10 @@ async function handleStripeEvent(event) {
     if (email) {
       try {
         console.log('❌ Suscripción cancelada por impago:', email);
+
+        // Aquí reemplazamos el sync directo por llamada a desactivarMembresiaClub para hacer todo el proceso completo
+        await desactivarMembresiaClub(email);
+
         await registrarBajaClub({ email, motivo: 'impago' });
         await enviarAvisoCancelacion(email, nombre, enlacePago);
       } catch (err) {

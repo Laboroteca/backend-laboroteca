@@ -1,3 +1,4 @@
+// 📁 services/desactivarMembresiaClub.js
 const admin = require('../firebase');
 const firestore = admin.firestore();
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
@@ -43,13 +44,11 @@ async function desactivarMembresiaClub(email, password) {
     return { ok: false, mensaje: 'Faltan datos obligatorios.' };
   }
 
-  // 1. Verificar en WordPress
   const wpLogin = await verificarLoginWordPress(email, password);
   if (!wpLogin.ok) {
     return { ok: false, mensaje: wpLogin.mensaje || 'Contraseña incorrecta' };
   }
 
-  // 2. Cancelar suscripciones activas en Stripe
   try {
     const clientes = await stripe.customers.list({ email, limit: 1 });
     if (clientes.data.length > 0) {
@@ -70,22 +69,17 @@ async function desactivarMembresiaClub(email, password) {
     console.error('❌ Error cancelando suscripción en Stripe:', errStripe.message);
   }
 
-  // 3. Marcar como inactivo en Firestore
   try {
     const ref = firestore.collection('usuariosClub').doc(email);
-    const doc = await ref.get();
-    if (doc.exists) {
-      await ref.set({
-        activo: false,
-        fechaBaja: new Date().toISOString()
-      }, { merge: true });
-      console.log(`🚫 [CLUB] Firestore actualizado para ${email}`);
-    }
+    await ref.set({
+      activo: false,
+      fechaBaja: new Date().toISOString()
+    }, { merge: true });
+    console.log(`🚫 [CLUB] Firestore actualizado para ${email}`);
   } catch (errFS) {
     console.error('❌ Error actualizando Firestore:', errFS.message);
   }
 
-  // 4. Desactivar en MemberPress
   try {
     const mpResp = await syncMemberpressClub({
       email,
@@ -101,7 +95,6 @@ async function desactivarMembresiaClub(email, password) {
     return { ok: false, mensaje: `Error al desactivar en MemberPress: ${errMP.message || errMP}` };
   }
 
-  // 5. Email de confirmación
   try {
     await enviarConfirmacionBajaClub(email, '');
     console.log(`📩 Email de baja enviado a ${email}`);
@@ -109,10 +102,10 @@ async function desactivarMembresiaClub(email, password) {
     console.error(`❌ Error al enviar email de baja: ${errEmail.message}`);
   }
 
-  // 6. Eliminar cuenta en WordPress
   try {
     const resp = await axios.post('https://www.laboroteca.es/wp-json/laboroteca/v1/eliminar-usuario', {
-      email
+      email,
+      password
     }, {
       headers: {
         'Content-Type': 'application/json',

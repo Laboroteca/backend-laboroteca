@@ -2,17 +2,13 @@
 const fetch = require('node-fetch');
 
 /**
- * Elimina un usuario en WordPress desde su email y contraseña.
+ * Elimina un usuario en WordPress desde su email.
  * @param {string} email
- * @param {string} password
  * @returns {Promise<{ok: boolean, mensaje?: string}>}
  */
-async function eliminarUsuarioWordPress(email, password) {
+async function eliminarUsuarioWordPress(email) {
   if (!email || typeof email !== 'string' || !email.includes('@')) {
     return { ok: false, mensaje: 'Email inválido' };
-  }
-  if (!password || typeof password !== 'string' || password.length < 4) {
-    return { ok: false, mensaje: 'Contraseña no válida' };
   }
 
   try {
@@ -22,7 +18,7 @@ async function eliminarUsuarioWordPress(email, password) {
         'Content-Type': 'application/json',
         'x-api-key': process.env.LABOROTECA_API_KEY
       },
-      body: JSON.stringify({ email, password })
+      body: JSON.stringify({ email })
     });
 
     const data = await res.json();

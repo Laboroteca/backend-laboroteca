@@ -5,16 +5,16 @@ const admin = require('../firebase');
 const firestore = admin.firestore();
 
 const { eliminarUsuarioWordPress } = require('../services/eliminarUsuarioWordPress');
-const { desactivarMembresiaClub } = require('../services/desactivarMembresiaClub');
+const desactivarMembresiaClub = require('../services/desactivarMembresiaClub');
 const { borrarDatosUsuarioFirestore } = require('../services/borrarDatosUsuarioFirestore');
 const { enviarEmailPersonalizado } = require('../services/email');
 
 // ✅ POST /confirmar-eliminacion
 router.post('/confirmar-eliminacion', async (req, res) => {
-  const { token, password } = req.body;
+  const { token } = req.body;
 
-  if (!token || !password) {
-    return res.status(400).json({ ok: false, mensaje: 'Faltan datos: token o contraseña.' });
+  if (!token) {
+    return res.status(400).json({ ok: false, mensaje: 'Falta el token de verificación.' });
   }
 
   try {
@@ -37,23 +37,12 @@ router.post('/confirmar-eliminacion', async (req, res) => {
       return res.status(410).json({ ok: false, mensaje: 'El enlace ha caducado.' });
     }
 
-    // ✅ Desactivar membresía del Club
+    // ✅ Desactivar membresías y eliminar datos
     await desactivarMembresiaClub(email);
-
-    // 🔐 Eliminar usuario de WordPress (verifica contraseña)
-    const resultadoWP = await eliminarUsuarioWordPress(email, password);
-    if (!resultadoWP.ok) {
-      console.error('❌ Error WP:', resultadoWP.mensaje);
-      return res.status(401).json({ ok: false, mensaje: resultadoWP.mensaje || 'Contraseña incorrecta' });
-    }
-
-    // 🧹 Borrar datos adicionales en Firestore
+    await eliminarUsuarioWordPress(email); // sin contraseña
     await borrarDatosUsuarioFirestore(email);
-
-    // 🔒 Eliminar token usado
     await ref.delete();
 
-    // 📩 Enviar email de confirmación
     await enviarEmailPersonalizado({
       to: email,
       subject: 'Cuenta eliminada con éxito',

@@ -4,7 +4,6 @@ const router = express.Router();
 const admin = require('../firebase');
 const firestore = admin.firestore();
 const crypto = require('crypto');
-
 const { enviarEmailValidacionEliminacionCuenta } = require('../services/email');
 
 router.post('/solicitar-eliminacion', async (req, res) => {
@@ -15,24 +14,28 @@ router.post('/solicitar-eliminacion', async (req, res) => {
   }
 
   try {
+    // 1. Generar token aleatorio único (hex) y fecha de expiración
     const token = crypto.randomBytes(32).toString('hex');
     const ahora = Date.now();
     const expira = ahora + 1000 * 60 * 60 * 2; // 2 horas
 
-    // Guardar token en Firestore
+    // 2. Guardar token en Firestore con email y fecha de expiración
     await firestore.collection('eliminacionCuentas').doc(token).set({
       email,
       expira
     });
 
-    // Enviar email con enlace de validación
+    // 3. Enviar email con enlace de validación
     await enviarEmailValidacionEliminacionCuenta(email, token);
 
+    // 4. Respuesta OK
     return res.json({ ok: true });
-
   } catch (err) {
     console.error('❌ Error al solicitar eliminación de cuenta:', err);
-    return res.status(500).json({ ok: false, mensaje: 'Error interno del servidor.' });
+    return res.status(500).json({
+      ok: false,
+      mensaje: 'Error interno del servidor.'
+    });
   }
 });
 

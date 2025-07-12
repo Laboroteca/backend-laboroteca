@@ -223,11 +223,11 @@ async function enviarEmailValidacionEliminacionCuenta(email, token) {
     <p>Hola,</p>
     <p>Has solicitado eliminar tu cuenta en Laboroteca. Para confirmar esta acción, pulsa en el siguiente enlace:</p>
     <p><a href="${enlace}" style="font-weight: bold;">Confirmar eliminación de cuenta</a></p>
-    <p>Si no has solicitado esta acción, ignora este correo. El enlace caducará en 1 hora.</p>
+    <p>Si no has solicitado esta acción, ignora este correo. El enlace caducará en 2 horas.</p>
   `;
   const text = `Has solicitado eliminar tu cuenta en Laboroteca.
 
-Para confirmar esta acción, accede a este enlace (válido 1 hora):
+Para confirmar esta acción, accede a este enlace (válido 2 horas):
 ${enlace}
 
 Si no lo has solicitado tú, ignora este mensaje.`;

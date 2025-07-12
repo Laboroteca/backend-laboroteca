@@ -41,6 +41,7 @@ app.use('/webhook', require('./routes/webhook'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(require('./routes/solicitarEliminacionCuenta'));
+app.use(require('./routes/confirmarEliminaciondecuenta'));
 
 const pagoLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,

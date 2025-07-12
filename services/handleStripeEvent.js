@@ -3,7 +3,8 @@ const firestore = admin.firestore();
 
 const { guardarEnGoogleSheets } = require('./googleSheets');
 const { crearFacturaEnFacturaCity } = require('./facturaCity');
-const { enviarFacturaPorEmail, enviarAvisoImpagoPrimerIntento, enviarAvisoImpagoSegundoIntento, enviarAvisoImpagoTercerIntento, enviarAvisoCancelacion } = require('./email');
+// IMPORT CORREGIDO: solo importar la función única para avisos de impago
+const { enviarFacturaPorEmail, enviarAvisoImpago, enviarAvisoCancelacion } = require('./email');
 const { subirFactura } = require('./gcs');
 const { activarMembresiaClub } = require('./activarMembresiaClub');
 const { syncMemberpressClub } = require('./syncMemberpressClub');
@@ -48,47 +49,42 @@ async function handleStripeEvent(event) {
     const nombre = invoice.customer_details?.name || '';
     const enlacePago = 'https://www.laboroteca.es/gestion-pago-club/';
 
-    if (email && intento >= 1 && intento <= 3) {
-      try {
-        console.log(`⚠️ Intento de cobro fallido (${intento}) para:`, email);
-        if (intento === 1) {
-          await enviarAvisoImpagoPrimerIntento(email, nombre, enlacePago);
-        } else if (intento === 2) {
-          await enviarAvisoImpagoSegundoIntento(email, nombre, enlacePago);
-        } else if (intento === 3) {
-          await enviarAvisoImpagoTercerIntento(email, nombre, enlacePago);
-        }
-      } catch (err) {
-        console.error('❌ Error al enviar aviso de impago:', err?.message);
-      }
-    } else {
-      console.warn('⚠️ Email no válido o intento fuera de rango');
-    }
+    if (email && intento === 3) {
+  try {
+    console.log(`⚠️ Último intento de cobro fallido para:`, email);
+    await enviarAvisoImpago(email, nombre, intento, enlacePago);
+  } catch (err) {
+    console.error('❌ Error al enviar aviso de impago:', err?.message);
+  }
+} else {
+  console.log(`⚠️ Intento de cobro fallido (${intento}) para ${email} - no se envía aviso, solo en último intento.`);
+}
+
     return { warning: true };
   }
 
-if (event.type === 'invoice.paid') {
-  const invoice = event.data.object;
-  const email = (
-    invoice.customer_email ||
-    invoice.customer_details?.email ||
-    invoice.subscription_details?.metadata?.email ||
-    invoice.metadata?.email
-  )?.toLowerCase().trim();
+  if (event.type === 'invoice.paid') {
+    const invoice = event.data.object;
+    const email = (
+      invoice.customer_email ||
+      invoice.customer_details?.email ||
+      invoice.subscription_details?.metadata?.email ||
+      invoice.metadata?.email
+    )?.toLowerCase().trim();
 
-  const nombre = invoice.customer_details?.name || '';
-  const importe = parseFloat((invoice.amount_paid / 100).toFixed(2));
-  const lineas = invoice.lines?.data || [];
+    const nombre = invoice.customer_details?.name || '';
+    const importe = parseFloat((invoice.amount_paid / 100).toFixed(2));
+    const lineas = invoice.lines?.data || [];
 
-  console.log('📥 Evento invoice.paid recibido');
-  console.log('📧 Email:', email);
-  console.log('🧾 Líneas:', JSON.stringify(lineas, null, 2));
+    console.log('📥 Evento invoice.paid recibido');
+    console.log('📧 Email:', email);
+    console.log('🧾 Líneas:', JSON.stringify(lineas, null, 2));
 
-  const productoClub = lineas.find(line => {
-    const desc = (line.description || '').toLowerCase()
-      .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    return desc.includes('club laboroteca') || desc.includes('suscripcion mensual');
-  });
+    const productoClub = lineas.find(line => {
+      const desc = (line.description || '').toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      return desc.includes('club laboroteca') || desc.includes('suscripcion mensual');
+    });
 
     if (email && productoClub) {
       try {

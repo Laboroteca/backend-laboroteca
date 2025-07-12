@@ -17,13 +17,11 @@ const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
 const { eliminarUsuarioWordPress } = require('./services/eliminarUsuarioWordPress');
-
-
 const procesarCompra = require('./services/procesarCompra');
 const { activarMembresiaClub } = require('./services/activarMembresiaClub');
 const { syncMemberpressClub } = require('./services/syncMemberpressClub');
 const desactivarMembresiaClub = require('./services/desactivarMembresiaClub');
-const { registrarBajaClub } = require('./services/registrarBajaClub'); // 🆕 REGISTRO EN SHEETS
+const { registrarBajaClub } = require('./services/registrarBajaClub');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -80,7 +78,7 @@ const PRODUCTOS = {
     precio: 200,
     imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/06/club-laboroteca-membresia-precio-sin-permanencia.webp',
     descripcion: 'Suscripción diaria al Club Laboroteca. Solo para pruebas técnicas.',
-    price_id: 'price_1RiaISEe6Cd77jenOBW7Lk8z', // diario
+    price_id: 'price_1RiaISEe6Cd77jenOBW7Lk8z',
     membership_id: 10663
   }
 };
@@ -105,27 +103,29 @@ app.get('/', (req, res) => {
 
 app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   const datos = req.body;
+
   const email = (typeof datos.email_autorelleno === 'string' && datos.email_autorelleno.includes('@'))
     ? datos.email_autorelleno.trim().toLowerCase()
     : (typeof datos.email === 'string' && datos.email.includes('@') ? datos.email.trim().toLowerCase() : '');
 
-const nombre = datos.nombre || datos.Nombre || '';
-const apellidos = datos.apellidos || datos.Apellidos || '';
-const dni = datos.dni || '';
-const direccion = datos.direccion || '';
-const ciudad = datos.ciudad || '';
-const provincia = datos.provincia || '';
-const cp = datos.cp || '';
-const tipoProducto = datos.tipoProducto || '';
-const nombreProducto = datos.nombreProducto || '';
+  const nombre = datos.nombre || datos.Nombre || '';
+  const apellidos = datos.apellidos || datos.Apellidos || '';
+  const dni = datos.dni || '';
+  const direccion = datos.direccion || '';
+  const ciudad = datos.ciudad || '';
+  const provincia = datos.provincia || '';
+  const cp = datos.cp || '';
+  const tipoProducto = datos.tipoProducto || '';
+  const nombreProducto = datos.nombreProducto || '';
+  const descripcionProducto = datos.descripcionProducto || '';
+  const precio = parseFloat((datos.importe || '22.90').toString().replace(',', '.'));
+  const imagenProducto = datos.imagenProducto || 'https://www.laboroteca.es/wp-content/uploads/2025/06/Portada-De-cara-a-la-jubilacion.png';
 
-// Logs informativos
-console.log('🧪 tipoProducto:', tipoProducto);
-console.log('🧪 nombreProducto:', nombreProducto);
+  console.log('🧪 tipoProducto:', tipoProducto);
+  console.log('🧪 nombreProducto:', nombreProducto);
 
-
-  if (!producto || !nombre || !email) {
-    return res.status(400).json({ error: 'Faltan campos obligatorios o producto no disponible.' });
+  if (!nombre || !email || !nombreProducto || !precio || isNaN(precio)) {
+    return res.status(400).json({ error: 'Faltan campos obligatorios o datos inválidos.' });
   }
 
   if (!/^[^@]+@[^@]+\.[^@]+$/.test(email)) {
@@ -134,7 +134,9 @@ console.log('🧪 nombreProducto:', nombreProducto);
   }
 
   const emailValido = await verificarEmailEnWordPress(email);
-  if (!emailValido) return res.status(403).json({ error: 'Este email no está registrado.' });
+  if (!emailValido) {
+    return res.status(403).json({ error: 'Este email no está registrado.' });
+  }
 
   try {
     const session = await stripe.checkout.sessions.create({
@@ -146,52 +148,63 @@ console.log('🧪 nombreProducto:', nombreProducto);
         price_data: {
           currency: 'eur',
           product_data: {
-            name: `${tipoProducto} "${producto.nombre}"`,
-            images: [producto.imagen]
+            name: `${tipoProducto} "${nombreProducto}"`,
+            images: [imagenProducto]
           },
-          unit_amount: producto.precio
+          unit_amount: Math.round(precio * 100)
         },
         quantity: 1
       }],
       metadata: {
-        nombre, apellidos, email, email_autorelleno: email, dni, direccion, ciudad, provincia, cp,
-        tipoProducto, nombreProducto: producto.nombre,
-        descripcionProducto: producto.descripcion
+        nombre,
+        apellidos,
+        email,
+        email_autorelleno: email,
+        dni,
+        direccion,
+        ciudad,
+        provincia,
+        cp,
+        tipoProducto,
+        nombreProducto,
+        descripcionProducto
       },
-      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(producto.nombre)}`,
+      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(nombreProducto)}`,
       cancel_url: 'https://laboroteca.es/error'
     });
 
     return res.json({ url: session.url });
-
   } catch (error) {
     console.error('❌ Error Stripe (crear-sesion-pago):', error.message);
-    return res.status(500).json({ error: 'Error al crear la sesión de pago' });
+    return res.status(500).json({ error: 'Error al crear el pago' });
   }
 });
 
 app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
   const datos = req.body;
+
   const email = (typeof datos.email_autorelleno === 'string' && datos.email_autorelleno.includes('@'))
     ? datos.email_autorelleno.trim().toLowerCase()
     : (typeof datos.email === 'string' && datos.email.includes('@') ? datos.email.trim().toLowerCase() : '');
 
-const nombre = datos.nombre || datos.Nombre || '';
-const apellidos = datos.apellidos || datos.Apellidos || '';
-const dni = datos.dni || '';
-const direccion = datos.direccion || '';
-const ciudad = datos.ciudad || '';
-const provincia = datos.provincia || '';
-const cp = datos.cp || '';
-const tipoProducto = datos.tipoProducto || '';
-const nombreProducto = datos.nombreProducto || '';
+  const nombre = datos.nombre || datos.Nombre || '';
+  const apellidos = datos.apellidos || datos.Apellidos || '';
+  const dni = datos.dni || '';
+  const direccion = datos.direccion || '';
+  const ciudad = datos.ciudad || '';
+  const provincia = datos.provincia || '';
+  const cp = datos.cp || '';
+  const tipoProducto = datos.tipoProducto || '';
+  const nombreProducto = datos.nombreProducto || '';
+  const descripcionProducto = datos.descripcionProducto || '';
+  const precio = parseFloat((datos.importe || '4.99').toString().replace(',', '.'));
+  const imagenProducto = datos.imagenProducto || 'https://www.laboroteca.es/wp-content/uploads/2025/06/Logo-Club-Laboroteca-ABOGADO.png';
 
-console.log('🧪 tipoProducto:', tipoProducto);
-console.log('🧪 nombreProducto:', nombreProducto);
+  console.log('🧪 tipoProducto:', tipoProducto);
+  console.log('🧪 nombreProducto:', nombreProducto);
 
-
-  if (!producto || !nombre || !email) {
-    return res.status(400).json({ error: 'Faltan campos obligatorios o producto no disponible.' });
+  if (!nombre || !email) {
+    return res.status(400).json({ error: 'Faltan campos obligatorios.' });
   }
 
   if (!/^[^@]+@[^@]+\.[^@]+$/.test(email)) {
@@ -200,35 +213,42 @@ console.log('🧪 nombreProducto:', nombreProducto);
   }
 
   const emailValido = await verificarEmailEnWordPress(email);
-  if (!emailValido) return res.status(403).json({ error: 'Este email no está registrado.' });
+  if (!emailValido) {
+    return res.status(403).json({ error: 'Este email no está registrado.' });
+  }
 
-    try {
-    const line_items = producto.price_id
-      ? [{ price: producto.price_id, quantity: 1 }]
-      : [{
-          price_data: {
-            currency: 'eur',
-            recurring: { interval: 'month' },
-            product_data: {
-              name: producto.nombre,
-              images: [producto.imagen]
-            },
-            unit_amount: producto.precio
-          },
-          quantity: 1
-        }];
-
+  try {
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
       mode: 'subscription',
       customer_email: email,
-      line_items,
+      line_items: [{
+        price_data: {
+          currency: 'eur',
+          product_data: {
+            name: nombreProducto,
+            images: [imagenProducto]
+          },
+          unit_amount: Math.round(precio * 100),
+          recurring: { interval: 'month' }
+        },
+        quantity: 1
+      }],
       metadata: {
-        nombre, apellidos, email, email_autorelleno: email, dni, direccion, ciudad, provincia, cp,
-        tipoProducto, nombreProducto: producto.nombre,
-        descripcionProducto: producto.descripcion
+        nombre,
+        apellidos,
+        email,
+        email_autorelleno: email,
+        dni,
+        direccion,
+        ciudad,
+        provincia,
+        cp,
+        tipoProducto,
+        nombreProducto,
+        descripcionProducto
       },
-      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(producto.nombre)}`,
+      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(nombreProducto)}`,
       cancel_url: 'https://laboroteca.es/error'
     });
 
@@ -237,7 +257,6 @@ console.log('🧪 nombreProducto:', nombreProducto);
     console.error('❌ Error Stripe (crear-suscripcion-club):', error.message);
     return res.status(500).json({ error: 'Error al crear la suscripción' });
   }
-
 });
 
 app.post('/activar-membresia-club', async (req, res) => {
@@ -267,10 +286,9 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), async (req, res) => {
     return res.status(400).json({ cancelada: false, mensaje: 'Faltan datos obligatorios' });
   }
 
-  // 🟨 REGISTRO EN SHEETS
   registrarBajaClub({
     email,
-    nombre: '', // Puedes completarlo más adelante
+    nombre: '',
     motivo: 'baja voluntaria'
   }).catch((e) => {
     console.warn('⚠️ No se pudo registrar la baja en Sheets:', e.message);
@@ -289,7 +307,6 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), async (req, res) => {
   }
 });
 
-// ✅ NUEVA RUTA /eliminar-cuenta
 app.post('/eliminar-cuenta', async (req, res) => {
   const { email, password, token } = req.body;
   const tokenEsperado = 'eliminarCuenta@2025!';
@@ -316,7 +333,6 @@ app.post('/eliminar-cuenta', async (req, res) => {
   }
 });
 
-
 app.post('/crear-portal-cliente', async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'Falta el email' });
@@ -331,7 +347,6 @@ app.post('/crear-portal-cliente', async (req, res) => {
     });
 
     return res.json({ url: session.url });
-
   } catch (error) {
     console.error('❌ Error creando portal cliente Stripe:', error.message);
     return res.status(500).json({ error: 'No se pudo crear el portal de cliente Stripe' });
@@ -349,4 +364,3 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Backend funcionando en http://localhost:${PORT}`);
 });
-

@@ -9,7 +9,9 @@ const PRODUCTOS = {
     nombre: 'De cara a la jubilación',
     slug: 'de-cara-a-la-jubilacion',
     descripcion: 'Libro digital con acceso vitalicio',
-    price_id: 'price_1RMG0mEe6Cd77jenTpudZVan'
+    price_id: 'price_1RMG0mEe6Cd77jenTpudZVan',
+    imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/06/DE-CARA-A-LA-JUBILACION-IGNACIO-SOLSONA-ABOGADO.png',
+    precio_cents: 2990
   },
   'el club laboroteca': {
     nombre: 'El Club Laboroteca',
@@ -69,14 +71,29 @@ router.post('/create-session', async (req, res) => {
 
     const isSuscripcion = tipoProducto.toLowerCase().includes('suscrip');
 
+    const line_items = isSuscripcion
+      ? [{
+          price: producto.price_id,
+          quantity: 1
+        }]
+      : [{
+          price_data: {
+            currency: 'eur',
+            unit_amount: producto.precio_cents,
+            product_data: {
+              name: producto.nombre,
+              description: producto.descripcion,
+              images: [producto.imagen]
+            }
+          },
+          quantity: 1
+        }];
+
     const session = await stripe.checkout.sessions.create({
       mode: isSuscripcion ? 'subscription' : 'payment',
       payment_method_types: ['card'],
       customer_email: email,
-      line_items: [{
-        price: producto.price_id,
-        quantity: 1
-      }],
+      line_items,
       success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(producto.nombre)}`,
       cancel_url: 'https://laboroteca.es/error',
       metadata: {

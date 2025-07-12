@@ -22,20 +22,26 @@ function normalizarProducto(str) {
 module.exports = async function procesarCompra(datos) {
   let email = (datos.email_autorelleno || datos.email || '').trim().toLowerCase();
   let rawProducto = (datos.nombreProducto || 'producto').trim();
-
   let importe = parseFloat((datos.importe || '22,90').toString().replace(',', '.'));
+
+  // 💡 Si es 4,99€ asumimos que es el Club
   if (importe === 4.99) rawProducto = 'el club laboroteca';
 
   const descripcionProducto = datos.descripcionProducto || rawProducto || 'Producto Laboroteca';
   const tipoProducto = datos.tipoProducto || '';
   const nombreProducto = datos.nombreProducto || '';
-  const key = normalizarProducto(nombreProducto);
+  const key = normalizarProducto(nombreProducto || descripcionProducto || rawProducto);
   const producto = PRODUCTOS[key];
 
   console.log('🧪 tipoProducto:', tipoProducto);
   console.log('🧪 nombreProducto:', nombreProducto);
   console.log('🔑 key normalizado:', key);
   console.log('📦 producto encontrado:', !!producto);
+
+  // Validación mínima
+  if (!producto) {
+    throw new Error('Faltan campos obligatorios o producto no disponible.');
+  }
 
   const hash = crypto.createHash('md5').update(`${email}-${producto?.nombre || key}`).digest('hex');
   const compraId = `compra-${hash}`;

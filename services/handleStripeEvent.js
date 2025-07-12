@@ -78,12 +78,15 @@ async function handleStripeEvent(event) {
     console.log('🧾 Líneas:', JSON.stringify(lineas, null, 2));
     console.log('📥 EVENTO invoice.paid recibido:', JSON.stringify(event.data.object, null, 2));
 
-    const priceIdClub = 'price_1RfHeAEe6Cd77jenDw9UUPCp';
     const productoClub = lineas.find(line => {
-      const id = line.price?.id || '';
-      const desc = (line.description || '').toLowerCase();
-      return id === priceIdClub || desc.includes('club laboroteca') || desc.includes('suscripción mensual');
-    });
+  const id = line.price?.id || '';
+  const desc = (line.description || '').toLowerCase();
+  return (
+    id === 'price_1RfHeAEe6Cd77jenDw9UUPCp' || // producción
+    desc.includes('club laboroteca') ||       // flexible
+    desc.includes('suscripción mensual')      // más flexible aún
+  );
+});
 
     if (email && productoClub) {
       try {

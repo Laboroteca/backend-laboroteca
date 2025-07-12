@@ -217,7 +217,7 @@ async function enviarConfirmacionBajaClub(email, nombre = '') {
 
 // ✅ EMAIL DE VALIDACIÓN PARA ELIMINAR CUENTA
 async function enviarEmailValidacionEliminacionCuenta(email, token) {
-  const enlace = `https://www.laboroteca.es/confirmar-eliminacion-de-cuenta/?token=${token}`;
+  const enlace = `https://www.laboroteca.es/confirmar-eliminacion-cuenta/?token=${token}`;
   const subject = 'Confirmación de eliminación de tu cuenta en Laboroteca';
   const html = `
     <p>Hola,</p>

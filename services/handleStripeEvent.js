@@ -1,4 +1,4 @@
-const admin = require('../firebase');
+const admin = require('../firebase'); 
 const firestore = admin.firestore();
 
 const { guardarEnGoogleSheets } = require('./googleSheets');
@@ -49,22 +49,38 @@ async function handleStripeEvent(event) {
     const nombre = invoice.customer_details?.name || '';
     const enlacePago = 'https://www.laboroteca.es/gestion-pago-club/';
 
-    if (email && intento === 3) {
-  try {
-    console.log(`⚠️ Último intento de cobro fallido para:`, email);
-    await enviarAvisoImpago(email, nombre, intento, enlacePago);
-  } catch (err) {
-    console.error('❌ Error al enviar aviso de impago:', err?.message);
-  }
-} else {
-  console.log(`⚠️ Intento de cobro fallido (${intento}) para ${email} - no se envía aviso, solo en último intento.`);
-}
+    if (email && intento >= 1 && intento <= 3) {
+      try {
+        console.log(`⚠️ Intento de cobro fallido (${intento}) para:`, email);
 
+        // Enviar aviso al usuario siempre
+        await enviarAvisoImpago(email, nombre, intento, enlacePago, false); // false = no enviar copia
+
+        // Solo en el último intento enviamos copia a laboroteca@gmail.com
+        if (intento === 3) {
+          await enviarAvisoImpago(email, nombre, intento, enlacePago, true); // true = enviar copia a ti
+        }
+      } catch (err) {
+        console.error('❌ Error al enviar aviso de impago:', err?.message);
+      }
+    } else {
+      console.warn('⚠️ Email no válido o intento fuera de rango');
+    }
     return { warning: true };
   }
 
   if (event.type === 'invoice.paid') {
     const invoice = event.data.object;
+    const invoiceId = invoice.id;
+
+    // CONTROL DE DUPLICIDAD: Verificar si ya se procesó esta factura
+    const docRefFactura = firestore.collection('facturasGeneradas').doc(invoiceId);
+    const docSnapFactura = await docRefFactura.get();
+    if (docSnapFactura.exists) {
+      console.log(`⚠️ Factura ${invoiceId} ya procesada, omitiendo duplicado.`);
+      return { ignored: true };
+    }
+
     const email = (
       invoice.customer_email ||
       invoice.customer_details?.email ||
@@ -140,6 +156,10 @@ async function handleStripeEvent(event) {
         });
 
         await enviarFacturaPorEmail(datosCliente, pdfBuffer);
+
+        // MARCAR FACTURA COMO PROCESADA (para evitar duplicados)
+        await docRefFactura.set({ procesada: true, fecha: new Date().toISOString() });
+
       } catch (err) {
         console.error('❌ Error en factura de renovación:', err?.message);
       }

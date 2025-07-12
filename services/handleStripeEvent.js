@@ -47,104 +47,65 @@ async function handleStripeEvent(event) {
     const nombre = invoice.customer_details?.name || '';
     const enlacePago = 'https://www.laboroteca.es/gestion-pago-club/';
 
-    if (email && intento >= 1 && intento <= 3) {
-      try {
-        console.log(`⚠️ Intento de cobro fallido (${intento}) para:`, email);
-        await enviarAvisoImpago(email, nombre, intento, enlacePago);
-      } catch (err) {
-        console.error('❌ Error al enviar aviso de impago:', err?.message);
+if (email && productoClub) {
+  try {
+    console.log('💰 Renovación pagada - Club Laboroteca:', email, '-', importe, '€');
+
+    let datosCliente = {
+      nombre,
+      apellidos: '',
+      dni: '',
+      email,
+      direccion: '',
+      ciudad: '',
+      provincia: '',
+      cp: '',
+      importe,
+      tipoProducto: 'Renovación Club',
+      nombreProducto: 'el club laboroteca',
+      descripcionProducto: 'Suscripción mensual al Club Laboroteca',
+      producto: 'club laboroteca'
+    };
+
+    // 🔍 Buscar datos fiscales en Firestore
+    try {
+      const docSnap = await firestore.collection('datosFiscalesPorEmail').doc(email).get();
+      if (docSnap.exists) {
+        const doc = docSnap.data();
+        datosCliente = {
+          ...datosCliente,
+          nombre: doc.nombre || datosCliente.nombre,
+          apellidos: doc.apellidos || '',
+          dni: doc.dni || '',
+          direccion: doc.direccion || '',
+          ciudad: doc.ciudad || '',
+          provincia: doc.provincia || '',
+          cp: doc.cp || ''
+        };
+        console.log('✅ Datos fiscales recuperados desde datosFiscalesPorEmail');
+      } else {
+        console.warn('⚠️ No se encontraron datos fiscales para este email');
       }
-    } else {
-      console.warn('⚠️ Email no válido o intento fuera de rango');
+    } catch (err) {
+      console.error('❌ Error buscando en datosFiscalesPorEmail:', err.message);
     }
-    return { warning: true };
-  }
 
-  if (event.type === 'invoice.paid') {
-    const invoice = event.data.object;
-    const email = (
-      invoice.customer_email ||
-      invoice.customer_details?.email ||
-      invoice.subscription_details?.metadata?.email ||
-      invoice.metadata?.email
-    )?.toLowerCase().trim();
+    await guardarEnGoogleSheets(datosCliente);
+    const pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
+    const nombreArchivo = `facturas/${email}/${Date.now()}-club-renovacion.pdf`;
 
-    const nombre = invoice.customer_details?.name || '';
-    const importe = parseFloat((invoice.amount_paid / 100).toFixed(2));
-    const lineas = invoice.lines?.data || [];
-
-    console.log('📥 Evento invoice.paid recibido');
-    console.log('📧 Email:', email);
-    console.log('🧾 Líneas:', JSON.stringify(lineas, null, 2));
-
-    const productoClub = lineas.find(line => {
-      const id = line.price?.id || '';
-      const desc = (line.description || '').toLowerCase();
-      return (
-        id === 'price_1RfHeAEe6Cd77jenDw9UUPCp' ||
-        desc.includes('club laboroteca') ||
-        desc.includes('suscripción mensual')
-      );
+    await subirFactura(nombreArchivo, pdfBuffer, {
+      email,
+      nombreProducto: 'el club laboroteca',
+      tipoProducto: 'Renovación Club',
+      importe
     });
 
-    if (email && productoClub) {
-      try {
-        console.log('💰 Renovación pagada - Club Laboroteca:', email, '-', importe, '€');
-
-        let datosCliente = {
-          nombre,
-          apellidos: '',
-          dni: '',
-          email,
-          direccion: '',
-          ciudad: '',
-          provincia: '',
-          cp: '',
-          importe,
-          tipoProducto: 'Renovación Club',
-          nombreProducto: 'el club laboroteca',
-          descripcionProducto: 'Suscripción mensual al Club Laboroteca',
-          producto: 'club laboroteca'
-        };
-
-        try {
-          const snap = await firestore.collection('usuariosClub').where('email', '==', email).limit(1).get();
-          if (!snap.empty) {
-            const doc = snap.docs[0].data();
-            datosCliente = {
-              ...datosCliente,
-              nombre: doc.nombre || datosCliente.nombre,
-              apellidos: doc.apellidos || '',
-              dni: doc.dni || '',
-              direccion: doc.direccion || '',
-              ciudad: doc.ciudad || '',
-              provincia: doc.provincia || '',
-              cp: doc.cp || ''
-            };
-            console.log('✅ Datos fiscales recuperados desde usuariosClub');
-          } else {
-            console.warn('⚠️ No se encontraron datos en usuariosClub');
-          }
-        } catch (err) {
-          console.error('❌ Error buscando en usuariosClub:', err.message);
-        }
-
-        await guardarEnGoogleSheets(datosCliente);
-        const pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
-        const nombreArchivo = `facturas/${email}/${Date.now()}-club-renovacion.pdf`;
-
-        await subirFactura(nombreArchivo, pdfBuffer, {
-          email,
-          nombreProducto: 'el club laboroteca',
-          tipoProducto: 'Renovación Club',
-          importe
-        });
-
-        await enviarFacturaPorEmail(datosCliente, pdfBuffer);
-      } catch (err) {
-        console.error('❌ Error en factura de renovación:', err?.message);
-      }
-    }
+    await enviarFacturaPorEmail(datosCliente, pdfBuffer);
+  } catch (err) {
+    console.error('❌ Error en factura de renovación:', err?.message);
+  }
+}
     return { success: true, renovacion: true };
   }
 

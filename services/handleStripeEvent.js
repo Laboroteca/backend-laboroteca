@@ -76,6 +76,8 @@ async function handleStripeEvent(event) {
     console.log('📥 Evento invoice.paid recibido');
     console.log('📧 Email:', email);
     console.log('🧾 Líneas:', JSON.stringify(lineas, null, 2));
+    console.log('📥 EVENTO invoice.paid recibido:', JSON.stringify(event.data.object, null, 2));
+
 
     const priceIdClub = 'price_1RfHeAEe6Cd77jenDw9UUPCp';
     const productoClub = lineas.find(line =>

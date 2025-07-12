@@ -53,7 +53,7 @@ const PRODUCTOS = {
   'de cara a la jubilacion': {
     nombre: 'De cara a la jubilación',
     precio: 2990,
-    imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/06/DE-CARA-A-LA-JUBILACION-IGNACIO-SOLSONA-ABOGADO-scaled.png',
+    imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/06/De-cara-a-la-jubilacion-ignacio-solsona-en-PDF.webp',
     descripcion: 'Libro "De cara a la jubilación". Edición digital. Membresía vitalicia.'
   },
   'curso ip total': {
@@ -74,14 +74,6 @@ const PRODUCTOS = {
     imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/06/club-laboroteca-membresia-precio-sin-permanencia.webp',
     descripcion: 'Suscripción mensual a El Club Laboroteca. Acceso a contenido exclusivo.'
   },
-  'club-test': {
-    nombre: 'Test diario Club Laboroteca',
-    precio: 200,
-    imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/06/club-laboroteca-membresia-precio-sin-permanencia.webp',
-    descripcion: 'Suscripción diaria al Club Laboroteca. Solo para pruebas técnicas.',
-    price_id: 'price_1RiaISEe6Cd77jenOBW7Lk8z',
-    membership_id: 10663
-  }
 };
 
 function normalizarProducto(str) {

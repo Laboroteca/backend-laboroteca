@@ -1,4 +1,4 @@
-const admin = require('../firebase');
+const admin = require('../firebase'); 
 const firestore = admin.firestore();
 
 const { guardarEnGoogleSheets } = require('./googleSheets');
@@ -107,27 +107,26 @@ async function handleStripeEvent(event) {
           producto: 'club laboroteca'
         };
 
-        // Intentar recuperar los datos fiscales completos si faltan campos clave
-        const camposClave = ['dni', 'direccion', 'ciudad', 'provincia', 'cp'];
-        const faltanDatos = camposClave.some(campo => !datosCliente[campo]);
-
-        if (faltanDatos) {
-          try {
-            const docSnap = await firestore.collection('datosFiscalesPorEmail').doc(email).get();
-            if (docSnap.exists) {
-              const prev = docSnap.data();
-              datosCliente = {
-                ...prev,
-                ...datosCliente,
-                nombre: prev.nombre || nombre
-              };
-              console.log('✅ Datos fiscales recuperados para renovación');
-            } else {
-              console.warn('⚠️ No hay datos fiscales guardados para este email');
-            }
-          } catch (err) {
-            console.error('❌ Error al recuperar datos fiscales:', err.message);
+        try {
+          const snap = await firestore.collection('usuariosClub').where('email', '==', email).limit(1).get();
+          if (!snap.empty) {
+            const doc = snap.docs[0].data();
+            datosCliente = {
+              ...datosCliente,
+              nombre: doc.nombre || datosCliente.nombre,
+              apellidos: doc.apellidos || '',
+              dni: doc.dni || '',
+              direccion: doc.direccion || '',
+              ciudad: doc.ciudad || '',
+              provincia: doc.provincia || '',
+              cp: doc.cp || ''
+            };
+            console.log('✅ Datos fiscales recuperados desde usuariosClub');
+          } else {
+            console.warn('⚠️ No se encontraron datos en usuariosClub');
           }
+        } catch (err) {
+          console.error('❌ Error buscando en usuariosClub:', err.message);
         }
 
         await guardarEnGoogleSheets(datosCliente);
@@ -172,6 +171,7 @@ async function handleStripeEvent(event) {
     return { success: true, baja: true };
   }
 
+  // checkout.session.completed ↓↓↓
   if (event.type !== 'checkout.session.completed') return { ignored: true };
 
   const session = event.data.object;
@@ -253,7 +253,6 @@ async function handleStripeEvent(event) {
 
     await enviarFacturaPorEmail(datosCliente, pdfBuffer);
 
-    // Guardar datos fiscales para futuras renovaciones
     try {
       await firestore.collection('datosFiscalesPorEmail').doc(email).set(datosCliente, { merge: true });
       console.log(`✅ Datos fiscales guardados para ${email}`);

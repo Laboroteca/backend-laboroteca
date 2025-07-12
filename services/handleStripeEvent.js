@@ -71,10 +71,15 @@ async function handleStripeEvent(event) {
 
     const nombre = invoice.customer_details?.name || '';
     const importe = parseFloat((invoice.amount_paid / 100).toFixed(2));
-
     const lineas = invoice.lines?.data || [];
+
+    console.log('📥 Evento invoice.paid recibido');
+    console.log('📧 Email:', email);
+    console.log('🧾 Líneas:', JSON.stringify(lineas, null, 2));
+
+    const priceIdClub = 'price_1RfHeAEe6Cd77jenDw9UUPCp';
     const productoClub = lineas.find(line =>
-      line.description?.toLowerCase().includes('club laboroteca')
+      line.price?.id === priceIdClub || line.description?.toLowerCase().includes('club laboroteca')
     );
 
     if (email && productoClub) {

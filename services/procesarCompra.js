@@ -34,6 +34,18 @@ module.exports = async function procesarCompra(datos) {
     throw new Error(`❌ Email inválido: "${email}"`);
   }
 
+  // ✅ LOGS ADICIONALES
+  console.log('🧪 tipoProducto:', tipoProducto);
+  console.log('🧪 nombreProducto:', nombreProducto);
+  const clave = nombreProducto
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\W+/g, '');
+  console.log('🔑 key normalizado:', clave);
+
+  // 🚫 Ya no usamos productos.json ni verificaciones de clave en diccionario
+
   const hash = crypto.createHash('md5').update(`${email}-${nombreProducto}`).digest('hex');
   const compraId = `compra-${hash}`;
   const docRef = firestore.collection('comprasProcesadas').doc(compraId);
@@ -74,6 +86,11 @@ module.exports = async function procesarCompra(datos) {
       descripcionProducto,
       tipoProducto
     };
+
+    // 🛡️ Validación extra de datos esenciales
+    if (!nombre || !apellidos || !dni || !direccion || !ciudad || !provincia || !cp) {
+      console.warn(`⚠️ [procesarCompra] Campos incompletos para factura de ${email}`);
+    }
 
     console.time(`🕒 Compra ${email}`);
     console.log('📦 [procesarCompra] Datos facturación finales:\n', JSON.stringify(datosCliente, null, 2));

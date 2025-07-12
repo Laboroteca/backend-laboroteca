@@ -19,7 +19,7 @@ const RUTA_CUPONES = path.join(__dirname, '../data/cupones.json');
 function normalizarProducto(str) {
   return (str || '')
     .toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
     .replace(/suscripcion mensual a el club laboroteca.*$/i, 'club laboroteca')
     .replace(/suscripcion mensual al club laboroteca.*$/i, 'club laboroteca')
     .replace(/el club laboroteca.*$/i, 'club laboroteca')
@@ -73,26 +73,25 @@ async function handleStripeEvent(event) {
     const importe = parseFloat((invoice.amount_paid / 100).toFixed(2));
     const lineas = invoice.lines?.data || [];
 
-        console.log('📥 Evento invoice.paid recibido');
+    console.log('📥 Evento invoice.paid recibido');
     console.log('📧 Email:', email);
     console.log('🧾 Líneas:', JSON.stringify(lineas, null, 2));
-    console.log('📥 EVENTO invoice.paid recibido:', JSON.stringify(event.data.object, null, 2));
 
     const productoClub = lineas.find(line => {
-  const id = line.price?.id || '';
-  const desc = (line.description || '').toLowerCase();
-  return (
-    id === 'price_1RfHeAEe6Cd77jenDw9UUPCp' || // producción
-    desc.includes('club laboroteca') ||       // flexible
-    desc.includes('suscripción mensual')      // más flexible aún
-  );
-});
+      const id = line.price?.id || '';
+      const desc = (line.description || '').toLowerCase();
+      return (
+        id === 'price_1RfHeAEe6Cd77jenDw9UUPCp' ||
+        desc.includes('club laboroteca') ||
+        desc.includes('suscripción mensual')
+      );
+    });
 
     if (email && productoClub) {
       try {
         console.log('💰 Renovación pagada - Club Laboroteca:', email, '-', importe, '€');
 
-        const datosCliente = {
+        let datosCliente = {
           nombre,
           apellidos: '',
           dni: '',
@@ -107,6 +106,29 @@ async function handleStripeEvent(event) {
           descripcionProducto: 'Suscripción mensual al Club Laboroteca',
           producto: 'club laboroteca'
         };
+
+        // Intentar recuperar los datos fiscales completos si faltan campos clave
+        const camposClave = ['dni', 'direccion', 'ciudad', 'provincia', 'cp'];
+        const faltanDatos = camposClave.some(campo => !datosCliente[campo]);
+
+        if (faltanDatos) {
+          try {
+            const docSnap = await firestore.collection('datosFiscalesPorEmail').doc(email).get();
+            if (docSnap.exists) {
+              const prev = docSnap.data();
+              datosCliente = {
+                ...prev,
+                ...datosCliente,
+                nombre: prev.nombre || nombre
+              };
+              console.log('✅ Datos fiscales recuperados para renovación');
+            } else {
+              console.warn('⚠️ No hay datos fiscales guardados para este email');
+            }
+          } catch (err) {
+            console.error('❌ Error al recuperar datos fiscales:', err.message);
+          }
+        }
 
         await guardarEnGoogleSheets(datosCliente);
         const pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
@@ -231,6 +253,14 @@ async function handleStripeEvent(event) {
 
     await enviarFacturaPorEmail(datosCliente, pdfBuffer);
 
+    // Guardar datos fiscales para futuras renovaciones
+    try {
+      await firestore.collection('datosFiscalesPorEmail').doc(email).set(datosCliente, { merge: true });
+      console.log(`✅ Datos fiscales guardados para ${email}`);
+    } catch (err) {
+      console.error('⚠️ No se pudieron guardar los datos fiscales:', err.message);
+    }
+
     if (memberpressId === 10663) {
       await syncMemberpressClub({ email, accion: 'activar', membership_id: memberpressId, importe: datosCliente.importe });
       await activarMembresiaClub(email);
@@ -257,7 +287,6 @@ async function handleStripeEvent(event) {
         console.error('❌ Error al marcar cupón como usado:', err?.message);
       }
     }
-
   } catch (err) {
     errorProcesando = true;
     console.error('❌ Error general en flujo Stripe:', err?.message);

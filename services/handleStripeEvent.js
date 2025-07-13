@@ -55,20 +55,15 @@ async function handleStripeEvent(event) {
       return { received: true, duplicate: true };
     }
 
-    let intento = 1;
-    if (invoice.next_payment_attempt) {
-      intento = 4 - (invoice.payment_attempt_count || 1);
-    } else {
-      intento = 3;
-    }
+    let intento = invoice.attempt_count || 1;
 
     if (email && intento >= 1 && intento <= 3) {
       try {
-        console.log(`⚠️ Intento de cobro fallido (${intento}) para:`, email);
+        console.log(`⚠️ Intento de cobro fallido (${intento}) para: ${email}`);
 
         await enviarAvisoImpago(email, nombre, intento, enlacePago, false);
 
-        if (intento === 1) {
+        if (intento === 3) {
           await enviarAvisoImpago(email, nombre, intento, enlacePago, true);
           await desactivarMembresiaClub(email);
           await registrarBajaClub({ email, motivo: 'impago' });
@@ -86,6 +81,7 @@ async function handleStripeEvent(event) {
     } else {
       console.warn('⚠️ Email no válido o intento fuera de rango');
     }
+
     return { warning: true };
   }
 
@@ -93,7 +89,6 @@ async function handleStripeEvent(event) {
     const invoice = event.data.object;
     const invoiceId = invoice.id;
 
-    // CONTROL DE DUPLICIDAD: Verificar si ya se procesó esta factura
     const docRefFactura = firestore.collection('facturasGeneradas').doc(invoiceId);
     const docSnapFactura = await docRefFactura.get();
     if (docSnapFactura.exists) {
@@ -176,8 +171,6 @@ async function handleStripeEvent(event) {
         });
 
         await enviarFacturaPorEmail(datosCliente, pdfBuffer);
-
-        // MARCAR FACTURA COMO PROCESADA (para evitar duplicados)
         await docRefFactura.set({ procesada: true, fecha: new Date().toISOString() });
 
       } catch (err) {
@@ -203,9 +196,7 @@ async function handleStripeEvent(event) {
       try {
         console.log('❌ Suscripción cancelada por impago:', email);
 
-        // Aquí reemplazamos el sync directo por llamada a desactivarMembresiaClub para hacer todo el proceso completo
         await desactivarMembresiaClub(email);
-
         await registrarBajaClub({ email, motivo: 'impago' });
         await enviarAvisoCancelacion(email, nombre, enlacePago);
       } catch (err) {

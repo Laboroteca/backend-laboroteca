@@ -3,14 +3,13 @@ const firestore = admin.firestore();
 
 const { guardarEnGoogleSheets } = require('./googleSheets');
 const { crearFacturaEnFacturaCity } = require('./facturaCity');
-// IMPORT CORREGIDO: solo importar la función única para avisos de impago
 const { enviarFacturaPorEmail, enviarAvisoImpago, enviarAvisoCancelacion } = require('./email');
 const { subirFactura } = require('./gcs');
 const { activarMembresiaClub } = require('./activarMembresiaClub');
 const { syncMemberpressClub } = require('./syncMemberpressClub');
 const { syncMemberpressLibro } = require('./syncMemberpressLibro');
 const { registrarBajaClub } = require('./registrarBajaClub');
-const { desactivarMembresiaClub } = require('./desactivarMembresiaClub'); // <--- IMPORTANTE: Importa aquí la función de desactivar membresía
+const { desactivarMembresiaClub } = require('./desactivarMembresiaClub');
 const fs = require('fs').promises;
 const path = require('path');
 const Stripe = require('stripe');
@@ -21,7 +20,7 @@ const RUTA_CUPONES = path.join(__dirname, '../data/cupones.json');
 function normalizarProducto(str) {
   return (str || '')
     .toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
     .replace(/suscripcion mensual a el club laboroteca.*$/i, 'club laboroteca')
     .replace(/suscripcion mensual al club laboroteca.*$/i, 'club laboroteca')
     .replace(/el club laboroteca.*$/i, 'club laboroteca')
@@ -53,13 +52,10 @@ async function handleStripeEvent(event) {
       try {
         console.log(`⚠️ Intento de cobro fallido (${intento}) para:`, email);
 
-        // Enviar aviso al usuario siempre (sin copia)
         await enviarAvisoImpago(email, nombre, intento, enlacePago, false);
 
-        // Solo en el último intento enviamos copia a laboroteca@gmail.com y cancelamos
         if (intento === 3) {
           await enviarAvisoImpago(email, nombre, intento, enlacePago, true);
-          // Cancelar suscripción y hacer la baja completa
           await desactivarMembresiaClub(email);
           await registrarBajaClub({ email, motivo: 'impago' });
         }
@@ -76,13 +72,13 @@ async function handleStripeEvent(event) {
     const invoice = event.data.object;
     const invoiceId = invoice.id;
 
-    // CONTROL DE DUPLICIDAD: Verificar si ya se procesó esta factura
-    const docRefFactura = firestore.collection('facturasGeneradas').doc(invoiceId);
+    const docRefFactura = firestore.collection('stripeWebhookProcesados').doc(event.id);
     const docSnapFactura = await docRefFactura.get();
     if (docSnapFactura.exists) {
-      console.log(`⚠️ Factura ${invoiceId} ya procesada, omitiendo duplicado.`);
+      console.log(`⏩ Evento duplicado ignorado: ${event.id}`);
       return { ignored: true };
     }
+    await docRefFactura.set({ fecha: new Date().toISOString(), type: 'invoice.paid' });
 
     const email = (
       invoice.customer_email ||
@@ -101,7 +97,7 @@ async function handleStripeEvent(event) {
 
     const productoClub = lineas.find(line => {
       const desc = (line.description || '').toLowerCase()
-        .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        .normalize('NFD').replace(/[̀-ͯ]/g, '');
       return desc.includes('club laboroteca') || desc.includes('suscripcion mensual');
     });
 
@@ -159,10 +155,6 @@ async function handleStripeEvent(event) {
         });
 
         await enviarFacturaPorEmail(datosCliente, pdfBuffer);
-
-        // MARCAR FACTURA COMO PROCESADA (para evitar duplicados)
-        await docRefFactura.set({ procesada: true, fecha: new Date().toISOString() });
-
       } catch (err) {
         console.error('❌ Error en factura de renovación:', err?.message);
       }
@@ -185,10 +177,7 @@ async function handleStripeEvent(event) {
     if (email) {
       try {
         console.log('❌ Suscripción cancelada por impago:', email);
-
-        // Aquí reemplazamos el sync directo por llamada a desactivarMembresiaClub para hacer todo el proceso completo
         await desactivarMembresiaClub(email);
-
         await registrarBajaClub({ email, motivo: 'impago' });
         await enviarAvisoCancelacion(email, nombre, enlacePago);
       } catch (err) {

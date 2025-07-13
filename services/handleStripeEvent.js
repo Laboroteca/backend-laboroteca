@@ -53,12 +53,15 @@ async function handleStripeEvent(event) {
       try {
         console.log(`⚠️ Intento de cobro fallido (${intento}) para:`, email);
 
-        // Enviar aviso al usuario siempre
-        await enviarAvisoImpago(email, nombre, intento, enlacePago, false); // false = no enviar copia
+        // Enviar aviso al usuario siempre (sin copia)
+        await enviarAvisoImpago(email, nombre, intento, enlacePago, false);
 
-        // Solo en el último intento enviamos copia a laboroteca@gmail.com
+        // Solo en el último intento enviamos copia a laboroteca@gmail.com y cancelamos
         if (intento === 3) {
-          await enviarAvisoImpago(email, nombre, intento, enlacePago, true); // true = enviar copia a ti
+          await enviarAvisoImpago(email, nombre, intento, enlacePago, true);
+          // Cancelar suscripción y hacer la baja completa
+          await desactivarMembresiaClub(email);
+          await registrarBajaClub({ email, motivo: 'impago' });
         }
       } catch (err) {
         console.error('❌ Error al enviar aviso de impago:', err?.message);

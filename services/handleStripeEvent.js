@@ -44,9 +44,23 @@ async function handleStripeEvent(event) {
       invoice.metadata?.email
     )?.toLowerCase().trim();
 
-    const intento = invoice.attempt_count || 1;
     const nombre = invoice.customer_details?.name || '';
     const enlacePago = 'https://www.laboroteca.es/gestion-pago-club/';
+    const invoiceId = invoice.id;
+
+    const docRefIntento = firestore.collection('intentosImpago').doc(invoiceId);
+    const docSnapIntento = await docRefIntento.get();
+    if (docSnapIntento.exists) {
+      console.warn(`⛔️ [IMPAGO] Evento duplicado ignorado: ${invoiceId}`);
+      return { received: true, duplicate: true };
+    }
+
+    let intento = 1;
+    if (invoice.next_payment_attempt) {
+      intento = 4 - (invoice.payment_attempt_count || 1);
+    } else {
+      intento = 3;
+    }
 
     if (email && intento >= 1 && intento <= 3) {
       try {
@@ -54,11 +68,18 @@ async function handleStripeEvent(event) {
 
         await enviarAvisoImpago(email, nombre, intento, enlacePago, false);
 
-        if (intento === 3) {
+        if (intento === 1) {
           await enviarAvisoImpago(email, nombre, intento, enlacePago, true);
           await desactivarMembresiaClub(email);
           await registrarBajaClub({ email, motivo: 'impago' });
         }
+
+        await docRefIntento.set({
+          invoiceId,
+          intento,
+          email,
+          fecha: new Date().toISOString()
+        });
       } catch (err) {
         console.error('❌ Error al enviar aviso de impago:', err?.message);
       }
@@ -72,13 +93,13 @@ async function handleStripeEvent(event) {
     const invoice = event.data.object;
     const invoiceId = invoice.id;
 
-    const docRefFactura = firestore.collection('stripeWebhookProcesados').doc(event.id);
+    // CONTROL DE DUPLICIDAD: Verificar si ya se procesó esta factura
+    const docRefFactura = firestore.collection('facturasGeneradas').doc(invoiceId);
     const docSnapFactura = await docRefFactura.get();
     if (docSnapFactura.exists) {
-      console.log(`⏩ Evento duplicado ignorado: ${event.id}`);
+      console.log(`⚠️ Factura ${invoiceId} ya procesada, omitiendo duplicado.`);
       return { ignored: true };
     }
-    await docRefFactura.set({ fecha: new Date().toISOString(), type: 'invoice.paid' });
 
     const email = (
       invoice.customer_email ||
@@ -97,7 +118,7 @@ async function handleStripeEvent(event) {
 
     const productoClub = lineas.find(line => {
       const desc = (line.description || '').toLowerCase()
-        .normalize('NFD').replace(/[̀-ͯ]/g, '');
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
       return desc.includes('club laboroteca') || desc.includes('suscripcion mensual');
     });
 
@@ -155,6 +176,10 @@ async function handleStripeEvent(event) {
         });
 
         await enviarFacturaPorEmail(datosCliente, pdfBuffer);
+
+        // MARCAR FACTURA COMO PROCESADA (para evitar duplicados)
+        await docRefFactura.set({ procesada: true, fecha: new Date().toISOString() });
+
       } catch (err) {
         console.error('❌ Error en factura de renovación:', err?.message);
       }
@@ -177,7 +202,10 @@ async function handleStripeEvent(event) {
     if (email) {
       try {
         console.log('❌ Suscripción cancelada por impago:', email);
+
+        // Aquí reemplazamos el sync directo por llamada a desactivarMembresiaClub para hacer todo el proceso completo
         await desactivarMembresiaClub(email);
+
         await registrarBajaClub({ email, motivo: 'impago' });
         await enviarAvisoCancelacion(email, nombre, enlacePago);
       } catch (err) {

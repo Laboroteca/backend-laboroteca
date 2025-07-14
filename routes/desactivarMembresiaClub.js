@@ -7,9 +7,6 @@ const axios = require('axios');
 const { enviarConfirmacionBajaClub } = require('./email');
 const { syncMemberpressClub } = require('./syncMemberpressClub');
 
-/**
- * Verifica email+password en WordPress (único método, siempre WP)
- */
 async function verificarLoginWordPress(email, password) {
   try {
     const res = await fetch('https://www.laboroteca.es/wp-json/laboroteca/v1/verificar-login', {
@@ -32,12 +29,6 @@ async function verificarLoginWordPress(email, password) {
   }
 }
 
-/**
- * Desactiva la membresía del Club Laboroteca y elimina el usuario de WordPress.
- * @param {string} email
- * @param {string} [password] — Opcional si ya se ha verificado en otro punto
- * @returns {Promise<{ok: boolean, mensaje?: string}>}
- */
 async function desactivarMembresiaClub(email, password) {
   if (!email || typeof email !== 'string') {
     return { ok: false, mensaje: 'Email obligatorio.' };
@@ -53,19 +44,34 @@ async function desactivarMembresiaClub(email, password) {
   // 🔻 Paso 1: Cancelar suscripciones activas en Stripe
   try {
     const clientes = await stripe.customers.list({ email, limit: 1 });
-    if (clientes.data.length > 0) {
+    if (clientes.data.length === 0) {
+      console.warn(`⚠️ Stripe: cliente no encontrado para ${email}`);
+    } else {
       const customerId = clientes.data[0].id;
-      const subsActivas = await stripe.subscriptions.list({
+
+      // Cancelar todas las suscripciones activas o incompletas
+      const subs = await stripe.subscriptions.list({
         customer: customerId,
-        status: 'active',
+        status: 'all',
         limit: 10
       });
-      for (const sub of subsActivas.data) {
-        await stripe.subscriptions.cancel(sub.id, { invoice_now: false, prorate: false });
-        console.log(`🛑 Stripe: suscripción ${sub.id} cancelada para ${email}`);
+
+      const suscripcionesCanceladas = [];
+
+      for (const sub of subs.data) {
+        if (['active', 'trialing', 'incomplete'].includes(sub.status)) {
+          await stripe.subscriptions.cancel(sub.id, {
+            invoice_now: false,
+            prorate: false
+          });
+          console.log(`🛑 Stripe: suscripción ${sub.id} cancelada para ${email}`);
+          suscripcionesCanceladas.push(sub.id);
+        }
       }
-    } else {
-      console.warn(`⚠️ Stripe: cliente no encontrado para ${email}`);
+
+      if (suscripcionesCanceladas.length === 0) {
+        console.warn(`⚠️ Stripe: ninguna suscripción activa/incompleta encontrada para ${email}`);
+      }
     }
   } catch (errStripe) {
     console.error('❌ Error cancelando suscripción en Stripe:', errStripe.message);
@@ -99,7 +105,7 @@ async function desactivarMembresiaClub(email, password) {
     return { ok: false, mensaje: `Error al desactivar en MemberPress: ${errMP.message || errMP}` };
   }
 
-  // 🔻 Paso 4: Enviar email de baja (opcional si ya se notificó)
+  // 🔻 Paso 4: Enviar email de baja
   try {
     await enviarConfirmacionBajaClub(email, '');
     console.log(`📩 Email de baja enviado a ${email}`);
@@ -107,7 +113,7 @@ async function desactivarMembresiaClub(email, password) {
     console.error(`❌ Error al enviar email de baja: ${errEmail.message}`);
   }
 
-  // 🔻 Paso 5: Eliminar en WordPress si se pasó contraseña
+  // 🔻 Paso 5: Eliminar usuario en WordPress (opcional)
   if (password) {
     try {
       const resp = await axios.post('https://www.laboroteca.es/wp-json/laboroteca/v1/eliminar-usuario', {
@@ -130,7 +136,7 @@ async function desactivarMembresiaClub(email, password) {
     }
   }
 
-  return { ok: true };
+  return { ok: true, cancelada: true };
 }
 
 module.exports = desactivarMembresiaClub;

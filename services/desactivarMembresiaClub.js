@@ -39,15 +39,18 @@ async function desactivarMembresiaClub(email) {
     const clientes = await stripe.customers.list({ email, limit: 1 });
     if (clientes.data.length > 0) {
       const customerId = clientes.data[0].id;
-      const subsActivas = await stripe.subscriptions.list({
-        customer: customerId,
-        status: 'active',
-        limit: 10
-      });
-      for (const sub of subsActivas.data) {
-        await stripe.subscriptions.cancel(sub.id, { invoice_now: false, prorate: false });
-        console.log(`🛑 Stripe: suscripción ${sub.id} cancelada`);
-      }
+      const subs = await stripe.subscriptions.list({
+  customer: customerId,
+  status: 'all',
+  limit: 10
+});
+for (const sub of subs.data) {
+  if (['active', 'trialing', 'incomplete', 'past_due'].includes(sub.status)) {
+    await stripe.subscriptions.cancel(sub.id, { invoice_now: false, prorate: false });
+    console.log(`🛑 Stripe: suscripción ${sub.id} cancelada`);
+  }
+}
+
     } else {
       console.warn(`⚠️ Stripe: cliente no encontrado para ${email}`);
     }

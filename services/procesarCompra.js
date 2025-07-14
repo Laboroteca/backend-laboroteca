@@ -37,16 +37,16 @@ module.exports = async function procesarCompra(datos) {
   // ✅ LOGS ADICIONALES
   console.log('🧪 tipoProducto:', tipoProducto);
   console.log('🧪 nombreProducto:', nombreProducto);
-  const clave = nombreProducto
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/\W+/g, '');
-  console.log('🔑 key normalizado:', clave);
+  const claveNormalizada = nombreProducto
+  .toLowerCase()
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .replace(/\W+/g, '');
+  console.log('🔑 Clave normalizada para deduplicación:', claveNormalizada);
 
-  // 🚫 Ya no usamos productos.json ni verificaciones de clave en diccionario
+  const hash = crypto.createHash('md5').update(`${email}-${claveNormalizada}-${importe}`).digest('hex');
+  console.log('🧩 Hash generado:', hash);
 
-  const hash = crypto.createHash('md5').update(`${email}-${nombreProducto}`).digest('hex');
   const compraId = `compra-${hash}`;
   const docRef = firestore.collection('comprasProcesadas').doc(compraId);
   const docSnap = await docRef.get();

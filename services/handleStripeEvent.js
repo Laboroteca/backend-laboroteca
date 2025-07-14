@@ -1,4 +1,4 @@
-const admin = require('../firebase'); 
+const admin = require('../firebase');
 const firestore = admin.firestore();
 
 const { guardarEnGoogleSheets } = require('./googleSheets');
@@ -143,13 +143,13 @@ async function handleStripeEvent(event) {
             const doc = docSnap.data();
             datosCliente = {
               ...datosCliente,
-              nombre: doc.nombre || datosCliente.nombre,
-              apellidos: doc.apellidos || '',
-              dni: doc.dni || '',
-              direccion: doc.direccion || '',
-              ciudad: doc.ciudad || '',
-              provincia: doc.provincia || '',
-              cp: doc.cp || ''
+              nombre: doc.nombre || datosCliente.nombre || '',
+              apellidos: doc.apellidos || datosCliente.apellidos || '',
+              dni: doc.dni || datosCliente.dni || '',
+              direccion: doc.direccion || datosCliente.direccion || '',
+              ciudad: doc.ciudad || datosCliente.ciudad || '',
+              provincia: doc.provincia || datosCliente.provincia || '',
+              cp: doc.cp || datosCliente.cp || ''
             };
             console.log('✅ Datos fiscales recuperados desde datosFiscalesPorEmail');
           } else {

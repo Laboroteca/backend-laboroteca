@@ -319,7 +319,6 @@ async function handleStripeEvent(event) {
       });
 
       await enviarFacturaPorEmail(datosCliente, pdfBuffer);
-      await docRefHash.set({ fecha: new Date().toISOString() });
 
       await firestore.collection('datosFiscalesPorEmail').doc(email).set(datosCliente, { merge: true });
 

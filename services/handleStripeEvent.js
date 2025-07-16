@@ -149,7 +149,6 @@ async function handleStripeEvent(event) {
     console.log('📧 Email:', email);
     console.log('🧾 Líneas:', JSON.stringify(lineas, null, 2));
 
-    if (email && productoClub) {
       try {
         console.log('💰 Renovación pagada - Club Laboroteca:', email, '-', importe, '€');
 
@@ -196,7 +195,6 @@ async function handleStripeEvent(event) {
 
       } catch (err) {
         console.error('❌ Error en factura de renovación:', err?.message);
-      }
 
       return { success: true, renovacion: true };
     }

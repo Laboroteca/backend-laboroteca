@@ -119,6 +119,13 @@ async function handleStripeEvent(event) {
 
   if (event.type === 'invoice.paid') {
     const invoice = event.data.object;
+    // 🛑 NO emitir factura si es la primera compra: ya se gestionó en /procesarCompra
+    const isFirstPurchase = invoice.metadata?.esPrimeraCompra === 'true';
+    if (isFirstPurchase) {
+      console.log('🟡 Primera compra detectada, la factura ya fue gestionada en procesarCompra.js, no se duplica');
+      return { success: true, primeraCompra: true };
+    }
+
     const invoiceId = invoice.id;
 
     const docRefFactura = firestore.collection('facturasGeneradas').doc(invoiceId);

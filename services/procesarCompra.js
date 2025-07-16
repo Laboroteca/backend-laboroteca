@@ -50,18 +50,15 @@ module.exports = async function procesarCompra(datos) {
 
   console.log('🔑 Clave normalizada para deduplicación:', claveNormalizada);
 
-  // 🔒 Hash de deduplicación por email + producto + importe
-  const hash = crypto.createHash('md5').update(`${email}-${claveNormalizada}-${importe.toFixed(2)}`).digest('hex');
-  const compraId = `compra-${hash}`;
-  console.log('🧩 Hash generado:', hash);
+// ✅ Crear ID único para esta compra (sin usar hash de email + producto)
+  const docRef = firestore.collection('comprasProcesadas').doc(`compra-${Date.now()}`);
+  await docRef.set({
+    estado: 'procesando',
+    email,
+    producto: claveNormalizada,
+    fechaInicio: new Date().toISOString()
+  });
 
-  const docRef = firestore.collection('comprasProcesadas').doc(compraId);
-  const docSnap = await docRef.get();
-
-  if (docSnap.exists) {
-    console.warn(`⛔️ [procesarCompra] Compra ya registrada: ${compraId}`);
-    return { duplicate: true };
-  }
 
   // ✅ Registrar inicio
   await docRef.set({

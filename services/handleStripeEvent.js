@@ -164,11 +164,16 @@ if (event.type === 'invoice.paid') {
       return;
     }
 
-    // ✅ Solo procesar facturas de tipo 'subscription_cycle' (renovación mensual)
-    if (billingReason !== 'subscription_cycle') {
-      console.log(`⚠️ Ignorado invoice.paid por no ser una renovación mensual: ${billingReason}`);
+    // ✅ Procesar facturas de tipo 'subscription_cycle' o manual si lleva 'Renovación' en la descripción
+    const descripcion = (invoice.description || '').toLowerCase();
+    if (
+      billingReason !== 'subscription_cycle' &&
+      !(billingReason === 'manual' && descripcion.includes('renovación'))
+    ) {
+      console.log(`⚠️ Ignorado invoice.paid por no ser una renovación válida: ${billingReason}`);
       return;
     }
+
 
     // ❌ Evitar duplicados por invoiceId
     const yaExiste = await firestore.collection('facturasEmitidas').doc(invoiceId).get();

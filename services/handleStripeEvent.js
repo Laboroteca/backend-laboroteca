@@ -149,25 +149,27 @@ async function handleStripeEvent(event) {
     console.log('📧 Email:', email);
     console.log('🧾 Líneas:', JSON.stringify(lineas, null, 2));
 
-    const productoClub = lineas.find(line => {
-      const desc = (line.description || '').toLowerCase()
-        .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-      return desc.includes('club laboroteca') || desc.includes('suscripcion mensual');
-    });
-
-    if (email && productoClub) {
+    if (email && lineas.some(l => l.description?.toLowerCase().includes('club laboroteca'))) {
       try {
         console.log('💰 Renovación pagada - Club Laboroteca:', email, '-', importe, '€');
 
-        let datosCliente = {
-          nombre: '',
-          apellidos: '',
-          dni: '',
+        // 🚨 IMPORTANTE: SOLO en renovaciones se usan los datos guardados previamente en Firestore
+        const docSnap = await firestore.collection('datosFiscalesPorEmail').doc(email).get();
+        if (!docSnap.exists) {
+          console.error(`❌ No hay datos fiscales guardados para este email: ${email}`);
+          throw new Error('Datos fiscales no disponibles para renovación');
+        }
+
+        const doc = docSnap.data();
+        const datosCliente = {
+          nombre: doc.nombre || '',
+          apellidos: doc.apellidos || '',
+          dni: doc.dni || '',
           email,
-          direccion: '',
-          ciudad: '',
-          provincia: '',
-          cp: '',
+          direccion: doc.direccion || '',
+          ciudad: doc.ciudad || '',
+          provincia: doc.provincia || '',
+          cp: doc.cp || '',
           importe,
           tipoProducto: 'Renovación Club',
           nombreProducto: 'el club laboroteca',
@@ -175,36 +177,14 @@ async function handleStripeEvent(event) {
           producto: 'club laboroteca'
         };
 
-        try {
-          const docSnap = await firestore.collection('datosFiscalesPorEmail').doc(email).get();
-          if (docSnap.exists) {
-            const doc = docSnap.data();
-            datosCliente = {
-              ...datosCliente,
-              nombre: doc.nombre || datosCliente.nombre || '',
-              apellidos: doc.apellidos || datosCliente.apellidos || '',
-              dni: doc.dni || datosCliente.dni || '',
-              direccion: doc.direccion || datosCliente.direccion || '',
-              ciudad: doc.ciudad || datosCliente.ciudad || '',
-              provincia: doc.provincia || datosCliente.provincia || '',
-              cp: doc.cp || datosCliente.cp || ''
-            };
-            console.log('✅ Datos fiscales recuperados desde datosFiscalesPorEmail');
-          } else {
-            console.warn('⚠️ No se encontraron datos fiscales para este email');
-          }
-        } catch (err) {
-          console.error('❌ Error buscando en datosFiscalesPorEmail:', err.message);
-        }
-
         await guardarEnGoogleSheets(datosCliente);
         const pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
         const nombreArchivo = `facturas/${email}/${Date.now()}-club-renovacion.pdf`;
 
         await subirFactura(nombreArchivo, pdfBuffer, {
           email,
-          nombreProducto: 'el club laboroteca',
-          tipoProducto: 'Renovación Club',
+          nombreProducto: datosCliente.nombreProducto,
+          tipoProducto: datosCliente.tipoProducto,
           importe
         });
 
@@ -217,10 +197,9 @@ async function handleStripeEvent(event) {
       } catch (err) {
         console.error('❌ Error en factura de renovación:', err?.message);
       }
-    }
 
-    return { success: true, renovacion: true };
-  }
+      return { success: true, renovacion: true };
+    }
 
   if (event.type === 'customer.subscription.deleted') {
     const subscription = event.data.object;

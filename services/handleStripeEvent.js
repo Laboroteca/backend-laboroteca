@@ -217,15 +217,20 @@ if (event.type === 'invoice.paid') {
     await subirFactura(email, pdfBuffer, invoiceId);
     await guardarEnGoogleSheets(datosRenovacion);
     await enviarFacturaPorEmail(datosRenovacion, pdfBuffer);
+
     const emailSeguro = (email || '').toString().trim().toLowerCase();
 
     if (emailSeguro.includes('@')) {
       await activarMembresiaClub(emailSeguro);
-      await syncMemberpressClub(emailSeguro);
+      await syncMemberpressClub({
+        email: emailSeguro,
+        accion: 'activar',
+        membership_id: 10663,
+        importe: (invoice.amount_paid || 499) / 100
+      });
     } else {
       console.warn(`❌ Email inválido en syncMemberpressClub: "${emailSeguro}"`);
     }
-
 
     await firestore.collection('facturasEmitidas').doc(invoiceId).set({
       procesada: true,
@@ -233,6 +238,7 @@ if (event.type === 'invoice.paid') {
       email,
       tipo: 'renovacion'
     });
+
 
     console.log(`✅ Factura de renovación mensual procesada para ${email}`);
   } catch (error) {

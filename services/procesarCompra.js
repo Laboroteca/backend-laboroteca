@@ -38,6 +38,15 @@ module.exports = async function procesarCompra(datos) {
     throw new Error(`❌ Email inválido: "${email}"`);
   }
 
+  // 🛑 DEDUPLICACIÓN TEMPRANA POR invoiceId
+  if (datos.invoiceId) {
+    const facturaDoc = await firestore.collection('facturasGeneradas').doc(datos.invoiceId).get();
+    if (facturaDoc.exists) {
+      console.log(`🛑 La factura ${datos.invoiceId} ya fue procesada. Cancelando ejecución.`);
+      return { success: false, mensaje: 'Factura ya procesada' };
+    }
+  }
+
   // ✅ LOGS ADICIONALES
   console.log('🧪 tipoProducto:', tipoProducto);
   console.log('🧪 nombreProducto:', nombreProducto);
@@ -50,22 +59,18 @@ module.exports = async function procesarCompra(datos) {
 
   console.log('🔑 Clave normalizada para deduplicación:', claveNormalizada);
 
-// ✅ Crear ID único para esta compra (sin usar hash de email + producto)
-    const compraId = `compra-${Date.now()}`;
-    const docRef = firestore.collection('comprasProcesadas').doc(compraId);
+  const compraId = `compra-${Date.now()}`;
+  const docRef = firestore.collection('comprasProcesadas').doc(compraId);
 
-// ✅ Registrar inicio
-    await docRef.set({
-      compraId,
-      estado: 'procesando',
-      email,
-      producto: claveNormalizada,
-      fechaInicio: new Date().toISOString()
-    });
-
+  await docRef.set({
+    compraId,
+    estado: 'procesando',
+    email,
+    producto: claveNormalizada,
+    fechaInicio: new Date().toISOString()
+  });
 
   try {
-    // 🔁 Usar datos nuevos si hay, pero preferencia por los de compra inicial
     const nombre = datos.nombre || datos.Nombre || '';
     const apellidos = datos.apellidos || datos.Apellidos || '';
     const dni = datos.dni || '';
@@ -89,7 +94,6 @@ module.exports = async function procesarCompra(datos) {
       tipoProducto
     };
 
-    // 🛡️ Validación extra
     if (!nombre || !apellidos || !dni || !direccion || !ciudad || !provincia || !cp) {
       console.warn(`⚠️ [procesarCompra] Datos incompletos para factura de ${email}`);
     }
@@ -97,7 +101,6 @@ module.exports = async function procesarCompra(datos) {
     console.time(`🕒 Compra ${email}`);
     console.log('📦 [procesarCompra] Datos facturación finales:\n', JSON.stringify(datosCliente, null, 2));
 
-    // 1. Crear factura
     let pdfBuffer;
     try {
       console.log('🧾 → Generando factura...');
@@ -108,7 +111,6 @@ module.exports = async function procesarCompra(datos) {
       throw err;
     }
 
-    // 2. Subida a GCS
     try {
       const nombreArchivo = `facturas/${email}/Factura Laboroteca.pdf`;
       console.log('☁️ → Subiendo a GCS:', nombreArchivo);
@@ -123,7 +125,6 @@ module.exports = async function procesarCompra(datos) {
       console.error('❌ Error subiendo a GCS:', err);
     }
 
-    // 3. Email con factura
     try {
       console.log('📧 → Enviando email con factura...');
       const resultado = await enviarFacturaPorEmail(datosCliente, pdfBuffer);
@@ -136,7 +137,6 @@ module.exports = async function procesarCompra(datos) {
       console.error('❌ Error enviando email:', err);
     }
 
-    // 4. Registro en Sheets
     try {
       console.log('📝 → Registrando en Google Sheets...');
       await guardarEnGoogleSheets(datosCliente);
@@ -144,7 +144,6 @@ module.exports = async function procesarCompra(datos) {
       console.error('❌ Error en Google Sheets:', err);
     }
 
-    // 5. Activación Club
     if (claveNormalizada.includes('clublaboroteca')) {
       try {
         console.log('🔓 → Activando membresía del Club...');
@@ -161,30 +160,26 @@ module.exports = async function procesarCompra(datos) {
       }
     }
 
-    // 💣 Eliminar cualquier dato fiscal anterior del usuario (por si compró con otros datos antes)
-        const datosFiscalesRef = firestore.collection('datosFiscalesPorEmail').doc(email);
-        try {
-          console.log('🧨 Eliminando datos fiscales antiguos de Firestore (si existían)');
-          await datosFiscalesRef.delete();
-        } catch (err) {
-          console.warn('⚠️ No se pudo eliminar el documento previo (puede que no existiera):', err.message || err);
-        }
+    const datosFiscalesRef = firestore.collection('datosFiscalesPorEmail').doc(email);
+    try {
+      console.log('🧨 Eliminando datos fiscales antiguos de Firestore (si existían)');
+      await datosFiscalesRef.delete();
+    } catch (err) {
+      console.warn('⚠️ No se pudo eliminar el documento previo (puede que no existiera):', err.message || err);
+    }
 
-    // 💾 Guardar los datos del formulario como nuevos datos fiscales
-        console.log('🧾 Guardando nuevos datos fiscales en Firestore');
-        await datosFiscalesRef.set({
-          nombre,
-          apellidos,
-          dni,
-          direccion,
-          ciudad,
-          provincia,
-          cp,
-          email,
-          fecha: new Date().toISOString()
-        });
-
-
+    console.log('🧾 Guardando nuevos datos fiscales en Firestore');
+    await datosFiscalesRef.set({
+      nombre,
+      apellidos,
+      dni,
+      direccion,
+      ciudad,
+      provincia,
+      cp,
+      email,
+      fecha: new Date().toISOString()
+    });
 
     await docRef.update({
       estado: 'finalizado',
@@ -192,7 +187,6 @@ module.exports = async function procesarCompra(datos) {
       fechaFin: new Date().toISOString()
     });
 
-        // 🟢 Marca la factura como procesada (para evitar duplicados en renovaciones)
     if (datos.invoiceId) {
       await firestore.collection('facturasGeneradas').doc(datos.invoiceId).set({
         procesada: true,
@@ -214,4 +208,3 @@ module.exports = async function procesarCompra(datos) {
     throw error;
   }
 };
-

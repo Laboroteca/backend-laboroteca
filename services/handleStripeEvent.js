@@ -167,11 +167,25 @@ if (event.type === 'invoice.paid') {
 
   // 🔒 Protección 2: si ya existe en comprasProcesadas, no repetimos
   const docRef = firestore.collection('comprasProcesadas').doc(invoiceId);
-  const docSnap = await docRef.get();
-  if (docSnap.exists) {
-    console.log(`⚠️ [invoice.paid] Factura ${invoiceId} ya procesada (en comprasProcesadas).`);
+  const yaProcesada = await firestore.runTransaction(async (tx) => {
+    const doc = await tx.get(docRef);
+    if (doc.exists) return true;
+    tx.set(docRef, {
+      procesada: true,
+      email: '',
+      producto: '',
+      fecha: new Date().toISOString(),
+      tipo: 'renovacion',
+      facturaGenerada: false,
+      error: false
+    });
+    return false;
+  });
+  if (yaProcesada) {
+    console.log(`⚠️ [invoice.paid] Factura ${invoiceId} ya procesada (en comprasProcesadas – transacción).`);
     return { ignored: true };
   }
+
 
   const email = (
     invoice.customer_email ||
@@ -241,13 +255,16 @@ if (event.type === 'invoice.paid') {
     console.log(`📄 Factura ${invoiceId} marcada como procesada (renovación).`);
 
     // ✅ Registro de que esta invoice ya fue procesada
-    await firestore.collection('comprasProcesadas').doc(invoiceId).set({
-      procesada: true,
+    await docRef.update({
       email,
+      producto: datosCliente.producto,
       importe,
       fecha: new Date().toISOString(),
       tipo: 'renovacion',
+      facturaGenerada: true,
+      error: false
     });
+
 
     await syncMemberpressClub({ email, accion: 'activar', membership_id: 10663, importe });
     await activarMembresiaClub(email);

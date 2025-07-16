@@ -48,13 +48,28 @@ async function handleStripeEvent(event) {
     const intento = invoice.attempt_count || 1;
     const enlacePago = 'https://www.laboroteca.es/gestion-pago-club/';
 
-    const intentoId = `${invoice.subscription}-${intento}`;
-    const docRefIntento = firestore.collection('intentosImpago').doc(intentoId);
+    const paymentIntentId = invoice.payment_intent;
+    
+    if (!paymentIntentId) {
+      console.warn(`⚠️ [IMPAGO] payment_intent ausente para ${invoiceId}, no se puede deduplicar`);
+      return { ignored: true };
+    }
+
+    const docRefIntento = firestore.collection('intentosImpago').doc(paymentIntentId);
     const docSnapIntento = await docRefIntento.get();
     if (docSnapIntento.exists) {
-      console.warn(`⛔️ [IMPAGO] Evento duplicado ignorado: ${invoiceId}`);
+      console.warn(`⛔️ [IMPAGO] Evento duplicado ignorado: ${paymentIntentId}`);
       return { received: true, duplicate: true };
     }
+
+    // Registrar el intento fallido si no es duplicado
+    await docRefIntento.set({
+     invoiceId,
+     intento,
+     email,
+     timestamp: Date.now()
+    });
+
 
     let nombre = invoice.customer_details?.name || '';
 

@@ -143,9 +143,16 @@ async function enviarAvisoImpago(email, nombre, intento, enlacePago = "https://w
     <p>Hola ${nombre || ''},</p>
 <p>No hemos podido procesar el cobro de tu suscripción mensual al Club Laboroteca.</p>
 <p><b>Tu suscripción ha sido cancelada automáticamente.</b></p>
-<p>Puedes reactivarla en cualquier momento desde este enlace, <b style="color:#279052;">sin penalización y con el mismo precio</b>:</p>
-<p><a href="https://www.laboroteca.es/membresia-club-laboroteca/">https://www.laboroteca.es/membresia-club-laboroteca/</a></p>
-<p>Si crees que se trata de un error, revisa tu método de pago o contacta con nosotros.</p>
+<p>
+  <span style="color:#279052;">
+    Puedes reactivarla en cualquier momento desde este enlace, <b>sin penalización y con el mismo precio</b>:
+  </span>
+</p>
+<p>
+  <a href="https://www.laboroteca.es/membresia-club-laboroteca/">https://www.laboroteca.es/membresia-club-laboroteca/</a>
+</p>
+<p>Si crees que se trata de un error, revisa tu método de pago o tarjeta.</p>
+
   `;
   text = `Hola ${nombre || ''},
 

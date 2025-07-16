@@ -146,91 +146,78 @@ async function handleStripeEvent(event) {
   }
 
 // 📌 Evento: invoice.paid (renovación Club Laboroteca)
-if (event.type === 'invoice.paid' && invoiceId && producto.includes('club')) {
-  const sessionId = subscription?.latest_invoice?.payment_intent;
-  const importe = invoice?.amount_paid ? invoice.amount_paid / 100 : 0;
-
-  // ✅ Protección contra duplicados
-  const yaProcesada = await firestore.collection('facturasGeneradas').doc(invoiceId).get();
-  if (yaProcesada.exists) {
-    console.log(`🟡 Ya procesada factura ${invoiceId}, omitiendo.`);
-    return res.status(200).send('Factura ya procesada.');
-  }
-
-  // ✅ Buscar datos fiscales antiguos
-  const datosFiscalesSnap = await firestore.collection('datosFiscalesPorEmail').doc(email).get();
-  if (!datosFiscalesSnap.exists) {
-    console.error(`❌ No hay datos fiscales para ${email}, cancelando.`);
-    return res.status(400).send('Faltan datos fiscales.');
-  }
-
-  const datosFiscales = datosFiscalesSnap.data();
-  const nombreProducto = 'Renovación Club Laboroteca';
-  const descripcionProducto = 'Renovación mensual de la membresía Club Laboroteca';
-
-  const datosCliente = {
-    ...datosFiscales,
-    email,
-    importe,
-    nombreProducto,
-    descripcionProducto,
-    tipoProducto: 'Renovación'
-  };
-
-  // ✅ Registrar intento (para trazabilidad)
-  const docRef = firestore.collection('comprasProcesadas').doc(invoiceId);
-  await docRef.set({
-    email,
-    producto: 'club-renovacion',
-    importe,
-    facturaGenerada: false,
-    error: false,
-    fechaInicio: new Date().toISOString()
-  });
-
+if (event.type === 'invoice.paid') {
   try {
-    const pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
+    const invoice = event.data.object;
+    const invoiceId = invoice.id;
+    const customerId = invoice.customer;
 
-    // ✅ Subir a GCS
-    const nombreArchivo = `facturas/${email}/club-renovacion.pdf`;
-    await subirFactura(nombreArchivo, pdfBuffer, {
+    if (!invoiceId || !customerId) {
+      console.warn('⚠️ Falta invoiceId o customerId en invoice.paid');
+      return res.send();
+    }
+
+    // ❌ Evitar duplicados por invoiceId
+    const yaExiste = await firestore.collection('facturasEmitidas').doc(invoiceId).get();
+    if (yaExiste.exists) {
+      console.log(`🟡 Factura ya emitida para invoiceId: ${invoiceId}`);
+      return res.send();
+    }
+
+    // 🔍 Obtener email y nombre desde Stripe
+    const customer = await stripe.customers.retrieve(customerId);
+    const email = (customer.email || '').toLowerCase().trim();
+    const nombre = customer.name || 'Cliente Laboroteca';
+
+    if (!email.includes('@')) {
+      console.warn(`❌ Email no válido en invoice.paid: ${email}`);
+      return res.send();
+    }
+
+    // 📦 Buscar datos fiscales en Firestore
+    const clienteDoc = await firestore.collection('clientes').doc(email).get();
+    if (!clienteDoc.exists) {
+      console.error(`❌ No se encontraron datos fiscales para ${email}`);
+      return res.send();
+    }
+
+    const datosFiscales = clienteDoc.data();
+
+    // 🧾 Montar datos de la renovación
+    const datosRenovacion = {
+      ...datosFiscales,
       email,
-      nombreProducto,
-      tipoProducto: 'Renovación',
-      importe
-    });
+      nombre,
+      nombreProducto: 'Renovación mensual Club Laboroteca',
+      descripcionProducto: 'Renovación mensual Club Laboroteca',
+      tipoProducto: 'Club',
+      importe: (invoice.amount_paid || 499) / 100,
+      invoiceId,
+    };
 
-    // ✅ Enviar email
-    await enviarFacturaPorEmail(datosCliente, pdfBuffer);
+    // 🧠 Generar factura, subir, enviar, registrar
+    const pdfBuffer = await crearFacturaEnFacturaCity(datosRenovacion);
+    await subirFactura(email, pdfBuffer, invoiceId);
+    await guardarEnGoogleSheets(datosRenovacion);
+    await enviarFacturaPorEmail(datosRenovacion, pdfBuffer);
+    await activarMembresiaClub(email);
+    await syncMemberpressClub(email);
 
-    // ✅ Guardar en Sheets
-    await guardarEnGoogleSheets(datosCliente);
-
-    // ✅ Actualizar compra como finalizada
-    await docRef.update({
-      facturaGenerada: true,
-      fechaFin: new Date().toISOString()
-    });
-
-    // ✅ Marcar como procesada
-    await firestore.collection('facturasGeneradas').doc(invoiceId).set({
+    // ✅ Marcar factura como procesada
+    await firestore.collection('facturasEmitidas').doc(invoiceId).set({
       procesada: true,
-      fecha: new Date().toISOString()
+      fecha: new Date().toISOString(),
+      email,
+      tipo: 'renovacion'
     });
 
-    console.log(`✅ Renovación procesada correctamente para ${email}`);
-    return res.status(200).send('Renovación procesada');
+    console.log(`✅ Factura de renovación procesada para ${email}`);
+    return res.send();
   } catch (error) {
-    console.error('❌ Error en renovación:', error);
-    await docRef.update({
-      facturaGenerada: false,
-      error: true,
-      errorMsg: error.message || error
-    });
-    return res.status(500).send('Error al procesar renovación');
+    console.error('❌ Error al procesar invoice.paid:', error);
+    return res.status(500).send('Error en invoice.paid');
   }
 }
-
 
   if (event.type === 'customer.subscription.deleted') {
     const subscription = event.data.object;

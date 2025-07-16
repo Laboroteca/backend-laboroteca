@@ -138,14 +138,14 @@ Ignacio Solsona`;
 async function enviarAvisoImpago(email, nombre, intento, enlacePago = "https://www.laboroteca.es/membresia-club-laboroteca/", cancelarYa = false) {
   let subject, html, text;
 
-  subject = 'Tu suscripción al Club Laboroteca ha sido CANCELADA por impago';
+  subject = 'Tu suscripción al Club Laboroteca ha sido CANCELADA por fallo en el pago';
   html = `
     <p>Hola ${nombre || ''},</p>
-    <p>No hemos podido procesar el cobro de tu suscripción mensual al Club Laboroteca.</p>
-    <p><b>Tu suscripción ha sido cancelada automáticamente.</b></p>
-    <p>Puedes reactivarla en cualquier momento desde este enlace, sin penalización y con el mismo precio:</p>
-    <p><a href="https://www.laboroteca.es/membresia-club-laboroteca/">https://www.laboroteca.es/membresia-club-laboroteca/</a></p>
-    <p>Si crees que se trata de un error, revisa tu método de pago o contacta con nosotros.</p>
+<p>No hemos podido procesar el cobro de tu suscripción mensual al Club Laboroteca.</p>
+<p><b>Tu suscripción ha sido cancelada automáticamente.</b></p>
+<p>Puedes reactivarla en cualquier momento desde este enlace, <b style="color:#279052;">sin penalización y con el mismo precio</b>:</p>
+<p><a href="https://www.laboroteca.es/membresia-club-laboroteca/">https://www.laboroteca.es/membresia-club-laboroteca/</a></p>
+<p>Si crees que se trata de un error, revisa tu método de pago o contacta con nosotros.</p>
   `;
   text = `Hola ${nombre || ''},
 
@@ -180,7 +180,6 @@ Enlace: https://www.laboroteca.es/membresia-club-laboroteca/`;
     enviarACopy: true
   });
 }
-
 
 // ✅ CONFIRMACIÓN DE BAJA VOLUNTARIA
 async function enviarConfirmacionBajaClub(email, nombre = '') {

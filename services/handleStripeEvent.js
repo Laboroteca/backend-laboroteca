@@ -133,6 +133,31 @@ async function handleStripeEvent(event) {
     return { warning: true };
   }
 
+  // 🧯 BLOQUE EXTRA – Captura payment_intent.payment_failed
+  if (event.type === 'payment_intent.payment_failed') {
+    const intent = event.data.object;
+    const email = (
+      intent.receipt_email ||
+      intent.customer_email ||
+      intent.metadata?.email
+    )?.toLowerCase().trim();
+
+    console.warn(`⚠️ [Intento fallido] payment_intent ${intent.id} falló para ${email || '[email desconocido]'}`);
+
+    // Puedes enviar email si quieres actuar también aquí
+    if (email && email.includes('@')) {
+      try {
+        await enviarAvisoImpago(email, 'cliente', 1, 'https://www.laboroteca.es/gestion-pago-club/', false);
+        return { aviso_impago_por_payment_intent: true };
+      } catch (err) {
+        console.error('❌ Error al enviar aviso por payment_intent fallido:', err?.message);
+        return { error: 'fallo_email_payment_intent' };
+      }
+    }
+
+    return { warning: 'payment_intent_failed_sin_email' };
+  }
+
 // 📌 Evento: invoice.paid (renovación Club Laboroteca)
 if (event.type === 'invoice.paid') {
   try {

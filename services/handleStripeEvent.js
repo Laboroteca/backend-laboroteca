@@ -140,42 +140,39 @@ async function handleStripeEvent(event) {
     return { warning: true };
   }
 
-  if (event.type === 'invoice.paid') {
-    const invoice = event.data.object;
-    // 🛑 NO emitir factura si es la primera compra: ya se gestionó en /procesarCompra
-    const isFirstPurchase = invoice.metadata?.esPrimeraCompra === 'true';
-    if (isFirstPurchase) {
-      console.log('🟡 Primera compra detectada, la factura ya fue gestionada en procesarCompra.js, no se duplica');
-      return { success: true, primeraCompra: true };
-    }
+    if (event.type === 'invoice.paid') {
+      const invoice = event.data.object;
+      const isFirstPurchase = invoice.metadata?.esPrimeraCompra === 'true';
+      if (isFirstPurchase) {
+        console.log('🟡 Primera compra detectada, la factura ya fue gestionada en procesarCompra.js, no se duplica');
+        return { success: true, primeraCompra: true };
+      }
 
-    const invoiceId = invoice.id;
+      const invoiceId = invoice.id;
+      const docRefFactura = firestore.collection('facturasGeneradas').doc(invoiceId);
+      const docSnapFactura = await docRefFactura.get();
+      if (docSnapFactura.exists) {
+        console.log(`⚠️ Factura ${invoiceId} ya procesada, omitiendo duplicado.`);
+        return { ignored: true };
+      }
 
-    const docRefFactura = firestore.collection('facturasGeneradas').doc(invoiceId);
-    const docSnapFactura = await docRefFactura.get();
-    if (docSnapFactura.exists) {
-      console.log(`⚠️ Factura ${invoiceId} ya procesada, omitiendo duplicado.`);
-      return { ignored: true };
-    }
+      const email = (
+        invoice.customer_email ||
+        invoice.customer_details?.email ||
+        invoice.subscription_details?.metadata?.email ||
+        invoice.metadata?.email
+      )?.toLowerCase().trim();
 
-    const email = (
-      invoice.customer_email ||
-      invoice.customer_details?.email ||
-      invoice.subscription_details?.metadata?.email ||
-      invoice.metadata?.email
-    )?.toLowerCase().trim();
+      const importe = parseFloat((invoice.amount_paid / 100).toFixed(2));
+      const lineas = invoice.lines?.data || [];
 
-    const importe = parseFloat((invoice.amount_paid / 100).toFixed(2));
-    const lineas = invoice.lines?.data || [];
-
-    console.log('📥 Evento invoice.paid recibido');
-    console.log('📧 Email:', email);
-    console.log('🧾 Líneas:', JSON.stringify(lineas, null, 2));
+      console.log('📥 Evento invoice.paid recibido');
+      console.log('📧 Email:', email);
+      console.log('🧾 Líneas:', JSON.stringify(lineas, null, 2));
 
       try {
         console.log('💰 Renovación pagada - Club Laboroteca:', email, '-', importe, '€');
 
-        // 🚨 IMPORTANTE: SOLO en renovaciones se usan los datos guardados previamente en Firestore
         const docSnap = await firestore.collection('datosFiscalesPorEmail').doc(email).get();
         if (!docSnap.exists) {
           console.error(`❌ No hay datos fiscales guardados para este email: ${email}`);
@@ -218,10 +215,11 @@ async function handleStripeEvent(event) {
 
       } catch (err) {
         console.error('❌ Error en factura de renovación:', err?.message);
+      }
 
       return { success: true, renovacion: true };
     }
-}
+
 
 
   if (event.type === 'customer.subscription.deleted') {

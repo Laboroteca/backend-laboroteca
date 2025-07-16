@@ -217,13 +217,15 @@ if (event.type === 'invoice.paid') {
     await subirFactura(email, pdfBuffer, invoiceId);
     await guardarEnGoogleSheets(datosRenovacion);
     await enviarFacturaPorEmail(datosRenovacion, pdfBuffer);
-    if (typeof email === 'string' && email.includes('@')) {
-      const emailSeguro = email; // copia local para asegurar consistencia
+    const emailSeguro = (email || '').toString().trim().toLowerCase();
+
+    if (emailSeguro.includes('@')) {
       await activarMembresiaClub(emailSeguro);
       await syncMemberpressClub(emailSeguro);
     } else {
-      console.warn(`❌ Email inválido en syncMemberpressClub: ${email}`);
+      console.warn(`❌ Email inválido en syncMemberpressClub: "${emailSeguro}"`);
     }
+
 
     await firestore.collection('facturasEmitidas').doc(invoiceId).set({
       procesada: true,

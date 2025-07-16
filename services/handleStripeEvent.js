@@ -164,36 +164,41 @@ if (event.type === 'invoice.paid') {
       return;
     }
 
-    // 🔍 Obtener email y nombre del cliente desde Stripe
-    const customer = await stripe.customers.retrieve(customerId);
-    const email = (customer.email || '').toLowerCase().trim();
-    const nombre = customer.name || 'Cliente Laboroteca';
+    // 🔍 Obtener email del cliente desde Stripe
+const customer = await stripe.customers.retrieve(customerId);
+const email = (customer.email || '').toLowerCase().trim();
 
-    if (!email.includes('@')) {
-      console.warn(`❌ Email no válido en invoice.paid: ${email}`);
-      return;
-    }
+if (!email.includes('@')) {
+  console.warn(`❌ Email no válido en invoice.paid: ${email}`);
+  return;
+}
 
-// 📦 Buscar datos fiscales en Firestore (colección correcta)
-    const clienteDoc = await firestore.collection('datosFiscalesPorEmail').doc(email).get();
-    if (!clienteDoc.exists) {
-      console.error(`❌ No se encontraron datos fiscales para ${email} en datosFiscalesPorEmail`);
-      return;
-    }
+// 📦 Buscar datos fiscales en Firestore
+const clienteDoc = await firestore.collection('datosFiscalesPorEmail').doc(email).get();
+if (!clienteDoc.exists) {
+  console.error(`❌ No se encontraron datos fiscales para ${email} en datosFiscalesPorEmail`);
+  return;
+}
 
-    const datosFiscales = clienteDoc.data();
+const datosFiscales = clienteDoc.data();
 
-    // 🧾 Montar datos específicos para la factura de renovación
-    const datosRenovacion = {
-      ...datosFiscales, // ✅ Solo para renovaciones
-      email,
-      nombre,
-      nombreProducto: 'Renovación mensual Club Laboroteca',
-      descripcionProducto: 'Renovación mensual Club Laboroteca',
-      tipoProducto: 'Club',
-      importe: (invoice.amount_paid || 499) / 100,
-      invoiceId,
-    };
+// ✅ Usar nombre y apellidos ya guardados en Firestore
+const nombre = datosFiscales.nombre || 'Cliente Laboroteca';
+const apellidos = datosFiscales.apellidos || '';
+
+// 🧾 Montar datos específicos para la factura de renovación
+const datosRenovacion = {
+  ...datosFiscales, // ya contiene todo: nombre, apellidos, dirección, etc.
+  email,
+  nombre,
+  apellidos,
+  nombreProducto: 'Renovación mensual Club Laboroteca',
+  descripcionProducto: 'Renovación mensual Club Laboroteca',
+  tipoProducto: 'Club',
+  importe: (invoice.amount_paid || 499) / 100,
+  invoiceId,
+};
+
 
     // 📄 Generar PDF, subir a GCS, enviar por email y registrar en Sheets
     const pdfBuffer = await crearFacturaEnFacturaCity(datosRenovacion);

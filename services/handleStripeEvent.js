@@ -174,7 +174,6 @@ if (event.type === 'invoice.paid') {
       return;
     }
 
-
     // ❌ Evitar duplicados por invoiceId
     const yaExiste = await firestore.collection('facturasEmitidas').doc(invoiceId).get();
     if (yaExiste.exists) {
@@ -218,8 +217,13 @@ if (event.type === 'invoice.paid') {
     await subirFactura(email, pdfBuffer, invoiceId);
     await guardarEnGoogleSheets(datosRenovacion);
     await enviarFacturaPorEmail(datosRenovacion, pdfBuffer);
-    await activarMembresiaClub(email);
-    await syncMemberpressClub(email);
+    if (email.includes('@')) {
+      await activarMembresiaClub(email);
+      await syncMemberpressClub(email);
+    } else {
+      console.warn(`❌ Email inválido en syncMemberpressClub: ${email}`);
+    }
+
 
     await firestore.collection('facturasEmitidas').doc(invoiceId).set({
       procesada: true,

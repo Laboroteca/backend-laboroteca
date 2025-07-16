@@ -58,13 +58,20 @@ async function handleStripeEvent(event) {
     if (!paymentIntentId && invoiceId) {
       try {
         const invoiceCompleta = await stripe.invoices.retrieve(invoiceId);
-        paymentIntentId = invoiceCompleta.payment_intent;
+        paymentIntentId = invoiceCompleta.payment_intent || invoiceCompleta.latest_payment_intent;
+
+        if (!paymentIntentId) {
+          console.warn(`⚠️ payment_intent sigue ausente en invoiceCompleta: ${invoiceId}`);
+          return { error: 'payment_intent_ausente' };
+        }
+
         console.log(`🔁 Recuperado payment_intent desde Stripe: ${paymentIntentId}`);
       } catch (err) {
         console.warn(`⚠️ No se pudo recuperar el payment_intent de ${invoiceId}: ${err.message}`);
         return { ignored: true };
       }
     }
+
 
     if (!paymentIntentId || typeof paymentIntentId !== 'string') {
       console.warn(`⚠️ [IMPAGO] payment_intent ausente o inválido para ${invoiceId}`);

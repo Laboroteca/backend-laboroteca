@@ -48,12 +48,19 @@ async function handleStripeEvent(event) {
     const intento = invoice.attempt_count || 1;
     const enlacePago = 'https://www.laboroteca.es/gestion-pago-club/';
 
-    const paymentIntentId = invoice.payment_intent;
-    
-    if (!paymentIntentId) {
-      console.warn(`⚠️ [IMPAGO] payment_intent ausente para ${invoiceId}, no se puede deduplicar`);
-      return { ignored: true };
+    let paymentIntentId = invoice.payment_intent;
+
+    if (!paymentIntentId && invoiceId) {
+      try {
+        const invoiceCompleta = await stripe.invoices.retrieve(invoiceId);
+        paymentIntentId = invoiceCompleta.payment_intent;
+        console.log(`🔁 Recuperado payment_intent desde Stripe: ${paymentIntentId}`);
+      } catch (err) {
+        console.warn(`⚠️ No se pudo recuperar el payment_intent de ${invoiceId}: ${err.message}`);
+        return { ignored: true };
+      }
     }
+
 
     const docRefIntento = firestore.collection('intentosImpago').doc(paymentIntentId);
     const docSnapIntento = await docRefIntento.get();

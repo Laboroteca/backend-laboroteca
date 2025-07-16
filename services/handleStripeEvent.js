@@ -37,6 +37,8 @@ const MEMBERPRESS_IDS = {
 async function handleStripeEvent(event) {
   if (event.type === 'invoice.payment_failed') {
     const invoice = event.data.object;
+    const invoiceId = invoice.id;
+
     const email = (
       invoice.customer_email ||
       invoice.customer_details?.email ||
@@ -44,7 +46,6 @@ async function handleStripeEvent(event) {
       invoice.metadata?.email
     )?.toLowerCase().trim();
 
-    const invoiceId = invoice.id;
     const intento = invoice.attempt_count || 1;
     const enlacePago = 'https://www.laboroteca.es/gestion-pago-club/';
 
@@ -62,28 +63,38 @@ async function handleStripeEvent(event) {
 
         if (!paymentIntentId) {
           console.warn(`⚠️ payment_intent sigue ausente en invoiceCompleta: ${invoiceId}`);
-          return { error: 'payment_intent_ausente' };
+          await enviarAvisoImpago(email, 'cliente', intento, enlacePago, true);
+          return { warning: 'sin_payment_intent, email_enviado' };
         }
 
         console.log(`🔁 Recuperado payment_intent desde Stripe: ${paymentIntentId}`);
       } catch (err) {
         console.warn(`⚠️ No se pudo recuperar el payment_intent de ${invoiceId}: ${err.message}`);
-        return { ignored: true };
+        await enviarAvisoImpago(email, 'cliente', intento, enlacePago, true);
+        return { warning: 'error_recuperando_payment_intent, email_enviado' };
       }
     }
 
+    // ⛔️ VERIFICAR DUPLICADOS
+    if (paymentIntentId && typeof paymentIntentId === 'string') {
+      const docRefIntento = firestore.collection('intentosImpago').doc(paymentIntentId);
+      const docSnapIntento = await docRefIntento.get();
+      if (docSnapIntento.exists) {
+        console.warn(`⛔️ [IMPAGO] Evento duplicado ignorado: ${paymentIntentId}`);
+        return { received: true, duplicate: true };
+      }
 
-    if (!paymentIntentId || typeof paymentIntentId !== 'string') {
-      console.warn(`⚠️ [IMPAGO] payment_intent ausente o inválido para ${invoiceId}`);
-      return { error: 'payment_intent_invalido' };
+      // Marcar el intento para evitar duplicados futuros
+      await docRefIntento.set({ created: Date.now(), email });
     }
 
-    const docRefIntento = firestore.collection('intentosImpago').doc(paymentIntentId);
-    const docSnapIntento = await docRefIntento.get();
-    if (docSnapIntento.exists) {
-      console.warn(`⛔️ [IMPAGO] Evento duplicado ignorado: ${paymentIntentId}`);
-      return { received: true, duplicate: true };
-    }
+    // ✅ ENVIAR AVISO
+    await enviarAvisoImpago(email, 'cliente', intento, enlacePago, true);
+    console.log(`📧 Email de impago enviado a ${email} (intento ${intento})`);
+
+    return { ok: true };
+  }
+}
 
     // Registrar el intento fallido si no es duplicado
     await docRefIntento.set({

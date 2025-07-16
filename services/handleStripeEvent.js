@@ -149,7 +149,7 @@ async function handleStripeEvent(event) {
     console.log('📧 Email:', email);
     console.log('🧾 Líneas:', JSON.stringify(lineas, null, 2));
 
-    if (email && lineas.some(l => l.description?.toLowerCase().includes('club laboroteca'))) {
+    if (email && productoClub) {
       try {
         console.log('💰 Renovación pagada - Club Laboroteca:', email, '-', importe, '€');
 
@@ -200,6 +200,8 @@ async function handleStripeEvent(event) {
 
       return { success: true, renovacion: true };
     }
+}
+
 
   if (event.type === 'customer.subscription.deleted') {
     const subscription = event.data.object;

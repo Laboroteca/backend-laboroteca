@@ -6,6 +6,10 @@ const { crearFacturaEnFacturaCity } = require('./facturaCity');
 const { enviarFacturaPorEmail } = require('./email');
 const { subirFactura } = require('./gcs');
 const { guardarEnGoogleSheets } = require('./googleSheets');
+const { activarMembresiaClub } = require('./activarMembresiaClub');
+const { syncMemberpressClub } = require('./syncMemberpressClub');
+
+const MEMBERPRESS_ID_CLUB = 10663;
 
 module.exports = async function procesarCompra(datos) {
   let email = (datos.email_autorelleno || datos.email || '').trim().toLowerCase();
@@ -37,17 +41,20 @@ module.exports = async function procesarCompra(datos) {
   // ✅ LOGS ADICIONALES
   console.log('🧪 tipoProducto:', tipoProducto);
   console.log('🧪 nombreProducto:', nombreProducto);
+
   const claveNormalizada = nombreProducto
-  .toLowerCase()
-  .normalize('NFD')
-  .replace(/[\u0300-\u036f]/g, '')
-  .replace(/\W+/g, '');
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\W+/g, '');
+
   console.log('🔑 Clave normalizada para deduplicación:', claveNormalizada);
 
-  const hash = crypto.createHash('md5').update(`${email}-${claveNormalizada}-${importe}`).digest('hex');
+  // 🔒 Refuerzo de deduplicación: email + claveProducto + importe redondeado
+  const hash = crypto.createHash('md5').update(`${email}-${claveNormalizada}-${importe.toFixed(2)}`).digest('hex');
+  const compraId = `compra-${hash}`;
   console.log('🧩 Hash generado:', hash);
 
-  const compraId = `compra-${hash}`;
   const docRef = firestore.collection('comprasProcesadas').doc(compraId);
   const docSnap = await docRef.get();
 
@@ -60,6 +67,7 @@ module.exports = async function procesarCompra(datos) {
     compraId,
     estado: 'procesando',
     email,
+    producto: claveNormalizada,
     fechaInicio: new Date().toISOString(),
   });
 
@@ -140,6 +148,23 @@ module.exports = async function procesarCompra(datos) {
       await guardarEnGoogleSheets(datosCliente);
     } catch (err) {
       console.error('❌ Error al registrar en Google Sheets:', err);
+    }
+
+    // 5. Activar membresía del Club si corresponde
+    if (claveNormalizada.includes('clublaboroteca')) {
+      try {
+        console.log('🔓 → Activando membresía del Club...');
+        await activarMembresiaClub(email);
+        await syncMemberpressClub({
+          email,
+          accion: 'activar',
+          membership_id: MEMBERPRESS_ID_CLUB,
+          importe
+        });
+        console.log('✅ Membresía activada correctamente');
+      } catch (err) {
+        console.error('❌ Error activando membresía del Club:', err.message || err);
+      }
     }
 
     await docRef.update({

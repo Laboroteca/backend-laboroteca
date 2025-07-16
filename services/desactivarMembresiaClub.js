@@ -20,36 +20,26 @@ async function desactivarMembresiaClub(email) {
     return { ok: false, mensaje: 'Email inválido.' };
   }
 
-  const nombreFirestore = async () => {
-    try {
-      const ref = firestore.collection('usuariosClub').doc(email);
-      const doc = await ref.get();
-      if (doc.exists) {
-        const datos = doc.data();
-        return datos?.nombre || '';
-      }
-    } catch (err) {
-      console.warn('⚠️ No se pudo recuperar el nombre de Firestore');
-    }
-    return '';
-  };
-
   // 🔴 1. Cancelar suscripciones activas en Stripe
   try {
     const clientes = await stripe.customers.list({ email, limit: 1 });
     if (clientes.data.length > 0) {
       const customerId = clientes.data[0].id;
       const subs = await stripe.subscriptions.list({
-  customer: customerId,
-  status: 'all',
-  limit: 10
-});
-for (const sub of subs.data) {
-  if (['active', 'trialing', 'incomplete', 'past_due'].includes(sub.status)) {
-    await stripe.subscriptions.cancel(sub.id, { invoice_now: false, prorate: false });
-    console.log(`🛑 Stripe: suscripción ${sub.id} cancelada`);
-  }
-}
+        customer: customerId,
+        status: 'all',
+        limit: 10
+      });
+
+      for (const sub of subs.data) {
+        if (['active', 'trialing', 'incomplete', 'past_due'].includes(sub.status)) {
+          await stripe.subscriptions.cancel(sub.id, {
+            invoice_now: false,
+            prorate: false
+          });
+          console.log(`🛑 Stripe: suscripción ${sub.id} cancelada`);
+        }
+      }
 
     } else {
       console.warn(`⚠️ Stripe: cliente no encontrado para ${email}`);
@@ -88,7 +78,10 @@ for (const sub of subs.data) {
 
   // 🔴 4. Email de confirmación
   try {
-    const nombre = await nombreFirestore();
+    const ref = firestore.collection('usuariosClub').doc(email);
+    const doc = await ref.get();
+    const nombre = doc.exists ? (doc.data()?.nombre || '') : '';
+
     const resultadoEmail = await enviarConfirmacionBajaClub(email, nombre);
     if (resultadoEmail?.data?.succeeded === 1) {
       console.log(`📩 Email de baja enviado a ${email}`);

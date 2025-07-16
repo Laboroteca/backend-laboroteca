@@ -1,3 +1,8 @@
+// 📁 routes/desactivarMembresiaClub.js
+// Este archivo se usa para gestionar la baja manual del Club desde formularios web.
+// Incluye verificación de contraseña, eliminación opcional de usuario en WordPress y cancelación de Stripe.
+// No confundir con services/desactivarMembresiaClub.js, que se usa para cancelaciones automáticas o backend.
+
 const admin = require('../firebase');
 const firestore = admin.firestore();
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
@@ -30,8 +35,8 @@ async function verificarLoginWordPress(email, password) {
 }
 
 async function desactivarMembresiaClub(email, password) {
-  if (!email || typeof email !== 'string') {
-    return { ok: false, mensaje: 'Email obligatorio.' };
+  if (!email || typeof email !== 'string' || !email.includes('@')) {
+    return { ok: false, mensaje: 'Email inválido.' };
   }
 
   if (password) {
@@ -48,8 +53,6 @@ async function desactivarMembresiaClub(email, password) {
       console.warn(`⚠️ Stripe: cliente no encontrado para ${email}`);
     } else {
       const customerId = clientes.data[0].id;
-
-      // Cancelar todas las suscripciones activas o incompletas
       const subs = await stripe.subscriptions.list({
         customer: customerId,
         status: 'all',
@@ -59,7 +62,7 @@ async function desactivarMembresiaClub(email, password) {
       const suscripcionesCanceladas = [];
 
       for (const sub of subs.data) {
-        if (['active', 'trialing', 'incomplete'].includes(sub.status)) {
+        if (['active', 'trialing', 'incomplete', 'past_due'].includes(sub.status)) {
           await stripe.subscriptions.cancel(sub.id, {
             invoice_now: false,
             prorate: false
@@ -84,7 +87,7 @@ async function desactivarMembresiaClub(email, password) {
       activo: false,
       fechaBaja: new Date().toISOString()
     }, { merge: true });
-    console.log(`🚫 [CLUB] Firestore actualizado para ${email}`);
+    console.log(`🚫 Firestore: usuario marcado como inactivo (${email})`);
   } catch (errFS) {
     console.error('❌ Error actualizando Firestore:', errFS.message);
   }
@@ -110,7 +113,7 @@ async function desactivarMembresiaClub(email, password) {
     await enviarConfirmacionBajaClub(email, '');
     console.log(`📩 Email de baja enviado a ${email}`);
   } catch (errEmail) {
-    console.error(`❌ Error al enviar email de baja: ${errEmail.message}`);
+    console.error(`❌ Error al enviar email de baja:`, errEmail.message);
   }
 
   // 🔻 Paso 5: Eliminar usuario en WordPress (opcional)

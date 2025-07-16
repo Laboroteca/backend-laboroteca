@@ -173,6 +173,9 @@ async function handleStripeEvent(event) {
         await enviarFacturaPorEmail(datosCliente, pdfBuffer);
         await docRefFactura.set({ procesada: true, fecha: new Date().toISOString() });
 
+        await syncMemberpressClub({ email, accion: 'activar', membership_id: 10663, importe });
+        await activarMembresiaClub(email);
+
       } catch (err) {
         console.error('❌ Error en factura de renovación:', err?.message);
       }

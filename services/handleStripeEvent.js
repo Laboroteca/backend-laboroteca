@@ -146,85 +146,95 @@ async function handleStripeEvent(event) {
   }
 
     if (event.type === 'invoice.paid') {
-      const invoice = event.data.object;
-      const isFirstPurchase = invoice.metadata?.esPrimeraCompra === 'true';
-      if (isFirstPurchase) {
-        console.log('🟡 Primera compra detectada, la factura ya fue gestionada en procesarCompra.js, no se duplica');
-        return { success: true, primeraCompra: true };
-      }
+  const invoice = event.data.object;
+  const invoiceId = invoice.id;
+  const isFirstPurchase = invoice.metadata?.esPrimeraCompra === 'true';
 
-      const invoiceId = invoice.id;
-      const docRefFactura = firestore.collection('facturasGeneradas').doc(invoiceId);
-      const docSnapFactura = await docRefFactura.get();
-      if (docSnapFactura.exists) {
-        console.log(`⚠️ Factura ${invoiceId} ya procesada, omitiendo duplicado.`);
-        return { ignored: true };
-      }
+  // 🔒 Protección 1: si es primera compra, ya se facturó en procesarCompra.js
+  if (isFirstPurchase) {
+    console.log('🟡 Primera compra detectada, la factura ya fue gestionada en procesarCompra.js, no se duplica');
+    return { success: true, primeraCompra: true };
+  }
 
-      const email = (
-        invoice.customer_email ||
-        invoice.customer_details?.email ||
-        invoice.subscription_details?.metadata?.email ||
-        invoice.metadata?.email
-      )?.toLowerCase().trim();
+  // 🔒 Protección 2: si ya existe en comprasProcesadas, no repetimos
+  const docRef = firestore.collection('comprasProcesadas').doc(invoiceId);
+  const docSnap = await docRef.get();
+  if (docSnap.exists) {
+    console.log(`⚠️ [invoice.paid] Factura ${invoiceId} ya procesada (en comprasProcesadas).`);
+    return { ignored: true };
+  }
 
-      const importe = parseFloat((invoice.amount_paid / 100).toFixed(2));
-      const lineas = invoice.lines?.data || [];
+  const email = (
+    invoice.customer_email ||
+    invoice.customer_details?.email ||
+    invoice.subscription_details?.metadata?.email ||
+    invoice.metadata?.email
+  )?.toLowerCase().trim();
 
-      console.log('📥 Evento invoice.paid recibido');
-      console.log('📧 Email:', email);
-      console.log('🧾 Líneas:', JSON.stringify(lineas, null, 2));
+  const importe = parseFloat((invoice.amount_paid / 100).toFixed(2));
+  const lineas = invoice.lines?.data || [];
 
-      try {
-        console.log('💰 Renovación pagada - Club Laboroteca:', email, '-', importe, '€');
+  console.log('📥 Evento invoice.paid recibido');
+  console.log('📧 Email:', email);
+  console.log('🧾 Líneas:', JSON.stringify(lineas, null, 2));
 
-        const docSnap = await firestore.collection('datosFiscalesPorEmail').doc(email).get();
-        if (!docSnap.exists) {
-          console.error(`❌ No hay datos fiscales guardados para este email: ${email}`);
-          throw new Error('Datos fiscales no disponibles para renovación');
-        }
+  try {
+    console.log('💰 Renovación pagada - Club Laboroteca:', email, '-', importe, '€');
 
-        const doc = docSnap.data();
-        const datosCliente = {
-          nombre: doc.nombre || '',
-          apellidos: doc.apellidos || '',
-          dni: doc.dni || '',
-          email,
-          direccion: doc.direccion || '',
-          ciudad: doc.ciudad || '',
-          provincia: doc.provincia || '',
-          cp: doc.cp || '',
-          importe,
-          tipoProducto: 'Renovación Club',
-          nombreProducto: 'el club laboroteca',
-          descripcionProducto: 'Suscripción mensual al Club Laboroteca',
-          producto: 'club laboroteca'
-        };
-
-        await guardarEnGoogleSheets(datosCliente);
-        const pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
-        const nombreArchivo = `facturas/${email}/${Date.now()}-club-renovacion.pdf`;
-
-        await subirFactura(nombreArchivo, pdfBuffer, {
-          email,
-          nombreProducto: datosCliente.nombreProducto,
-          tipoProducto: datosCliente.tipoProducto,
-          importe
-        });
-
-        await enviarFacturaPorEmail(datosCliente, pdfBuffer);
-        await docRefFactura.set({ procesada: true, fecha: new Date().toISOString() });
-
-        await syncMemberpressClub({ email, accion: 'activar', membership_id: 10663, importe });
-        await activarMembresiaClub(email);
-
-      } catch (err) {
-        console.error('❌ Error en factura de renovación:', err?.message);
-      }
-
-      return { success: true, renovacion: true };
+    const docSnapDatos = await firestore.collection('datosFiscalesPorEmail').doc(email).get();
+    if (!docSnapDatos.exists) {
+      console.error(`❌ No hay datos fiscales guardados para este email: ${email}`);
+      throw new Error('Datos fiscales no disponibles para renovación');
     }
 
+    const doc = docSnapDatos.data();
+    const datosCliente = {
+      nombre: doc.nombre || '',
+      apellidos: doc.apellidos || '',
+      dni: doc.dni || '',
+      email,
+      direccion: doc.direccion || '',
+      ciudad: doc.ciudad || '',
+      provincia: doc.provincia || '',
+      cp: doc.cp || '',
+      importe,
+      tipoProducto: 'Renovación Club',
+      nombreProducto: 'el club laboroteca',
+      descripcionProducto: 'Suscripción mensual al Club Laboroteca',
+      producto: 'club laboroteca'
+    };
+
+    const pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
+    const nombreArchivo = `facturas/${email}/${Date.now()}-club-renovacion.pdf`;
+
+    await guardarEnGoogleSheets(datosCliente);
+    await subirFactura(nombreArchivo, pdfBuffer, {
+      email,
+      nombreProducto: datosCliente.nombreProducto,
+      tipoProducto: datosCliente.tipoProducto,
+      importe
+    });
+    await enviarFacturaPorEmail(datosCliente, pdfBuffer);
+
+    // ✅ Registro de que esta invoice ya fue procesada
+    await firestore.collection('comprasProcesadas').doc(invoiceId).set({
+      procesada: true,
+      email,
+      importe,
+      fecha: new Date().toISOString(),
+      tipo: 'renovacion',
+    });
+
+    await syncMemberpressClub({ email, accion: 'activar', membership_id: 10663, importe });
+    await activarMembresiaClub(email);
+
+  } catch (err) {
+    console.error('❌ Error en factura de renovación:', err?.message);
+    return { error: true, mensaje: err?.message };
+  }
+
+  return { success: true, renovacion: true };
+}
 
 
   if (event.type === 'customer.subscription.deleted') {

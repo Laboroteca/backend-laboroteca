@@ -48,6 +48,11 @@ async function handleStripeEvent(event) {
     const intento = invoice.attempt_count || 1;
     const enlacePago = 'https://www.laboroteca.es/gestion-pago-club/';
 
+    if (!email || typeof email !== 'string' || !email.includes('@')) {
+      console.error(`❌ [IMPAGO] Email inválido o ausente en metadata de la invoice ${invoiceId}`);
+      return { error: 'email_invalido_o_ausente' };
+    }
+
     let paymentIntentId = invoice.payment_intent;
 
     if (!paymentIntentId && invoiceId) {
@@ -61,6 +66,10 @@ async function handleStripeEvent(event) {
       }
     }
 
+    if (!paymentIntentId || typeof paymentIntentId !== 'string') {
+      console.warn(`⚠️ [IMPAGO] payment_intent ausente o inválido para ${invoiceId}`);
+      return { error: 'payment_intent_invalido' };
+    }
 
     const docRefIntento = firestore.collection('intentosImpago').doc(paymentIntentId);
     const docSnapIntento = await docRefIntento.get();

@@ -169,23 +169,21 @@ module.exports = async function procesarCompra(datos) {
       }
     }
 
-    // 💾 Guardar datos fiscales del usuario solo si no existen ya (para futuras renovaciones)
+    // 💾 Guardar (o actualizar) siempre los datos fiscales del usuario tras la primera compra
       const datosFiscalesRef = firestore.collection('datosFiscalesPorEmail').doc(email);
-      const datosFiscalesSnap = await datosFiscalesRef.get();
-      if (!datosFiscalesSnap.exists) {
-        console.log('🧾 Guardando datos fiscales en Firestore para futuras renovaciones');
-        await datosFiscalesRef.set({
-          nombre,
-          apellidos,
-          dni,
-          direccion,
-          ciudad,
-          provincia,
-          cp,
-          email,
-          fecha: new Date().toISOString()
-        });
-      }
+      console.log('🧾 Guardando o actualizando datos fiscales en Firestore para futuras renovaciones');
+      await datosFiscalesRef.set({
+        nombre,
+        apellidos,
+        dni,
+        direccion,
+        ciudad,
+        provincia,
+        cp,
+        email,
+        fecha: new Date().toISOString()
+      });
+
 
     await docRef.update({
       estado: 'finalizado',

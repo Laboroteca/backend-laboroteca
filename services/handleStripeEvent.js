@@ -117,6 +117,11 @@ async function handleStripeEvent(event) {
 
         await enviarAvisoImpago(email, nombre, intento, enlacePago, false);
 
+
+        if (intento >= 3) {
+          console.log(`⛔️ Alcanzado intento crítico: ${intento}`);
+        }
+
         if (intento === 4) {
           await enviarAvisoImpago(email, nombre, intento, enlacePago, true);
           await desactivarMembresiaClub(email);

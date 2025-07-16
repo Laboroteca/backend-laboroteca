@@ -197,6 +197,15 @@ if (event.type === 'invoice.paid') {
     }
 
     const doc = docSnapDatos.data();
+    // 🛡️ Validación extra antes de emitir factura
+    if (
+      !doc.nombre || !doc.apellidos || !doc.dni ||
+      !doc.direccion || !doc.ciudad || !doc.provincia || !doc.cp
+    ) {
+      console.error(`❌ Datos fiscales incompletos para ${email}, se cancela emisión de factura`);
+      return { error: true, motivo: 'datos_fiscales_incompletos' };
+    }
+
     const datosCliente = {
       nombre: doc.nombre || '',
       apellidos: doc.apellidos || '',
@@ -356,7 +365,23 @@ if (event.type === 'invoice.paid') {
 
       await enviarFacturaPorEmail(datosCliente, pdfBuffer);
 
-      await firestore.collection('datosFiscalesPorEmail').doc(email).set(datosCliente, { merge: true });
+      
+        // 🛡️ Guardar los datos del formulario solo si están completos
+      if (
+        datosCliente.nombre &&
+        datosCliente.apellidos &&
+        datosCliente.dni &&
+        datosCliente.direccion &&
+        datosCliente.ciudad &&
+        datosCliente.provincia &&
+        datosCliente.cp
+      ) {
+        await firestore.collection('datosFiscalesPorEmail').doc(email).set(datosCliente, { merge: true });
+        console.log(`✅ Datos fiscales guardados para ${email}`);
+      } else {
+        console.warn(`⚠️ Datos incompletos. No se guardan en Firestore para ${email}`);
+      }
+
 
       if (memberpressId === 10663) {
         await syncMemberpressClub({ email, accion: 'activar', membership_id: memberpressId, importe: datosCliente.importe });

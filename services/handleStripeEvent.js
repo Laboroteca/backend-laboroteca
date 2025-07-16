@@ -146,7 +146,7 @@ async function handleStripeEvent(event) {
   }
 
 // 📌 Evento: invoice.paid (renovación Club Laboroteca)
-if (evento === 'invoice.paid' && invoiceId && producto.includes('club')) {
+if (event.type === 'invoice.paid' && invoiceId && producto.includes('club')) {
   const sessionId = subscription?.latest_invoice?.payment_intent;
   const importe = invoice?.amount_paid ? invoice.amount_paid / 100 : 0;
 

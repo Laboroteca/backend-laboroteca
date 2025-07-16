@@ -50,7 +50,7 @@ module.exports = async function procesarCompra(datos) {
 
   console.log('🔑 Clave normalizada para deduplicación:', claveNormalizada);
 
-  // 🔒 Refuerzo de deduplicación: email + claveProducto + importe redondeado
+  // 🔒 Hash de deduplicación por email + producto + importe
   const hash = crypto.createHash('md5').update(`${email}-${claveNormalizada}-${importe.toFixed(2)}`).digest('hex');
   const compraId = `compra-${hash}`;
   console.log('🧩 Hash generado:', hash);
@@ -59,19 +59,21 @@ module.exports = async function procesarCompra(datos) {
   const docSnap = await docRef.get();
 
   if (docSnap.exists) {
-    console.warn(`⛔️ [procesarCompra] Abortando proceso por duplicado: ${compraId}`);
+    console.warn(`⛔️ [procesarCompra] Compra ya registrada: ${compraId}`);
     return { duplicate: true };
   }
 
+  // ✅ Registrar inicio
   await docRef.set({
     compraId,
     estado: 'procesando',
     email,
     producto: claveNormalizada,
-    fechaInicio: new Date().toISOString(),
+    fechaInicio: new Date().toISOString()
   });
 
   try {
+    // 🔁 Usar datos nuevos si hay, pero preferencia por los de compra inicial
     const nombre = datos.nombre || datos.Nombre || '';
     const apellidos = datos.apellidos || datos.Apellidos || '';
     const dni = datos.dni || '';
@@ -95,15 +97,15 @@ module.exports = async function procesarCompra(datos) {
       tipoProducto
     };
 
-    // 🛡️ Validación extra de datos esenciales
+    // 🛡️ Validación extra
     if (!nombre || !apellidos || !dni || !direccion || !ciudad || !provincia || !cp) {
-      console.warn(`⚠️ [procesarCompra] Campos incompletos para factura de ${email}`);
+      console.warn(`⚠️ [procesarCompra] Datos incompletos para factura de ${email}`);
     }
 
     console.time(`🕒 Compra ${email}`);
     console.log('📦 [procesarCompra] Datos facturación finales:\n', JSON.stringify(datosCliente, null, 2));
 
-    // 1. Crear factura PDF
+    // 1. Crear factura
     let pdfBuffer;
     try {
       console.log('🧾 → Generando factura...');
@@ -114,7 +116,7 @@ module.exports = async function procesarCompra(datos) {
       throw err;
     }
 
-    // 2. Subir a GCS
+    // 2. Subida a GCS
     try {
       const nombreArchivo = `facturas/${email}/Factura Laboroteca.pdf`;
       console.log('☁️ → Subiendo a GCS:', nombreArchivo);
@@ -129,7 +131,7 @@ module.exports = async function procesarCompra(datos) {
       console.error('❌ Error subiendo a GCS:', err);
     }
 
-    // 3. Enviar email con factura
+    // 3. Email con factura
     try {
       console.log('📧 → Enviando email con factura...');
       const resultado = await enviarFacturaPorEmail(datosCliente, pdfBuffer);
@@ -142,15 +144,15 @@ module.exports = async function procesarCompra(datos) {
       console.error('❌ Error enviando email:', err);
     }
 
-    // 4. Registrar en Google Sheets
+    // 4. Registro en Sheets
     try {
       console.log('📝 → Registrando en Google Sheets...');
       await guardarEnGoogleSheets(datosCliente);
     } catch (err) {
-      console.error('❌ Error al registrar en Google Sheets:', err);
+      console.error('❌ Error en Google Sheets:', err);
     }
 
-    // 5. Activar membresía del Club si corresponde
+    // 5. Activación Club
     if (claveNormalizada.includes('clublaboroteca')) {
       try {
         console.log('🔓 → Activando membresía del Club...');
@@ -186,3 +188,4 @@ module.exports = async function procesarCompra(datos) {
     throw error;
   }
 };
+

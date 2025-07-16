@@ -287,19 +287,6 @@ async function handleStripeEvent(event) {
       producto: productoNormalizado
     };
 
-    // Antiduplicado fiscal
-    const hash = `${email}__${productoNormalizado}`;
-    const docRefHash = firestore.collection('facturasEmitidas').doc(hash);
-    const docSnapHash = await docRefHash.get();
-    if (docSnapHash.exists) {
-      const timestamp = docSnapHash.data()?.fecha;
-      const haceMenosDeUnDia = timestamp && (Date.now() - new Date(timestamp).getTime()) < 24 * 60 * 60 * 1000;
-      if (haceMenosDeUnDia) {
-        console.warn(`⛔️ Duplicado fiscal detectado para ${email} + ${productoNormalizado}, omitiendo generación de factura.`);
-        return { duplicate: true, hash };
-      }
-    }
-
     console.log('📦 Procesando producto:', productoSlug, '-', datosCliente.importe, '€');
 
     let errorProcesando = false;

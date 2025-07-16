@@ -111,13 +111,13 @@ async function handleStripeEvent(event) {
       }
     }
 
-    if (email && intento >= 1 && intento <= 3) {
+    if (email && intento >= 1 && intento <= 4) {
       try {
         console.log(`⚠️ Intento de cobro fallido (${intento}) para: ${email} – ${nombre}`);
 
         await enviarAvisoImpago(email, nombre, intento, enlacePago, false);
 
-        if (intento === 3) {
+        if (intento === 4) {
           await enviarAvisoImpago(email, nombre, intento, enlacePago, true);
           await desactivarMembresiaClub(email);
           await registrarBajaClub({ email, motivo: 'impago' });

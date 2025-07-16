@@ -169,20 +169,29 @@ module.exports = async function procesarCompra(datos) {
       }
     }
 
-    // 💾 Guardar (o actualizar) siempre los datos fiscales del usuario tras la primera compra
-      const datosFiscalesRef = firestore.collection('datosFiscalesPorEmail').doc(email);
-      console.log('🧾 Guardando o actualizando datos fiscales en Firestore para futuras renovaciones');
-      await datosFiscalesRef.set({
-        nombre,
-        apellidos,
-        dni,
-        direccion,
-        ciudad,
-        provincia,
-        cp,
-        email,
-        fecha: new Date().toISOString()
-      });
+    // 💣 Eliminar cualquier dato fiscal anterior del usuario (por si compró con otros datos antes)
+        const datosFiscalesRef = firestore.collection('datosFiscalesPorEmail').doc(email);
+        try {
+          console.log('🧨 Eliminando datos fiscales antiguos de Firestore (si existían)');
+          await datosFiscalesRef.delete();
+        } catch (err) {
+          console.warn('⚠️ No se pudo eliminar el documento previo (puede que no existiera):', err.message || err);
+        }
+
+    // 💾 Guardar los datos del formulario como nuevos datos fiscales
+        console.log('🧾 Guardando nuevos datos fiscales en Firestore');
+        await datosFiscalesRef.set({
+          nombre,
+          apellidos,
+          dni,
+          direccion,
+          ciudad,
+          provincia,
+          cp,
+          email,
+          fecha: new Date().toISOString()
+        });
+
 
 
     await docRef.update({

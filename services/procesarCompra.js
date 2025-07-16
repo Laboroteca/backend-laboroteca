@@ -51,23 +51,18 @@ module.exports = async function procesarCompra(datos) {
   console.log('🔑 Clave normalizada para deduplicación:', claveNormalizada);
 
 // ✅ Crear ID único para esta compra (sin usar hash de email + producto)
-  const docRef = firestore.collection('comprasProcesadas').doc(`compra-${Date.now()}`);
-  await docRef.set({
-    estado: 'procesando',
-    email,
-    producto: claveNormalizada,
-    fechaInicio: new Date().toISOString()
-  });
+    const compraId = `compra-${Date.now()}`;
+    const docRef = firestore.collection('comprasProcesadas').doc(compraId);
 
+// ✅ Registrar inicio
+    await docRef.set({
+      compraId,
+      estado: 'procesando',
+      email,
+      producto: claveNormalizada,
+      fechaInicio: new Date().toISOString()
+    });
 
-  // ✅ Registrar inicio
-  await docRef.set({
-    compraId,
-    estado: 'procesando',
-    email,
-    producto: claveNormalizada,
-    fechaInicio: new Date().toISOString()
-  });
 
   try {
     // 🔁 Usar datos nuevos si hay, pero preferencia por los de compra inicial
@@ -196,6 +191,15 @@ module.exports = async function procesarCompra(datos) {
       facturaGenerada: true,
       fechaFin: new Date().toISOString()
     });
+
+        // 🟢 Marca la factura como procesada (para evitar duplicados en renovaciones)
+    if (datos.invoiceId) {
+      await firestore.collection('facturasGeneradas').doc(datos.invoiceId).set({
+        procesada: true,
+        fecha: new Date().toISOString()
+      });
+      console.log(`🧾 Factura ${datos.invoiceId} marcada como procesada`);
+    }
 
     console.log(`✅ Compra procesada con éxito para ${nombre} ${apellidos}`);
     console.timeEnd(`🕒 Compra ${email}`);

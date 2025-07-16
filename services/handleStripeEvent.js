@@ -145,9 +145,18 @@ async function handleStripeEvent(event) {
     return { warning: true };
   }
 
-    if (event.type === 'invoice.paid') {
+if (event.type === 'invoice.paid') {
   const invoice = event.data.object;
   const invoiceId = invoice.id;
+
+  // 🔒 Protección 3: evitar duplicados en facturas ya generadas (renovaciones)
+  const docRefFactura = firestore.collection('facturasGeneradas').doc(invoiceId);
+  const docSnapFactura = await docRefFactura.get();
+  if (docSnapFactura.exists) {
+    console.log(`⚠️ [invoice.paid] Factura ${invoiceId} ya procesada (en facturasGeneradas).`);
+    return { ignored: true };
+  }
+
   const isFirstPurchase = invoice.metadata?.esPrimeraCompra === 'true';
 
   // 🔒 Protección 1: si es primera compra, ya se facturó en procesarCompra.js
@@ -215,6 +224,12 @@ async function handleStripeEvent(event) {
       importe
     });
     await enviarFacturaPorEmail(datosCliente, pdfBuffer);
+
+    await firestore.collection('facturasGeneradas').doc(invoiceId).set({
+      procesada: true,
+      fecha: new Date().toISOString()
+    });
+    console.log(`📄 Factura ${invoiceId} marcada como procesada (renovación).`);
 
     // ✅ Registro de que esta invoice ya fue procesada
     await firestore.collection('comprasProcesadas').doc(invoiceId).set({

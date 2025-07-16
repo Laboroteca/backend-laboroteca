@@ -87,7 +87,7 @@ async function handleStripeEvent(event) {
     try {
       console.log(`⛔️ Primer intento de cobro fallido, CANCELANDO suscripción y SIN emitir factura para: ${email} – ${nombre}`);
       await enviarAvisoImpago(email, nombre, 1, enlacePago, true); // true = email de cancelación inmediata
-      await desactivarMembresiaClub(email);
+      await desactivarMembresiaClub(email, false);
       await registrarBajaClub({ email, motivo: 'impago' });
       await docRefIntento.set({
         invoiceId,
@@ -244,7 +244,7 @@ if (event.type === 'invoice.paid') {
     if (email) {
       try {
         console.log('❌ Suscripción cancelada por impago:', email);
-        await desactivarMembresiaClub(email);
+        await desactivarMembresiaClub(email, false);
         await registrarBajaClub({ email, motivo: 'impago' });
         await enviarAvisoCancelacion(email, nombre, enlacePago);
       } catch (err) {

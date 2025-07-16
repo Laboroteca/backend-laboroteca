@@ -13,7 +13,7 @@ const MEMBERSHIP_ID = parseInt(process.env.MEMBERSHIP_ID || '10663', 10);
  * @param {string} email - Email del usuario
  * @returns {Promise<{ok: boolean, mensaje?: string}>}
  */
-async function desactivarMembresiaClub(email) {
+async function desactivarMembresiaClub(email, enviarEmailConfirmacion = true) {
   console.log(`[BajaClub] 🔄 Iniciando proceso de baja para ${email}`);
 
   if (!email || typeof email !== 'string' || !email.includes('@')) {
@@ -76,7 +76,8 @@ async function desactivarMembresiaClub(email) {
     return { ok: false, mensaje: `Error al desactivar en MemberPress: ${err.message}` };
   }
 
-  // 🔴 4. Email de confirmación
+// 🔴 4. Email de confirmación (solo si es voluntaria/eliminación)
+if (enviarEmailConfirmacion) {
   try {
     const ref = firestore.collection('usuariosClub').doc(email);
     const doc = await ref.get();
@@ -91,6 +92,7 @@ async function desactivarMembresiaClub(email) {
   } catch (err) {
     console.error(`❌ Error al enviar email de baja:`, err.message);
   }
+}
 
   return { ok: true };
 }

@@ -135,7 +135,6 @@ async function handleStripeEvent(event) {
       invoice.metadata?.email
     )?.toLowerCase().trim();
 
-    const nombre = invoice.customer_details?.name || '';
     const importe = parseFloat((invoice.amount_paid / 100).toFixed(2));
     const lineas = invoice.lines?.data || [];
 
@@ -154,7 +153,7 @@ async function handleStripeEvent(event) {
         console.log('💰 Renovación pagada - Club Laboroteca:', email, '-', importe, '€');
 
         let datosCliente = {
-          nombre,
+          nombre: '',
           apellidos: '',
           dni: '',
           email,

@@ -174,10 +174,10 @@ if (event.type === 'invoice.paid') {
       return;
     }
 
-    // 🔐 Buscar los datos fiscales previamente guardados en Firestore
-    const clienteDoc = await firestore.collection('clientes').doc(email).get();
+// 📦 Buscar datos fiscales en Firestore (colección correcta)
+    const clienteDoc = await firestore.collection('datosFiscalesPorEmail').doc(email).get();
     if (!clienteDoc.exists) {
-      console.error(`❌ No se encontraron datos fiscales para ${email} en Firestore (renovación mensual)`);
+      console.error(`❌ No se encontraron datos fiscales para ${email} en datosFiscalesPorEmail`);
       return;
     }
 

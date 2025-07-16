@@ -39,11 +39,15 @@ async function desactivarMembresiaClub(email, password) {
     return { ok: false, mensaje: 'Email inválido.' };
   }
 
-  if (password) {
-    const wpLogin = await verificarLoginWordPress(email, password);
-    if (!wpLogin.ok) {
-      return { ok: false, mensaje: wpLogin.mensaje || 'Contraseña incorrecta' };
-    }
+  // 🔒 Siempre exige contraseña válida
+  if (!password || typeof password !== 'string' || password.length < 4) {
+    return { ok: false, mensaje: 'Contraseña requerida.' };
+  }
+
+  // Verifica la contraseña con WordPress
+  const wpLogin = await verificarLoginWordPress(email, password);
+  if (!wpLogin.ok) {
+    return { ok: false, mensaje: wpLogin.mensaje || 'Contraseña incorrecta' };
   }
 
   // 🔻 Paso 1: Cancelar suscripciones activas en Stripe

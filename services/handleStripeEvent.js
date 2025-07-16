@@ -151,9 +151,22 @@ if (event.type === 'invoice.paid') {
     const invoice = event.data.object;
     const invoiceId = invoice.id;
     const customerId = invoice.customer;
+    const billingReason = invoice.billing_reason || '';
 
     if (!invoiceId || !customerId) {
       console.warn('⚠️ Falta invoiceId o customerId en invoice.paid');
+      return;
+    }
+
+    // ⚠️ IGNORAR facturas de tipo 'subscription_create' (compra inicial → ya procesada en checkout.session.completed)
+    if (billingReason === 'subscription_create') {
+      console.log(`ℹ️ Ignorado invoice.paid por compra inicial (billing_reason=subscription_create): ${invoiceId}`);
+      return;
+    }
+
+    // ✅ Solo procesar facturas de tipo 'subscription_cycle' (renovación mensual)
+    if (billingReason !== 'subscription_cycle') {
+      console.log(`⚠️ Ignorado invoice.paid por no ser una renovación mensual: ${billingReason}`);
       return;
     }
 
@@ -164,53 +177,45 @@ if (event.type === 'invoice.paid') {
       return;
     }
 
-    // 🔍 Obtener email del cliente desde Stripe
-const customer = await stripe.customers.retrieve(customerId);
-const email = (customer.email || '').toLowerCase().trim();
+    // 🔍 Obtener email desde Stripe
+    const customer = await stripe.customers.retrieve(customerId);
+    const email = (customer.email || '').toLowerCase().trim();
 
-if (!email.includes('@')) {
-  console.warn(`❌ Email no válido en invoice.paid: ${email}`);
-  return;
-}
+    if (!email.includes('@')) {
+      console.warn(`❌ Email no válido en invoice.paid: ${email}`);
+      return;
+    }
 
-// 📦 Buscar datos fiscales en Firestore
-const clienteDoc = await firestore.collection('datosFiscalesPorEmail').doc(email).get();
-if (!clienteDoc.exists) {
-  console.error(`❌ No se encontraron datos fiscales para ${email} en datosFiscalesPorEmail`);
-  return;
-}
+    // 📦 Recuperar datos fiscales guardados en la compra inicial
+    const clienteDoc = await firestore.collection('datosFiscalesPorEmail').doc(email).get();
+    if (!clienteDoc.exists) {
+      console.error(`❌ No se encontraron datos fiscales para ${email} en datosFiscalesPorEmail`);
+      return;
+    }
 
-const datosFiscales = clienteDoc.data();
+    const datosFiscales = clienteDoc.data();
+    const nombre = datosFiscales.nombre || 'Cliente Laboroteca';
+    const apellidos = datosFiscales.apellidos || '';
 
-// ✅ Usar nombre y apellidos ya guardados en Firestore
-const nombre = datosFiscales.nombre || 'Cliente Laboroteca';
-const apellidos = datosFiscales.apellidos || '';
+    const datosRenovacion = {
+      ...datosFiscales,
+      email,
+      nombre,
+      apellidos,
+      nombreProducto: 'Renovación mensual Club Laboroteca',
+      descripcionProducto: 'Renovación mensual Club Laboroteca',
+      tipoProducto: 'Club',
+      importe: (invoice.amount_paid || 499) / 100,
+      invoiceId,
+    };
 
-// 🧾 Montar datos específicos para la factura de renovación
-const datosRenovacion = {
-  ...datosFiscales, // ya contiene todo: nombre, apellidos, dirección, etc.
-  email,
-  nombre,
-  apellidos,
-  nombreProducto: 'Renovación mensual Club Laboroteca',
-  descripcionProducto: 'Renovación mensual Club Laboroteca',
-  tipoProducto: 'Club',
-  importe: (invoice.amount_paid || 499) / 100,
-  invoiceId,
-};
-
-
-    // 📄 Generar PDF, subir a GCS, enviar por email y registrar en Sheets
     const pdfBuffer = await crearFacturaEnFacturaCity(datosRenovacion);
     await subirFactura(email, pdfBuffer, invoiceId);
     await guardarEnGoogleSheets(datosRenovacion);
     await enviarFacturaPorEmail(datosRenovacion, pdfBuffer);
-
-    // 🔓 Activar acceso y sincronizar en MemberPress
     await activarMembresiaClub(email);
     await syncMemberpressClub(email);
 
-    // ✅ Marcar la factura como procesada en Firestore
     await firestore.collection('facturasEmitidas').doc(invoiceId).set({
       procesada: true,
       fecha: new Date().toISOString(),
@@ -218,11 +223,9 @@ const datosRenovacion = {
       tipo: 'renovacion'
     });
 
-    console.log(`✅ Factura de renovación procesada para ${email}`);
-    return;
+    console.log(`✅ Factura de renovación mensual procesada para ${email}`);
   } catch (error) {
     console.error('❌ Error al procesar invoice.paid:', error);
-    return;
   }
 }
 

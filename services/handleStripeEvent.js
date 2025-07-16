@@ -44,22 +44,38 @@ async function handleStripeEvent(event) {
       invoice.metadata?.email
     )?.toLowerCase().trim();
 
-    const nombre = invoice.customer_details?.name || '';
-    const enlacePago = 'https://www.laboroteca.es/gestion-pago-club/';
     const invoiceId = invoice.id;
+    const intento = invoice.attempt_count || 1;
+    const enlacePago = 'https://www.laboroteca.es/gestion-pago-club/';
 
-    const docRefIntento = firestore.collection('intentosImpago').doc(invoiceId);
+    const intentoId = `${invoice.subscription}-${intento}`;
+    const docRefIntento = firestore.collection('intentosImpago').doc(intentoId);
     const docSnapIntento = await docRefIntento.get();
     if (docSnapIntento.exists) {
       console.warn(`⛔️ [IMPAGO] Evento duplicado ignorado: ${invoiceId}`);
       return { received: true, duplicate: true };
     }
 
-    let intento = invoice.attempt_count || 1;
+    let nombre = invoice.customer_details?.name || '';
+
+    if (!nombre && email) {
+      try {
+        const docSnap = await firestore.collection('datosFiscalesPorEmail').doc(email).get();
+        if (docSnap.exists) {
+          const doc = docSnap.data();
+          nombre = doc.nombre || '';
+          console.log(`✅ Nombre recuperado para ${email}: ${nombre}`);
+        } else {
+          console.warn(`⚠️ No se encontró nombre en Firestore para ${email}`);
+        }
+      } catch (err) {
+        console.error('❌ Error al recuperar nombre desde Firestore:', err.message);
+      }
+    }
 
     if (email && intento >= 1 && intento <= 3) {
       try {
-        console.log(`⚠️ Intento de cobro fallido (${intento}) para: ${email}`);
+        console.log(`⚠️ Intento de cobro fallido (${intento}) para: ${email} – ${nombre}`);
 
         await enviarAvisoImpago(email, nombre, intento, enlacePago, false);
 
@@ -73,6 +89,7 @@ async function handleStripeEvent(event) {
           invoiceId,
           intento,
           email,
+          nombre,
           fecha: new Date().toISOString()
         });
       } catch (err) {
@@ -198,7 +215,6 @@ async function handleStripeEvent(event) {
     if (email) {
       try {
         console.log('❌ Suscripción cancelada por impago:', email);
-
         await desactivarMembresiaClub(email);
         await registrarBajaClub({ email, motivo: 'impago' });
         await enviarAvisoCancelacion(email, nombre, enlacePago);
@@ -209,137 +225,131 @@ async function handleStripeEvent(event) {
     return { success: true, baja: true };
   }
 
-  if (event.type !== 'checkout.session.completed') return { ignored: true };
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object;
+    if (session.payment_status !== 'paid') return { ignored: true };
 
-  const session = event.data.object;
-  if (session.payment_status !== 'paid') return { ignored: true };
-
-  const sessionId = session.id;
-  const docRef = firestore.collection('comprasProcesadas').doc(sessionId);
-  const yaProcesado = await firestore.runTransaction(async (tx) => {
-    const doc = await tx.get(docRef);
-    if (doc.exists) return true;
-    tx.set(docRef, {
-      sessionId,
-      email: '',
-      producto: '',
-      fecha: new Date().toISOString(),
-      procesando: true,
-      error: false,
-      facturaGenerada: false
+    const sessionId = session.id;
+    const docRef = firestore.collection('comprasProcesadas').doc(sessionId);
+    const yaProcesado = await firestore.runTransaction(async (tx) => {
+      const doc = await tx.get(docRef);
+      if (doc.exists) return true;
+      tx.set(docRef, {
+        sessionId,
+        email: '',
+        producto: '',
+        fecha: new Date().toISOString(),
+        procesando: true,
+        error: false,
+        facturaGenerada: false
+      });
+      return false;
     });
-    return false;
-  });
-  if (yaProcesado) return { duplicate: true };
+    if (yaProcesado) return { duplicate: true };
 
-  const m = session.metadata || {};
-  const email = (
-    (m.email_autorelleno && m.email_autorelleno.includes('@') && m.email_autorelleno) ||
-    (m.email && m.email.includes('@') && m.email) ||
-    (session.customer_details?.email && session.customer_details.email.includes('@') && session.customer_details.email) ||
-    (session.customer_email && session.customer_email.includes('@') && session.customer_email)
-  )?.toLowerCase().trim();
+    const m = session.metadata || {};
+    const email = (
+      (m.email_autorelleno && m.email_autorelleno.includes('@') && m.email_autorelleno) ||
+      (m.email && m.email.includes('@') && m.email) ||
+      (session.customer_details?.email && session.customer_details.email.includes('@') && session.customer_details.email) ||
+      (session.customer_email && session.customer_email.includes('@') && session.customer_email)
+    )?.toLowerCase().trim();
 
-  if (!email) {
-    console.error('❌ Email inválido en Stripe');
-    await docRef.update({ error: true, errorMsg: 'Email inválido en Stripe' });
-    return { error: 'Email inválido' };
-  }
+    if (!email) {
+      console.error('❌ Email inválido en Stripe');
+      await docRef.update({ error: true, errorMsg: 'Email inválido en Stripe' });
+      return { error: 'Email inválido' };
+    }
 
-  const name = (session.customer_details?.name || `${m.nombre || ''} ${m.apellidos || ''}`).trim();
-  const amountTotal = session.amount_total || 0;
+    const name = (session.customer_details?.name || `${m.nombre || ''} ${m.apellidos || ''}`).trim();
+    const amountTotal = session.amount_total || 0;
 
-  const rawNombreProducto = m.nombreProducto || '';
-  const productoSlug = amountTotal === 499 ? 'el club laboroteca' : normalizarProducto(rawNombreProducto);
-  const memberpressId = MEMBERPRESS_IDS[productoSlug];
+    const rawNombreProducto = m.nombreProducto || '';
+    const productoSlug = amountTotal === 499 ? 'el club laboroteca' : normalizarProducto(rawNombreProducto);
+    const memberpressId = MEMBERPRESS_IDS[productoSlug];
 
-  const descripcionProducto = m.descripcionProducto || rawNombreProducto || 'Producto Laboroteca';
-  const productoNormalizado = normalizarProducto(descripcionProducto);
+    const descripcionProducto = m.descripcionProducto || rawNombreProducto || 'Producto Laboroteca';
+    const productoNormalizado = normalizarProducto(descripcionProducto);
 
-  const datosCliente = {
-    nombre: m.nombre || name,
-    apellidos: m.apellidos || '',
-    dni: m.dni || '',
-    email,
-    direccion: m.direccion || '',
-    ciudad: m.ciudad || '',
-    provincia: m.provincia || '',
-    cp: m.cp || '',
-    importe: parseFloat((amountTotal / 100).toFixed(2)),
-    tipoProducto: m.tipoProducto || 'Otro',
-    nombreProducto: rawNombreProducto,
-    descripcionProducto,
-    producto: productoNormalizado
-  };
-
-  console.log('📦 Procesando producto:', productoSlug, '-', datosCliente.importe, '€');
-
-  let errorProcesando = false;
-
-  try {
-    await guardarEnGoogleSheets(datosCliente);
-    const pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
-
-    const nombreArchivo = `facturas/${email}/${Date.now()}-${datosCliente.producto}.pdf`;
-    await subirFactura(nombreArchivo, pdfBuffer, {
+    const datosCliente = {
+      nombre: m.nombre || name,
+      apellidos: m.apellidos || '',
+      dni: m.dni || '',
       email,
-      nombreProducto: datosCliente.producto,
-      tipoProducto: datosCliente.tipoProducto,
-      importe: datosCliente.importe
-    });
+      direccion: m.direccion || '',
+      ciudad: m.ciudad || '',
+      provincia: m.provincia || '',
+      cp: m.cp || '',
+      importe: parseFloat((amountTotal / 100).toFixed(2)),
+      tipoProducto: m.tipoProducto || 'Otro',
+      nombreProducto: rawNombreProducto,
+      descripcionProducto,
+      producto: productoNormalizado
+    };
 
-    await enviarFacturaPorEmail(datosCliente, pdfBuffer);
-
-    try {
-      await firestore.collection('datosFiscalesPorEmail').doc(email).set(datosCliente, { merge: true });
-      console.log(`✅ Datos fiscales guardados para ${email}`);
-    } catch (err) {
-      console.error('⚠️ No se pudieron guardar los datos fiscales:', err.message);
-    }
-
-    if (memberpressId === 10663) {
-      await syncMemberpressClub({ email, accion: 'activar', membership_id: memberpressId, importe: datosCliente.importe });
-      await activarMembresiaClub(email);
-    }
-
-    if (memberpressId === 7994) {
-      await syncMemberpressLibro({ email, accion: 'activar', membership_id: memberpressId, importe: datosCliente.importe });
-    }
-
-    if (!memberpressId) {
-      console.warn('⚠️ Producto no reconocido en MemberPress:', productoSlug);
-    }
-
-    if (m.codigoDescuento) {
-      try {
-        const raw = await fs.readFile(RUTA_CUPONES, 'utf8');
-        const cupones = JSON.parse(raw);
-        const i = cupones.findIndex(c => c.codigo === m.codigoDescuento && !c.usado);
-        if (i !== -1) {
-          cupones[i].usado = true;
-          await fs.writeFile(RUTA_CUPONES, JSON.stringify(cupones, null, 2));
-        }
-      } catch (err) {
-        console.error('❌ Error al marcar cupón como usado:', err?.message);
+    // Antiduplicado fiscal
+    const hash = `${email}__${productoNormalizado}`;
+    const docRefHash = firestore.collection('facturasEmitidas').doc(hash);
+    const docSnapHash = await docRefHash.get();
+    if (docSnapHash.exists) {
+      const timestamp = docSnapHash.data()?.fecha;
+      const haceMenosDeUnDia = timestamp && (Date.now() - new Date(timestamp).getTime()) < 24 * 60 * 60 * 1000;
+      if (haceMenosDeUnDia) {
+        console.warn(`⛔️ Duplicado fiscal detectado para ${email} + ${productoNormalizado}, omitiendo generación de factura.`);
+        return { duplicate: true, hash };
       }
     }
-  } catch (err) {
-    errorProcesando = true;
-    console.error('❌ Error general en flujo Stripe:', err?.message);
-    await docRef.update({ error: true, errorMsg: err?.message || err });
-    throw err;
-  } finally {
-    await docRef.update({
-      email,
-      producto: datosCliente.producto,
-      fecha: new Date().toISOString(),
-      procesando: false,
-      facturaGenerada: !errorProcesando,
-      error: errorProcesando
-    });
+
+    console.log('📦 Procesando producto:', productoSlug, '-', datosCliente.importe, '€');
+
+    let errorProcesando = false;
+
+    try {
+      await guardarEnGoogleSheets(datosCliente);
+      const pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
+
+      const nombreArchivo = `facturas/${email}/${Date.now()}-${datosCliente.producto}.pdf`;
+      await subirFactura(nombreArchivo, pdfBuffer, {
+        email,
+        nombreProducto: datosCliente.producto,
+        tipoProducto: datosCliente.tipoProducto,
+        importe: datosCliente.importe
+      });
+
+      await enviarFacturaPorEmail(datosCliente, pdfBuffer);
+      await docRefHash.set({ fecha: new Date().toISOString() });
+
+      await firestore.collection('datosFiscalesPorEmail').doc(email).set(datosCliente, { merge: true });
+
+      if (memberpressId === 10663) {
+        await syncMemberpressClub({ email, accion: 'activar', membership_id: memberpressId, importe: datosCliente.importe });
+        await activarMembresiaClub(email);
+      }
+
+      if (memberpressId === 7994) {
+        await syncMemberpressLibro({ email, accion: 'activar', membership_id: memberpressId, importe: datosCliente.importe });
+      }
+
+    } catch (err) {
+      errorProcesando = true;
+      console.error('❌ Error general en flujo Stripe:', err?.message);
+      await docRef.update({ error: true, errorMsg: err?.message || err });
+      throw err;
+    } finally {
+      await docRef.update({
+        email,
+        producto: datosCliente.producto,
+        fecha: new Date().toISOString(),
+        procesando: false,
+        facturaGenerada: !errorProcesando,
+        error: errorProcesando
+      });
+    }
+
+    return { success: true };
   }
 
-  return { success: true };
+  return { ignored: true };
 }
 
 module.exports = handleStripeEvent;

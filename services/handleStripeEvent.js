@@ -34,8 +34,9 @@ const MEMBERPRESS_IDS = {
   'de cara a la jubilacion': 7994
 };
 
-// 🔁 BLOQUE IMPAGO – ENVÍA EMAIL AUNQUE NO HAYA payment_intent
+// 🔁 BLOQUE IMPAGO – Cancela TODO al primer intento fallido, email claro y sin generar factura
 async function handleStripeEvent(event) {
+  // ---- IMPAGO EN INVOICE ----
   if (event.type === 'invoice.payment_failed') {
     const invoice = event.data.object;
     const email = (
@@ -46,51 +47,29 @@ async function handleStripeEvent(event) {
     )?.toLowerCase().trim();
 
     const invoiceId = invoice.id;
-    const intento = invoice.attempt_count || 1;
-    const enlacePago = 'https://www.laboroteca.es/gestion-pago-club/';
+    const enlacePago = 'https://www.laboroteca.es/membresia-club-laboroteca/';
 
     if (!email || typeof email !== 'string' || !email.includes('@')) {
       console.error(`❌ [IMPAGO] Email inválido o ausente en metadata de la invoice ${invoiceId}`);
       return { error: 'email_invalido_o_ausente' };
     }
 
-    let paymentIntentId = invoice.payment_intent;
-
-    if (!paymentIntentId && invoiceId) {
-      try {
-        const invoiceCompleta = await stripe.invoices.retrieve(invoiceId);
-        paymentIntentId = invoiceCompleta.payment_intent || invoiceCompleta.latest_payment_intent;
-
-        if (!paymentIntentId) {
-          console.warn(`⚠️ payment_intent sigue ausente en invoiceCompleta: ${invoiceId}`);
-          await enviarAvisoImpago(email, 'cliente', intento, enlacePago, intento >= 3);
-          return { aviso_sin_payment_intent: true };
-        }
-
-        console.log(`🔁 Recuperado payment_intent desde Stripe: ${paymentIntentId}`);
-      } catch (err) {
-        console.warn(`⚠️ No se pudo recuperar el payment_intent de ${invoiceId}: ${err.message}`);
-        await enviarAvisoImpago(email, 'cliente', intento, enlacePago, intento >= 3);
-        return { aviso_error_recuperando_payment_intent: true };
-      }
-    }
-
+    // --- No procesar duplicados de impago ---
+    const paymentIntentId = invoice.payment_intent || `sin_intent_${invoiceId}`;
     const docRefIntento = firestore.collection('intentosImpago').doc(paymentIntentId);
     const docSnapIntento = await docRefIntento.get();
     if (docSnapIntento.exists) {
       console.warn(`⛔️ [IMPAGO] Evento duplicado ignorado: ${paymentIntentId}`);
       return { received: true, duplicate: true };
     }
-
     await docRefIntento.set({
       invoiceId,
-      intento,
       email,
       timestamp: Date.now()
     });
 
+    // --- Recuperar nombre (si hay) ---
     let nombre = invoice.customer_details?.name || '';
-
     if (!nombre && email) {
       try {
         const docSnap = await firestore.collection('datosFiscalesPorEmail').doc(email).get();
@@ -98,42 +77,33 @@ async function handleStripeEvent(event) {
           const doc = docSnap.data();
           nombre = doc.nombre || '';
           console.log(`✅ Nombre recuperado para ${email}: ${nombre}`);
-        } else {
-          console.warn(`⚠️ No se encontró nombre en Firestore para ${email}`);
         }
       } catch (err) {
         console.error('❌ Error al recuperar nombre desde Firestore:', err.message);
       }
     }
 
-    if (email && intento >= 1 && intento <= 4) {
-      try {
-        console.log(`⚠️ Intento de cobro fallido (${intento}) para: ${email} – ${nombre}`);
-        await enviarAvisoImpago(email, nombre, intento, enlacePago, intento >= 3);
-
-        if (intento === 4) {
-          await desactivarMembresiaClub(email);
-          await registrarBajaClub({ email, motivo: 'impago' });
-        }
-
-        await docRefIntento.set({
-          invoiceId,
-          intento,
-          email,
-          nombre,
-          fecha: new Date().toISOString()
-        });
-      } catch (err) {
-        console.error('❌ Error al enviar aviso de impago:', err?.message);
-      }
-    } else {
-      console.warn('⚠️ Email no válido o intento fuera de rango');
+    // --- Enviar email y desactivar membresía inmediatamente ---
+    try {
+      console.log(`⛔️ Primer intento de cobro fallido, CANCELANDO suscripción y SIN emitir factura para: ${email} – ${nombre}`);
+      await enviarAvisoImpago(email, nombre, 1, enlacePago, true); // true = email de cancelación inmediata
+      await desactivarMembresiaClub(email);
+      await registrarBajaClub({ email, motivo: 'impago' });
+      await docRefIntento.set({
+        invoiceId,
+        email,
+        nombre,
+        fecha: new Date().toISOString()
+      });
+    } catch (err) {
+      console.error('❌ Error al procesar impago/cancelación:', err?.message);
+      return { error: 'fallo_envio_cancelacion' };
     }
 
-    return { warning: true };
+    return { impago: 'cancelado_primer_intento' };
   }
 
-  // 🧯 BLOQUE EXTRA – Captura payment_intent.payment_failed
+  // ---- Captura también payment_intent.payment_failed (por si acaso) ----
   if (event.type === 'payment_intent.payment_failed') {
     const intent = event.data.object;
     const email = (
@@ -144,10 +114,10 @@ async function handleStripeEvent(event) {
 
     console.warn(`⚠️ [Intento fallido] payment_intent ${intent.id} falló para ${email || '[email desconocido]'}`);
 
-    // Puedes enviar email si quieres actuar también aquí
+    // Enviar email también por aquí, aunque es redundante (opcional)
     if (email && email.includes('@')) {
       try {
-        await enviarAvisoImpago(email, 'cliente', 1, 'https://www.laboroteca.es/gestion-pago-club/', false);
+        await enviarAvisoImpago(email, 'cliente', 1, 'https://www.laboroteca.es/gestion-pago-club/', true);
         return { aviso_impago_por_payment_intent: true };
       } catch (err) {
         console.error('❌ Error al enviar aviso por payment_intent fallido:', err?.message);
@@ -269,7 +239,7 @@ if (event.type === 'invoice.paid') {
     )?.toLowerCase().trim();
 
     const nombre = subscription.customer_details?.name || '';
-    const enlacePago = 'https://www.laboroteca.es/gestion-pago-club/';
+    const enlacePago = 'https://www.laboroteca.es/membresia-club-laboroteca/';
 
     if (email) {
       try {

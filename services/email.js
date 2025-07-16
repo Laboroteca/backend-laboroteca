@@ -134,76 +134,43 @@ Ignacio Solsona`;
   });
 }
 
-// ✅ AVISO DE IMPAGO (hasta 3 intentos)
-async function enviarAvisoImpago(email, nombre, intento, enlacePago, enviarACopy = false) {
+// ✅ AVISO DE IMPAGO (cancelación inmediata, sin reintentos)
+async function enviarAvisoImpago(email, nombre, intento, enlacePago = "https://www.laboroteca.es/membresia-club-laboroteca/", cancelarYa = false) {
   let subject, html, text;
 
-  if (intento === 1) {
-    subject = 'Fallo en el cobro de tu suscripción Club Laboroteca';
-    html = `
-      <p>Estimado ${nombre},</p>
-      <p>El cobro de la cuota mensual del Club Laboroteca no se ha podido procesar. Lo intentaremos de nuevo en 3 días.</p>
-      <p>Si necesitas actualizar tu tarjeta o método de pago, puedes hacerlo aquí:<br><a href="${enlacePago}">${enlacePago}</a></p>
-    `;
-    text = `Estimado ${nombre},\n\nEl cobro de la cuota mensual del Club Laboroteca no se ha podido procesar. Lo intentaremos de nuevo en 3 días.\nSi necesitas actualizar tu tarjeta o método de pago, puedes hacerlo aquí:\n${enlacePago}`;
-  } else if (intento === 2) {
-    subject = 'Segundo intento de cobro fallido';
-    html = `
-      <p>Hola ${nombre},</p>
-      <p>Seguimos sin poder procesar el cobro de la cuota mensual del Club Laboroteca. Lo intentaremos de nuevo dentro de 2 días.</p>
-      <p>Actualiza tu método de pago aquí:<br><a href="${enlacePago}">${enlacePago}</a></p>
-    `;
-    text = `Hola ${nombre},\n\nSeguimos sin poder cobrar tu suscripción. Queda un último intento antes de cancelarse.\nActualizar método de pago: ${enlacePago}`;
-  } else if (intento === 3) {
-    subject = enviarACopy
-      ? 'COPIA: Tu suscripción Club Laboroteca ha sido cancelada por impago reiterado'
-      : 'Último intento antes de la cancelación';
-    html = enviarACopy
-      ? `
-        <p>Hola Ignacio,</p>
-        <p>Este es un aviso de copia sobre la cancelación por impago reiterado de la suscripción al Club Laboroteca para el usuario ${nombre} (${email}).</p>
-        <p>Se ha producido el último intento fallido de cobro y la suscripción se ha cancelado automáticamente.</p>
-        <p>Puedes revisar la gestión en el panel de Laboroteca.</p>
-      `
-      : `
-        <p>Hola ${nombre},</p>
-        <p>Este es el último intento para cobrar tu suscripción al Club Laboroteca. Si vuelve a fallar, se cancelará automáticamente.</p>
-        <p>Si necesitas actualizar la tarjeta o el método de pago, puedes hacerlo en este enlace:<br><a href="${enlacePago}">${enlacePago}</a></p>
-      `;
-    text = enviarACopy
-      ? `Hola Ignacio,
+  subject = 'Tu suscripción al Club Laboroteca ha sido CANCELADA por impago';
+  html = `
+    <p>Hola ${nombre || ''},</p>
+    <p>No hemos podido procesar el cobro de tu suscripción mensual al Club Laboroteca.</p>
+    <p><b>Tu suscripción ha sido cancelada automáticamente.</b></p>
+    <p>Puedes reactivarla en cualquier momento desde este enlace, sin penalización y con el mismo precio:</p>
+    <p><a href="https://www.laboroteca.es/membresia-club-laboroteca/">https://www.laboroteca.es/membresia-club-laboroteca/</a></p>
+    <p>Si crees que se trata de un error, revisa tu método de pago o contacta con nosotros.</p>
+  `;
+  text = `Hola ${nombre || ''},
 
-Este es un aviso de copia sobre la cancelación por impago reiterado de la suscripción al Club Laboroteca para el usuario ${nombre} (${email}).
+No hemos podido cobrar tu suscripción mensual al Club Laboroteca y ha sido cancelada automáticamente.
 
-Se ha producido el último intento fallido de cobro y la suscripción se ha cancelado automáticamente.
+Puedes reactivarla cuando quieras (sin penalización) aquí: https://www.laboroteca.es/membresia-club-laboroteca/
 
-Puedes revisar la gestión en el panel de Laboroteca.`
-      : `Hola ${nombre},
+Si necesitas ayuda, contacta con Laboroteca.`;
 
-Último intento para cobrar tu suscripción. Si falla, se cancelará automáticamente.
-Actualizar método de pago: ${enlacePago}`;
-  } else {
-    subject = 'Fallo de pago en tu suscripción Club Laboroteca';
-    html = `
-      <p>Hola ${nombre},</p>
-      <p>Se ha producido un fallo en el cobro de tu suscripción al Club Laboroteca.</p>
-      <p>Puedes revisar tu método de pago aquí:<br><a href="${enlacePago}">${enlacePago}</a></p>
-    `;
-    text = `Hola ${nombre},\n\nFallo en el cobro de tu suscripción.\nActualizar método de pago: ${enlacePago}`;
-  }
-
+  // Siempre enviamos el aviso único (no hay reintentos)
   return enviarEmailPersonalizado({ to: email, subject, html, text });
 }
 
-// ✅ CANCELACIÓN POR IMPAGO (con copia)
-async function enviarAvisoCancelacion(email, nombre, enlacePago) {
+// ✅ CANCELACIÓN POR IMPAGO (puede usarse también si quieres notificar al admin)
+async function enviarAvisoCancelacion(email, nombre, enlacePago = "https://www.laboroteca.es/membresia-club-laboroteca/") {
   const subject = 'Tu suscripción Club Laboroteca ha sido cancelada por impago';
   const html = `
     <p>Hola ${nombre},</p>
     <p>Tu suscripción ha sido cancelada por impago. Puedes reactivarla en cualquier momento por el mismo precio, sin ninguna penalización.</p>
-    <p>Enlace para reactivación:<br><a href="${enlacePago}">${enlacePago}</a></p>
+    <p>Enlace para reactivación:<br><a href="https://www.laboroteca.es/membresia-club-laboroteca/">https://www.laboroteca.es/membresia-club-laboroteca/</a></p>
   `;
-  const text = `Hola ${nombre},\n\nTu suscripción ha sido cancelada por impago. Puedes reactivarla en cualquier momento por el mismo precio, sin ninguna penalización.\nEnlace: ${enlacePago}`;
+  const text = `Hola ${nombre},
+
+Tu suscripción ha sido cancelada por impago. Puedes reactivarla en cualquier momento por el mismo precio, sin ninguna penalización.
+Enlace: https://www.laboroteca.es/membresia-club-laboroteca/`;
 
   return enviarEmailPersonalizado({
     to: [email],
@@ -222,9 +189,18 @@ async function enviarConfirmacionBajaClub(email, nombre = '') {
     <p>Hola ${nombre},</p>
     <p><strong>Te confirmamos que se ha cursado correctamente tu baja del Club Laboroteca</strong>.</p>
     <p>Puedes volver a hacerte miembro en cualquier momento, por el mismo precio y sin compromiso de permanencia.</p>
+    <p>Reactivar: <a href="https://www.laboroteca.es/membresia-club-laboroteca/">https://www.laboroteca.es/membresia-club-laboroteca/</a></p>
     <p>Un saludo,<br>Laboroteca</p>
   `;
-  const text = `Hola ${nombre},\n\nTe confirmamos que se ha cursado correctamente tu baja del Club Laboroteca.\n\nPuedes volver a hacerte miembro en cualquier momento, por el mismo precio y sin compromiso de permanencia.\n\nUn saludo,\nLaboroteca`;
+  const text = `Hola ${nombre},
+
+Te confirmamos que se ha cursado correctamente tu baja del Club Laboroteca.
+
+Puedes volver a hacerte miembro en cualquier momento, por el mismo precio y sin compromiso de permanencia.
+Reactivar: https://www.laboroteca.es/membresia-club-laboroteca/
+
+Un saludo,
+Laboroteca`;
 
   return enviarEmailPersonalizado({
     to: [email],

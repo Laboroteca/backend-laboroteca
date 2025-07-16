@@ -107,7 +107,8 @@ router.post('/create-session', async (req, res) => {
         cp,
         tipoProducto,
         nombreProducto: producto.slug,
-        descripcionProducto: producto.descripcion
+        descripcionProducto: producto.descripcion,
+        esPrimeraCompra: isSuscripcion ? 'true' : 'false'
       }
     });
 

@@ -8,7 +8,7 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const fetch = require('node-fetch');
 const axios = require('axios');
 
-const { enviarConfirmacionBajaClub } = require('./email');
+const { enviarConfirmacionBajaClub } = require('../services/email');
 const { syncMemberpressClub } = require('./syncMemberpressClub');
 
 async function desactivarMembresiaClub(email, password) {

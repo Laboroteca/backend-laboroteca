@@ -268,12 +268,8 @@ app.post('/activar-membresia-club', async (req, res) => {
 
 app.options('/cancelar-suscripcion-club', cors(corsOptions));
 app.post('/cancelar-suscripcion-club', cors(corsOptions), async (req, res) => {
-  const { email, password, token } = req.body;
-  const tokenEsperado = 'bajaClub@2025!';
+  const { email, password } = req.body;
 
-  if (token !== tokenEsperado) {
-    return res.status(403).json({ cancelada: false, mensaje: 'Token inválido' });
-  }
 
   if (!email || !password) {
     return res.status(400).json({ cancelada: false, mensaje: 'Faltan datos obligatorios' });

@@ -12,52 +12,39 @@ const axios = require('axios');
 const { enviarConfirmacionBajaClub } = require('./email');
 const { syncMemberpressClub } = require('./syncMemberpressClub');
 
-async function verificarLoginWordPress(email, password) {
-  try {
-    const res = await fetch('https://www.laboroteca.es/wp-json/laboroteca/v1/verificar-login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
-    });
-
-    if (!res.ok) {
-      let msg = '';
-      if (res.status === 401) msg = 'Contraseña incorrecta';
-      if (res.status === 404) msg = 'Usuario no encontrado';
-      return { ok: false, mensaje: msg || 'Error de autenticación' };
-    }
-
-    const data = await res.json();
-    if (!data?.ok || data.usuario?.toLowerCase().trim() !== email.toLowerCase().trim()) {
-      return { ok: false, mensaje: 'La contraseña no coincide con este usuario.' };
-    }
-
-
-    return { ok: true, usuario: data.usuario };
-  } catch (e) {
-    console.error('❌ Error conectando a WP para login:', e.message);
-    return { ok: false, mensaje: 'No se pudo conectar con WordPress.' };
-  }
-}
-
-
 async function desactivarMembresiaClub(email, password) {
   if (!email || typeof email !== 'string' || !email.includes('@')) {
     return { ok: false, mensaje: 'Email inválido.' };
   }
 
-  // 🔒 Siempre exige contraseña válida
   if (!password || typeof password !== 'string' || password.length < 4) {
     return { ok: false, mensaje: 'Contraseña requerida.' };
   }
 
-  // Verifica la contraseña con WordPress
+  // 🔐 Verificar credenciales en WordPress directamente
   email = email.trim().toLowerCase();
-  const wpLogin = await verificarLoginWordPress(email, password);
-  if (!wpLogin.ok || wpLogin.usuario !== email.trim().toLowerCase()) {
-    return { ok: false, mensaje: wpLogin.mensaje || 'Credenciales incorrectas.' };
-  }
 
+  try {
+    const respuesta = await fetch('https://www.laboroteca.es/wp-json/laboroteca/v1/verificar-login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password })
+    });
+
+    const datos = await respuesta.json();
+
+    if (!datos?.ok || datos.usuario?.toLowerCase().trim() !== email) {
+      let mensaje = datos?.mensaje || 'Credenciales incorrectas';
+      if (mensaje.toLowerCase().includes('contraseña')) {
+        mensaje = 'Contraseña incorrecta';
+      }
+      return { ok: false, mensaje };
+    }
+
+  } catch (err) {
+    console.error('❌ Error conectando a WP para login:', err.message);
+    return { ok: false, mensaje: 'No se pudo verificar la contraseña.' };
+  }
 
   // 🔻 Paso 1: Cancelar suscripciones activas en Stripe
   try {

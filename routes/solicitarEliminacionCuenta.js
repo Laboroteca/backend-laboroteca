@@ -15,7 +15,7 @@ router.post('/solicitar-eliminacion', async (req, res) => {
   }
 
   if (!password || typeof password !== 'string' || password.length < 4) {
-    return res.status(400).json({ ok: false, mensaje: 'Contraseña requerida.' });
+    return res.status(400).json({ ok: false, mensaje: 'Contraseña incorrecta.' });
   }
 
   try {

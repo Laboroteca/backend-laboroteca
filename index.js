@@ -20,6 +20,7 @@ const { eliminarUsuarioWordPress } = require('./services/eliminarUsuarioWordPres
 const procesarCompra = require('./services/procesarCompra');
 const { activarMembresiaClub } = require('./services/activarMembresiaClub');
 const { syncMemberpressClub } = require('./services/syncMemberpressClub');
+const desactivarMembresiaClubForm = require('./routes/desactivarMembresiaClub');
 const desactivarMembresiaClub = require('./services/desactivarMembresiaClub');
 const { registrarBajaClub } = require('./services/registrarBajaClub');
 

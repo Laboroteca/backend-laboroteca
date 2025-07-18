@@ -28,9 +28,10 @@ async function verificarLoginWordPress(email, password) {
     }
 
     const data = await res.json();
-    if (!data?.ok || data.usuario !== email) {
+    if (!data?.ok || data.usuario?.toLowerCase().trim() !== email.toLowerCase().trim()) {
       return { ok: false, mensaje: 'La contraseña no coincide con este usuario.' };
     }
+
 
     return { ok: true, usuario: data.usuario };
   } catch (e) {

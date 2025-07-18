@@ -9,7 +9,7 @@ const fetch = require('node-fetch');
 const axios = require('axios');
 
 const { enviarConfirmacionBajaClub } = require('../services/email');
-const { syncMemberpressClub } = require('./syncMemberpressClub');
+const { syncMemberpressClub } = require('../services/syncMemberpressClub');
 
 async function desactivarMembresiaClub(email, password) {
   // 🔐 Validación inicial

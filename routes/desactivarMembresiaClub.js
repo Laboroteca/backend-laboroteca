@@ -19,10 +19,19 @@ async function verificarLoginWordPress(email, password) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password })
     });
+
+    // Controla errores HTTP (401 = contraseña, 404 = usuario no existe)
+    if (!res.ok) {
+      let msg = '';
+      if (res.status === 401) msg = 'Contraseña incorrecta';
+      if (res.status === 404) msg = 'Usuario no encontrado';
+      return { ok: false, mensaje: msg || 'Error de autenticación' };
+    }
+
     const data = await res.json();
     if (!data?.ok) {
       let msg = data.mensaje || '';
-      if (msg.toLowerCase().includes('contraseña') || msg.toLowerCase().includes('password')) {
+      if (msg.toLowerCase().includes('contraseña')) {
         msg = 'Contraseña incorrecta';
       }
       return { ok: false, mensaje: msg || 'Contraseña incorrecta' };
@@ -33,6 +42,7 @@ async function verificarLoginWordPress(email, password) {
     return { ok: false, mensaje: 'No se pudo conectar con WordPress.' };
   }
 }
+
 
 async function desactivarMembresiaClub(email, password) {
   if (!email || typeof email !== 'string' || !email.includes('@')) {

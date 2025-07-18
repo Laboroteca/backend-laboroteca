@@ -1,7 +1,6 @@
 // 📁 routes/desactivarMembresiaClub.js
-// Este archivo se usa para gestionar la baja manual del Club desde formularios web.
-// Incluye verificación de contraseña, eliminación opcional de usuario en WordPress y cancelación de Stripe.
-// No confundir con services/desactivarMembresiaClub.js, que se usa para cancelaciones automáticas o backend.
+// Este archivo gestiona la baja manual del Club desde formularios web.
+// Verifica credenciales, cancela Stripe, desactiva en Firestore y MemberPress.
 
 const admin = require('../firebase');
 const firestore = admin.firestore();
@@ -13,17 +12,18 @@ const { enviarConfirmacionBajaClub } = require('./email');
 const { syncMemberpressClub } = require('./syncMemberpressClub');
 
 async function desactivarMembresiaClub(email, password) {
+  // 🔐 Validación inicial
   if (!email || typeof email !== 'string' || !email.includes('@')) {
     return { ok: false, mensaje: 'Email inválido.' };
   }
 
   if (!password || typeof password !== 'string' || password.length < 4) {
-    return { ok: false, mensaje: 'Contraseña requerida.' };
+    return { ok: false, mensaje: 'Contraseña incorrecta.' };
   }
 
-  // 🔐 Verificar credenciales en WordPress directamente
   email = email.trim().toLowerCase();
 
+  // 🔐 Verificar credenciales en WordPress
   try {
     const respuesta = await fetch('https://www.laboroteca.es/wp-json/laboroteca/v1/verificar-login', {
       method: 'POST',
@@ -33,16 +33,15 @@ async function desactivarMembresiaClub(email, password) {
 
     const datos = await respuesta.json();
 
-    if (!datos?.ok || datos.usuario?.toLowerCase().trim() !== email) {
-      let mensaje = datos?.mensaje || 'Credenciales incorrectas';
+    if (!datos?.ok) {
+      let mensaje = datos.mensaje || '';
       if (mensaje.toLowerCase().includes('contraseña')) {
         mensaje = 'Contraseña incorrecta';
       }
-      return { ok: false, mensaje };
+      return { ok: false, mensaje: mensaje || 'Contraseña incorrecta' };
     }
-
   } catch (err) {
-    console.error('❌ Error conectando a WP para login:', err.message);
+    console.error('❌ Error conectando a WordPress para verificar login:', err.message);
     return { ok: false, mensaje: 'No se pudo verificar la contraseña.' };
   }
 
@@ -117,26 +116,24 @@ async function desactivarMembresiaClub(email, password) {
   }
 
   // 🔻 Paso 5: Eliminar usuario en WordPress (opcional)
-  if (password) {
-    try {
-      const resp = await axios.post('https://www.laboroteca.es/wp-json/laboroteca/v1/eliminar-usuario', {
-        email,
-        password
-      }, {
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': process.env.LABOROTECA_API_KEY
-        }
-      });
-
-      if (resp.data?.ok) {
-        console.log(`🗑️ Usuario eliminado en WordPress: ${email}`);
-      } else {
-        console.warn('⚠️ Error eliminando usuario en WP:', resp.data);
+  try {
+    const resp = await axios.post('https://www.laboroteca.es/wp-json/laboroteca/v1/eliminar-usuario', {
+      email,
+      password
+    }, {
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.LABOROTECA_API_KEY
       }
-    } catch (errWP) {
-      console.error('❌ Error conectando a WP para eliminar usuario:', errWP.message);
+    });
+
+    if (resp.data?.ok) {
+      console.log(`🗑️ Usuario eliminado en WordPress: ${email}`);
+    } else {
+      console.warn('⚠️ Error eliminando usuario en WP:', resp.data);
     }
+  } catch (errWP) {
+    console.error('❌ Error conectando a WP para eliminar usuario:', errWP.message);
   }
 
   return { ok: true, cancelada: true };

@@ -20,7 +20,6 @@ async function verificarLoginWordPress(email, password) {
       body: JSON.stringify({ email, password })
     });
 
-    // Controla errores HTTP (401 = contraseña, 404 = usuario no existe)
     if (!res.ok) {
       let msg = '';
       if (res.status === 401) msg = 'Contraseña incorrecta';
@@ -29,14 +28,11 @@ async function verificarLoginWordPress(email, password) {
     }
 
     const data = await res.json();
-    if (!data?.ok) {
-      let msg = data.mensaje || '';
-      if (msg.toLowerCase().includes('contraseña')) {
-        msg = 'Contraseña incorrecta';
-      }
-      return { ok: false, mensaje: msg || 'Contraseña incorrecta' };
+    if (!data?.ok || data.usuario !== email) {
+      return { ok: false, mensaje: 'La contraseña no coincide con este usuario.' };
     }
-    return { ok: true };
+
+    return { ok: true, usuario: data.usuario };
   } catch (e) {
     console.error('❌ Error conectando a WP para login:', e.message);
     return { ok: false, mensaje: 'No se pudo conectar con WordPress.' };

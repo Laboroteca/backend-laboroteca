@@ -192,7 +192,7 @@ app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
   const nombreProducto = datos.nombreProducto || '';
   const descripcionProducto = datos.descripcionProducto || '';
   const precio = parseFloat((datos.importe || '9.99').toString().replace(',', '.'));
-  const imagenProducto = datos.imagenProducto || producto.imagen || 'https://www.laboroteca.es/wp-content/uploads/2025/06/Logo-Club-Laboroteca-ABOGADO.png';
+  const imagenProducto = datos.imagenProducto || 'https://www.laboroteca.es/wp-content/uploads/2025/06/Logo-Club-Laboroteca-ABOGADO.png';
 
   console.log('🧪 tipoProducto:', tipoProducto);
   console.log('🧪 nombreProducto:', nombreProducto);

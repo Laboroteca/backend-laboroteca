@@ -3,9 +3,7 @@
 const admin = require('../firebase');
 const firestore = admin.firestore();
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-const fetch = require('node-fetch');
 const axios = require('axios');
-
 const { enviarConfirmacionBajaClub } = require('../services/email');
 const { syncMemberpressClub } = require('../services/syncMemberpressClub');
 
@@ -21,24 +19,18 @@ async function desactivarMembresiaClub(email, password) {
 
   email = email.trim().toLowerCase();
 
-  // 🔐 Verificar credenciales en WordPress
+  // 🔐 Verificar credenciales directamente contra WordPress
   try {
-    const res = await fetch('https://www.laboroteca.es/wp-json/laboroteca/v1/verificar-login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
+    const resp = await axios.post('https://www.laboroteca.es/wp-json/laboroteca/v1/verificar-login', {
+      email,
+      password,
+    }, {
+      headers: {
+        'Content-Type': 'application/json'
+      }
     });
 
-    const raw = await res.text();
-    let datos;
-
-    try {
-      datos = JSON.parse(raw);
-    } catch {
-      console.error('❌ Respuesta no válida de WordPress:', raw);
-      return { ok: false, mensaje: 'Error verificando contraseña.' };
-    }
-
+    const datos = resp.data;
     if (!datos?.ok) {
       const mensaje = datos?.mensaje?.toLowerCase().includes('contraseña')
         ? 'Contraseña incorrecta'
@@ -46,8 +38,9 @@ async function desactivarMembresiaClub(email, password) {
       return { ok: false, mensaje };
     }
   } catch (err) {
-    console.error('❌ Error conectando a WordPress:', err.message);
-    return { ok: false, mensaje: 'Error al verificar la contraseña.' };
+    const msg = err?.response?.data?.mensaje || err.message || 'Error al verificar la contraseña';
+    console.error('❌ Error autenticando usuario:', msg);
+    return { ok: false, mensaje: msg };
   }
 
   // 🔻 Paso 1: Cancelar suscripciones activas en Stripe

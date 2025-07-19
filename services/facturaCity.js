@@ -81,7 +81,8 @@ async function crearFacturaEnFacturaCity(datosCliente) {
     }
 
     // ✅ Ajuste clave: referencia según producto
-    const descripcion = datosCliente.descripcionProducto || datosCliente.descripcion || datosCliente.producto;
+    const descripcion = (datosCliente.descripcionProducto || '').trim() || (datosCliente.nombreProducto || '').trim() || 'Producto Laboroteca';
+    console.log('📝 Descripción final para la factura:', descripcion);
     const referencia = datosCliente.nombreProducto === 'el-club-laboroteca' ? 'CLUB001' : 'LIBRO001';
 
     const lineas = [

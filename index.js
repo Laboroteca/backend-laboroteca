@@ -269,6 +269,7 @@ app.post('/activar-membresia-club', async (req, res) => {
 
 
 app.options('/cancelar-suscripcion-club', cors(corsOptions));
+
 app.post('/cancelar-suscripcion-club', cors(corsOptions), async (req, res) => {
   const { email, password } = req.body;
 
@@ -279,9 +280,28 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), async (req, res) => {
     });
   }
 
-  let resultado;
   try {
-    resultado = await desactivarMembresiaClub(email, password);
+    const resultado = await desactivarMembresiaClub(email, password);
+
+    if (!resultado.ok || resultado.cancelada !== true) {
+      console.warn('⚠️ Cancelación bloqueada:', resultado.mensaje);
+      return res.status(401).json({
+        cancelada: false,
+        mensaje: resultado.mensaje || 'Contraseña incorrecta'
+      });
+    }
+
+    // ✅ Si la validación fue correcta, registramos la baja
+    registrarBajaClub({
+      email,
+      nombre: '',
+      motivo: 'baja voluntaria'
+    }).catch((e) => {
+      console.warn('⚠️ No se pudo registrar la baja en Sheets:', e.message);
+    });
+
+    return res.json({ cancelada: true });
+
   } catch (error) {
     console.error('❌ Error en desactivarMembresiaClub:', error.message);
     return res.status(500).json({
@@ -289,27 +309,6 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), async (req, res) => {
       mensaje: 'Error interno del servidor.'
     });
   }
-
-  // ❌ Si no es válida la contraseña, no seguimos
-  if (!resultado.ok || resultado.cancelada !== true) {
-    console.warn('⚠️ Cancelación bloqueada:', resultado.mensaje);
-    return res.status(401).json({
-      cancelada: false,
-      mensaje: 'Contraseña incorrecta'
-    });
-  }
-  
-
-  // ✅ Si llegamos aquí, registramos la baja y devolvemos éxito
-  registrarBajaClub({
-    email,
-    nombre: '',
-    motivo: 'baja voluntaria'
-  }).catch((e) => {
-    console.warn('⚠️ No se pudo registrar la baja en Sheets:', e.message);
-  });
-
-  return res.json({ cancelada: true });
 });
 
 

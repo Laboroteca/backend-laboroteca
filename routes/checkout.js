@@ -17,7 +17,7 @@ const PRODUCTOS = {
     nombre: 'El Club Laboroteca',
     slug: 'el-club-laboroteca',
     descripcion: 'Suscripción mensual a El Club Laboroteca. Acceso a contenido exclusivo.',
-    price_id: 'price_1RfHeAEe6Cd77jenDw9UUPCp'
+    price_id: 'price_1RmY1YEe6Cd77jenSc0mZxBi'
   }
 };
 

@@ -9,10 +9,10 @@ const API_URL = 'https://www.laboroteca.es/wp-json/laboroteca/v1/club-membership
  * @param {string} params.email - Email del usuario
  * @param {string} params.accion - 'activar' o 'desactivar'
  * @param {number} params.membership_id - ID de la membresía en MemberPress
- * @param {number} [params.importe] - Importe en euros (opcional, por defecto 0.01)
+ * @param {number} [params.importe] - Importe en euros (opcional, por defecto 9.99)
  * @returns {Promise<Object>} - Respuesta del servidor
  */
-async function syncMemberpressClub({ email, accion, membership_id, importe = 0.01 }) {
+async function syncMemberpressClub({ email, accion, membership_id, importe = 9.99 }) {
   if (!email || typeof email !== 'string' || !email.includes('@')) {
     throw new Error('❌ Email inválido en syncMemberpressClub');
   }
@@ -27,7 +27,7 @@ async function syncMemberpressClub({ email, accion, membership_id, importe = 0.0
     email,
     accion,
     membership_id,
-    importe: typeof importe === 'number' && importe > 0 ? parseFloat(importe.toFixed(2)) : 0.01
+    importe: typeof importe === 'number' && importe > 0 ? parseFloat(importe.toFixed(2)) : 9.99
   };
 
   console.log('⏩ [syncMemberpressClub] Payload enviado:', JSON.stringify(payload));

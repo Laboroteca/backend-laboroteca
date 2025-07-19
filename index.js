@@ -71,7 +71,7 @@ const PRODUCTOS = {
   },
   'el club laboroteca': {
     nombre: 'El Club Laboroteca',
-    precio: 499,
+    precio: 999,
     imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/06/club-laboroteca-membresia-precio-sin-permanencia.webp',
     descripcion: 'Suscripción mensual a El Club Laboroteca. Acceso a contenido exclusivo.'
   },
@@ -191,7 +191,7 @@ app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
   const tipoProducto = datos.tipoProducto || '';
   const nombreProducto = datos.nombreProducto || '';
   const descripcionProducto = datos.descripcionProducto || '';
-  const precio = parseFloat((datos.importe || '4.99').toString().replace(',', '.'));
+  const precio = parseFloat((datos.importe || '9.99').toString().replace(',', '.'));
   const imagenProducto = datos.imagenProducto || 'https://www.laboroteca.es/wp-content/uploads/2025/06/Logo-Club-Laboroteca-ABOGADO.png';
 
   console.log('🧪 tipoProducto:', tipoProducto);
@@ -323,8 +323,6 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), async (req, res) => {
     });
   }
 });
-
-
 
 app.post('/eliminar-cuenta', async (req, res) => {
   const { email, password, token } = req.body;

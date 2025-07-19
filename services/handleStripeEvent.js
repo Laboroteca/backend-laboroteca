@@ -192,7 +192,7 @@ if (event.type === 'invoice.paid') {
       nombreProducto: 'Renovación mensual Club Laboroteca',
       descripcionProducto: 'Renovación mensual Club Laboroteca',
       tipoProducto: 'Club',
-      importe: (invoice.amount_paid || 499) / 100,
+      importe: (invoice.amount_paid || 999) / 100,
       invoiceId,
     };
 
@@ -209,7 +209,7 @@ if (event.type === 'invoice.paid') {
         email: emailSeguro,
         accion: 'activar',
         membership_id: 10663,
-        importe: (invoice.amount_paid || 499) / 100
+        importe: (invoice.amount_paid || 999) / 100
       });
     } else {
       console.warn(`❌ Email inválido en syncMemberpressClub: "${emailSeguro}"`);
@@ -294,7 +294,7 @@ if (event.type === 'invoice.paid') {
     const amountTotal = session.amount_total || 0;
 
     const rawNombreProducto = m.nombreProducto || '';
-    const productoSlug = amountTotal === 499 ? 'el club laboroteca' : normalizarProducto(rawNombreProducto);
+    const productoSlug = amountTotal === 999 ? 'el club laboroteca' : normalizarProducto(rawNombreProducto);
     const memberpressId = MEMBERPRESS_IDS[productoSlug];
 
     const descripcionProducto = m.descripcionProducto || rawNombreProducto || 'Producto Laboroteca';

@@ -8,10 +8,10 @@ const API_URL = 'https://www.laboroteca.es/wp-json/laboroteca/v1/libro-membershi
  * @param {Object} params
  * @param {string} params.email - Email del usuario
  * @param {string} params.accion - 'activar' o 'desactivar'
- * @param {number} [params.importe] - Importe en euros (opcional, por defecto 0.01)
+ * @param {number} [params.importe] - Importe en euros (opcional, por defecto 29.90)
  * @returns {Promise<Object>} - Respuesta del servidor
  */
-async function syncMemberpressLibro({ email, accion, importe = 0.01 }) {
+async function syncMemberpressLibro({ email, accion, importe = 29.90 }) {
   if (!email || typeof email !== 'string' || !email.includes('@')) {
     throw new Error('❌ Email inválido en syncMemberpressLibro');
   }
@@ -23,7 +23,7 @@ async function syncMemberpressLibro({ email, accion, importe = 0.01 }) {
   const payload = {
     email,
     accion,
-    importe: typeof importe === 'number' && importe > 0 ? parseFloat(importe.toFixed(2)) : 0.01
+    importe: typeof importe === 'number' && importe > 0 ? parseFloat(importe.toFixed(2)) : 29.90
   };
 
   console.log(`📡 [syncMemberpressLibro] Enviando '${accion}' para ${email} (Importe: ${payload.importe} €)`);

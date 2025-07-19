@@ -267,15 +267,40 @@ app.post('/activar-membresia-club', async (req, res) => {
   }
 });
 
+
 app.options('/cancelar-suscripcion-club', cors(corsOptions));
 app.post('/cancelar-suscripcion-club', cors(corsOptions), async (req, res) => {
   const { email, password } = req.body;
 
-
   if (!email || !password) {
-    return res.status(400).json({ cancelada: false, mensaje: 'Faltan datos obligatorios' });
+    return res.status(400).json({
+      cancelada: false,
+      mensaje: 'Faltan datos obligatorios'
+    });
   }
 
+  let resultado;
+  try {
+    resultado = await desactivarMembresiaClub(email, password);
+  } catch (error) {
+    console.error('❌ Error en desactivarMembresiaClub:', error.message);
+    return res.status(500).json({
+      cancelada: false,
+      mensaje: 'Error interno del servidor.'
+    });
+  }
+
+  // ❌ Si no es válida la contraseña, no seguimos
+  if (!resultado.ok || resultado.cancelada !== true) {
+    console.warn('⚠️ Cancelación bloqueada:', resultado.mensaje);
+    return res.status(401).json({
+      cancelada: false,
+      mensaje: 'Contraseña incorrecta'
+    });
+  }
+  
+
+  // ✅ Si llegamos aquí, registramos la baja y devolvemos éxito
   registrarBajaClub({
     email,
     nombre: '',
@@ -284,19 +309,9 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), async (req, res) => {
     console.warn('⚠️ No se pudo registrar la baja en Sheets:', e.message);
   });
 
-  try {
-    const resultado = await desactivarMembresiaClub(email, password);
-    if (resultado.ok && resultado.cancelada === true) {
-      return res.json({ cancelada: true });
-    } else {
-      return res.status(401).json({ cancelada: false, mensaje: resultado.mensaje || 'Contraseña incorrecta o no se pudo cancelar la suscripción.' });
-    }
-
-  } catch (error) {
-    console.error('❌ Error al cancelar suscripción:', error.message);
-    return res.status(500).json({ cancelada: false, mensaje: 'Error interno del servidor.' });
-  }
+  return res.json({ cancelada: true });
 });
+
 
 app.post('/eliminar-cuenta', async (req, res) => {
   const { email, password, token } = req.body;

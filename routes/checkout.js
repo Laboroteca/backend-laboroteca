@@ -39,6 +39,7 @@ router.post('/create-session', async (req, res) => {
     const cp = (datos.cp || '').trim();
     const tipoProducto = (datos.tipoProducto || '').trim();
     const nombreProducto = (datos.nombreProducto || '').trim();
+    const descripcionProducto = (datos.descripcionProducto || '').trim();
 
     const clave = normalizar(nombreProducto);
     const producto = PRODUCTOS[clave];
@@ -108,7 +109,7 @@ router.post('/create-session', async (req, res) => {
         cp,
         tipoProducto,
         nombreProducto: producto.slug,
-        descripcionProducto: producto.descripcion,
+        descripcionProducto: descripcionProducto || producto.descripcion,
         esPrimeraCompra: isSuscripcion ? 'true' : 'false'
       }
     });

@@ -19,27 +19,26 @@ async function desactivarMembresiaClub(email, password) {
 
   email = email.trim().toLowerCase();
 
-  // 🔐 Verificar credenciales directamente contra WordPress
+  // ✅ Validar credenciales usando eliminar-usuario (no elimina realmente)
   try {
-    const resp = await axios.post('https://www.laboroteca.es/wp-json/laboroteca/v1/verificar-login', {
+    const resp = await axios.post('https://www.laboroteca.es/wp-json/laboroteca/v1/eliminar-usuario', {
       email,
       password,
+      validarSolo: true
     }, {
       headers: {
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.LABOROTECA_API_KEY,
       }
     });
 
-    const datos = resp.data;
-    if (!datos?.ok) {
-      const mensaje = datos?.mensaje?.toLowerCase().includes('contraseña')
-        ? 'Contraseña incorrecta'
-        : datos?.mensaje || 'Credenciales no válidas';
-      throw new Error(mensaje);
+    if (!resp.data?.ok) {
+      const msg = resp.data?.mensaje || 'Credenciales no válidas';
+      return { ok: false, mensaje: msg };
     }
   } catch (err) {
-    const msg = err?.response?.data?.mensaje || err.message || 'Error al verificar la contraseña';
-    console.error('❌ Error autenticando usuario:', msg);
+    const msg = err?.response?.data?.mensaje || err.message || 'Error al validar credenciales.';
+    console.error('❌ Error validando en WP:', msg);
     return { ok: false, mensaje: msg };
   }
 
@@ -54,7 +53,7 @@ async function desactivarMembresiaClub(email, password) {
         customer: customerId,
         status: 'all',
         limit: 10,
-      });Y
+      });
 
       for (const sub of subs.data) {
         if (['active', 'trialing', 'incomplete', 'past_due'].includes(sub.status)) {
@@ -112,7 +111,7 @@ async function desactivarMembresiaClub(email, password) {
   try {
     const resp = await axios.post('https://www.laboroteca.es/wp-json/laboroteca/v1/eliminar-usuario', {
       email,
-      password,
+      password
     }, {
       headers: {
         'Content-Type': 'application/json',

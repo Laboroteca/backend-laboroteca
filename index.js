@@ -283,24 +283,37 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), async (req, res) => {
   try {
     const resultado = await desactivarMembresiaClub(email, password);
 
-    if (!resultado.ok || resultado.cancelada !== true) {
+    // ❌ Si el objeto resultado indica fallo en validación
+    if (!resultado.ok) {
       console.warn('⚠️ Cancelación bloqueada:', resultado.mensaje);
+      const mensaje = resultado.mensaje === 'Contraseña incorrecta'
+        ? 'Contraseña incorrecta'
+        : 'No se pudo completar la cancelación: ' + resultado.mensaje;
       return res.status(401).json({
         cancelada: false,
-        mensaje: resultado.mensaje || 'Contraseña incorrecta'
+        mensaje
       });
     }
 
-    // ✅ Si la validación fue correcta, registramos la baja
-    registrarBajaClub({
-      email,
-      nombre: '',
-      motivo: 'baja voluntaria'
-    }).catch((e) => {
-      console.warn('⚠️ No se pudo registrar la baja en Sheets:', e.message);
-    });
+    // ✅ Si se ha cancelado correctamente
+    if (resultado.cancelada === true) {
+      registrarBajaClub({
+        email,
+        nombre: '',
+        motivo: 'baja voluntaria'
+      }).catch((e) => {
+        console.warn('⚠️ No se pudo registrar la baja en Sheets:', e.message);
+      });
 
-    return res.json({ cancelada: true });
+      return res.json({ cancelada: true });
+    }
+
+    // ⚠️ Si no canceló pero no se marcó como error
+    console.warn('⚠️ Cancelación no completada (sin error pero no marcada como cancelada)');
+    return res.status(400).json({
+      cancelada: false,
+      mensaje: 'No se pudo completar la cancelación'
+    });
 
   } catch (error) {
     console.error('❌ Error en desactivarMembresiaClub:', error.message);
@@ -310,6 +323,7 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), async (req, res) => {
     });
   }
 });
+
 
 
 app.post('/eliminar-cuenta', async (req, res) => {

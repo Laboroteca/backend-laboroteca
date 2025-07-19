@@ -31,7 +31,17 @@ async function desactivarMembresiaClub(email, password) {
       body: JSON.stringify({ email, password })
     });
 
-    const datos = await respuesta.json();
+    const textoPlano = await respuesta.text();
+    console.log('🔍 WP respondió:', textoPlano);
+
+    let datos;
+    try {
+      datos = JSON.parse(textoPlano);
+    } catch (err) {
+      console.error('❌ No se pudo parsear la respuesta JSON:', err.message);
+      return { ok: false, mensaje: 'Error inesperado verificando la contraseña.' };
+    }
+
 
     if (!datos?.ok) {
       let mensaje = datos.mensaje || '';

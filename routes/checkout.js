@@ -108,11 +108,7 @@ router.post('/create-session', async (req, res) => {
         cp,
         tipoProducto,
         nombreProducto: producto.slug,
-        descripcionProducto:
-          tipoProducto.toLowerCase().includes('suscrip') &&
-          normalizar(nombreProducto) === 'el club laboroteca'
-            ? 'Alta inicial y primera mensualidad del Club Laboroteca'
-            : producto.descripcion,
+        descripcionProducto: producto.descripcion,
         esPrimeraCompra: isSuscripcion ? 'true' : 'false'
       }
     });

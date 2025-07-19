@@ -297,15 +297,8 @@ if (event.type === 'invoice.paid') {
     const productoSlug = amountTotal === 999 ? 'el club laboroteca' : normalizarProducto(rawNombreProducto);
     const memberpressId = MEMBERPRESS_IDS[productoSlug];
 
-    let descripcionProducto = m.descripcionProducto || rawNombreProducto || 'Producto Laboroteca';
-
-    if (
-      (!m.descripcionProducto || m.descripcionProducto.trim() === '') &&
-      normalizarProducto(rawNombreProducto) === 'el club laboroteca'
-    ) {
-      descripcionProducto = 'Alta inicial y primera mensualidad del Club Laboroteca';
-    }
-
+    const descripcionProducto = m.descripcionProducto || rawNombreProducto || 'Producto Laboroteca';
+    
     const productoNormalizado = normalizarProducto(descripcionProducto);
 
     const datosCliente = {

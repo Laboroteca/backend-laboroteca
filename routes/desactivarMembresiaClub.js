@@ -19,26 +19,26 @@ async function desactivarMembresiaClub(email, password) {
 
   email = email.trim().toLowerCase();
 
-  // ✅ Verificar directamente en WordPress usando /eliminar-usuario
+  // 🔐 Verificar credenciales directamente contra WordPress
   try {
-    const resp = await axios.post('https://www.laboroteca.es/wp-json/laboroteca/v1/eliminar-usuario', {
+    const resp = await axios.post('https://www.laboroteca.es/wp-json/laboroteca/v1/verificar-login', {
       email,
       password,
     }, {
       headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.LABOROTECA_API_KEY,
-      },
+        'Content-Type': 'application/json'
+      }
     });
 
-    if (!resp.data?.ok) {
-      const mensaje = resp.data?.mensaje || 'Credenciales incorrectas.';
-      return { ok: false, mensaje };
+    const datos = resp.data;
+    if (!datos?.ok) {
+      const mensaje = datos?.mensaje?.toLowerCase().includes('contraseña')
+        ? 'Contraseña incorrecta'
+        : datos?.mensaje || 'Credenciales no válidas';
+      throw new Error(mensaje);
     }
-
-    console.log(`🔐 Credenciales validadas correctamente para ${email}`);
   } catch (err) {
-    const msg = err?.response?.data?.mensaje || err.message || 'Error validando credenciales.';
+    const msg = err?.response?.data?.mensaje || err.message || 'Error al verificar la contraseña';
     console.error('❌ Error autenticando usuario:', msg);
     return { ok: false, mensaje: msg };
   }
@@ -54,7 +54,7 @@ async function desactivarMembresiaClub(email, password) {
         customer: customerId,
         status: 'all',
         limit: 10,
-      });
+      });Y
 
       for (const sub of subs.data) {
         if (['active', 'trialing', 'incomplete', 'past_due'].includes(sub.status)) {
@@ -106,6 +106,27 @@ async function desactivarMembresiaClub(email, password) {
     console.log(`📩 Email enviado a ${email}`);
   } catch (errEmail) {
     console.error(`❌ Error al enviar email:`, errEmail.message);
+  }
+
+  // 🔻 Paso 5: Eliminar usuario en WordPress
+  try {
+    const resp = await axios.post('https://www.laboroteca.es/wp-json/laboroteca/v1/eliminar-usuario', {
+      email,
+      password,
+    }, {
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.LABOROTECA_API_KEY,
+      },
+    });
+
+    if (resp.data?.ok) {
+      console.log(`🗑️ Usuario eliminado en WP: ${email}`);
+    } else {
+      console.warn('⚠️ Error eliminando en WP:', resp.data);
+    }
+  } catch (errWP) {
+    console.error('❌ Error WordPress:', errWP.message);
   }
 
   return { ok: true, cancelada: true };

@@ -286,11 +286,12 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), async (req, res) => {
 
   try {
     const resultado = await desactivarMembresiaClub(email, password);
-    if (resultado.ok) {
+    if (resultado.ok && resultado.cancelada === true) {
       return res.json({ cancelada: true });
     } else {
-      return res.status(400).json({ cancelada: false, mensaje: resultado.mensaje || 'No se pudo cancelar la suscripción.' });
+      return res.status(401).json({ cancelada: false, mensaje: resultado.mensaje || 'Contraseña incorrecta o no se pudo cancelar la suscripción.' });
     }
+
   } catch (error) {
     console.error('❌ Error al cancelar suscripción:', error.message);
     return res.status(500).json({ cancelada: false, mensaje: 'Error interno del servidor.' });

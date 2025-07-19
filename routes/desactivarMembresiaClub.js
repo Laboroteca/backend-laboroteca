@@ -19,7 +19,7 @@ async function desactivarMembresiaClub(email, password) {
 
   email = email.trim().toLowerCase();
 
-  // ✅ Validar credenciales usando eliminar-usuario (no elimina realmente)
+  // ✅ Paso 0: Validar credenciales usando eliminar-usuario (no elimina realmente)
   try {
     const resp = await axios.post('https://www.laboroteca.es/wp-json/laboroteca/v1/eliminar-usuario', {
       email,

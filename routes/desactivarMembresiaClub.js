@@ -35,7 +35,7 @@ async function desactivarMembresiaClub(email, password) {
       const mensaje = datos?.mensaje?.toLowerCase().includes('contraseña')
         ? 'Contraseña incorrecta'
         : datos?.mensaje || 'Credenciales no válidas';
-      return { ok: false, mensaje };
+      throw new Error(mensaje);
     }
   } catch (err) {
     const msg = err?.response?.data?.mensaje || err.message || 'Error al verificar la contraseña';

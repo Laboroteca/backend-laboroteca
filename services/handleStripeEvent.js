@@ -85,7 +85,7 @@ async function handleStripeEvent(event) {
       console.log(`⛔️ Primer intento de cobro fallido, CANCELANDO suscripción y SIN emitir factura para: ${email} – ${nombre}`);
       await enviarAvisoImpago(email, nombre, 1, enlacePago, true); // true = email de cancelación inmediata
 
-      // ✅ Cancelar también la suscripción en Stripe
+      // ✅ Cancelar solo la suscripción del Club en Stripe si el nickname del producto lo confirma
       const subscriptionId =
         invoice.subscription ||
         invoice.subscription_details?.subscription ||
@@ -95,32 +95,46 @@ async function handleStripeEvent(event) {
 
       console.log('🧪 Subscription ID extraído del invoice:', subscriptionId);
 
-      console.log('📛 Intentando cancelar suscripción en Stripe ID:', subscriptionId);
-
       if (subscriptionId) {
         try {
-          await stripe.subscriptions.del(subscriptionId);
-          console.log(`✅ Suscripción cancelada en Stripe: ${subscriptionId}`);
+          const subscripcion = await stripe.subscriptions.retrieve(subscriptionId);
+          const nickname = subscripcion.items?.data?.[0]?.price?.nickname?.toLowerCase() || '';
+          console.log('🔎 Nickname del producto:', nickname);
+
+          if (nickname.includes('club')) {
+            console.log('📛 Cancelando suscripción del CLUB en Stripe ID:', subscriptionId);
+            await stripe.subscriptions.del(subscriptionId);
+            console.log(`✅ Suscripción del Club cancelada en Stripe: ${subscriptionId}`);
+          } else {
+            console.log('🚫 Suscripción no cancelada (no es del Club):', nickname);
+          }
         } catch (err) {
           console.error(`❌ Error al cancelar suscripción en Stripe (${subscriptionId}):`, err.message);
         }
+      } else {
+        console.warn(`⚠️ No se encontró subscriptionId para invoice: ${invoiceId}`);
       }
 
+      // 🔄 Desactivar en Firestore y registrar baja (solo si es del Club)
       await desactivarMembresiaClub(email, false);
       await registrarBajaClub({ email, motivo: 'impago' });
+
+      // 📝 Guardar registro del intento
       await docRefIntento.set({
         invoiceId,
         email,
         nombre,
         fecha: new Date().toISOString()
       });
+
     } catch (err) {
       console.error('❌ Error al procesar impago/cancelación:', err?.message);
       return { error: 'fallo_envio_cancelacion' };
     }
 
     return { impago: 'cancelado_primer_intento' };
-  }
+
+      }
 
   // ---- Captura también payment_intent.payment_failed (por si acaso) ----
   if (event.type === 'payment_intent.payment_failed') {

@@ -24,6 +24,7 @@ function normalizarProducto(str) {
     .replace(/suscripcion mensual a el club laboroteca.*$/i, 'club laboroteca')
     .replace(/suscripcion mensual al club laboroteca.*$/i, 'club laboroteca')
     .replace(/el club laboroteca.*$/i, 'club laboroteca')
+    .replace(/libro digital con acceso vitalicio de cara a la jubilacion/i, 'de cara a la jubilacion')
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
 }

@@ -360,8 +360,14 @@ if (event.type === 'invoice.paid') {
       }
 
       if (memberpressId === 7994) {
-        await syncMemberpressLibro({ email, accion: 'activar', importe: datosCliente.importe });
+        await syncMemberpressLibro({
+          email,
+          accion: 'activar',
+          membership_id: 7994,
+          importe: datosCliente.importe
+        });
       }
+
 
 
     } catch (err) {

@@ -21,13 +21,15 @@ function normalizarProducto(str) {
   return (str || '')
     .toLowerCase()
     .normalize('NFD').replace(/[̀-ͯ]/g, '')
-    .replace(/suscripcion mensual a el club laboroteca.*$/i, 'club laboroteca')
-    .replace(/suscripcion mensual al club laboroteca.*$/i, 'club laboroteca')
+    .replace(/\./g, '') // quita puntos
+    .replace(/suscripcion mensual (a|al)? el? club laboroteca.*$/i, 'club laboroteca')
     .replace(/el club laboroteca.*$/i, 'club laboroteca')
-    .replace(/libro digital con acceso vitalicio de cara a la jubilacion/i, 'de cara a la jubilacion')
+    .replace(/libro digital.*jubilacion/i, 'de cara a la jubilacion')
+    .replace(/de cara a la jubilacion/i, 'de cara a la jubilacion')
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
 }
+
 
 const MEMBERPRESS_IDS = {
   'el club laboroteca': 10663,
@@ -366,9 +368,6 @@ if (event.type === 'invoice.paid') {
           importe: datosCliente.importe
         });
       }
-
-
-
 
     } catch (err) {
       errorProcesando = true;

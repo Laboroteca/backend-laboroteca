@@ -87,6 +87,8 @@ async function handleStripeEvent(event) {
 
       // ✅ Cancelar también la suscripción en Stripe
       const subscriptionId = invoice.subscription;
+      console.log('📛 Intentando cancelar suscripción en Stripe ID:', subscriptionId);
+
       if (subscriptionId) {
         try {
           await stripe.subscriptions.del(subscriptionId);

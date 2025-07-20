@@ -107,7 +107,7 @@ router.post('/create-session', async (req, res) => {
         provincia,
         cp,
         tipoProducto,
-        nombreProducto: producto.slug,
+        nombreProducto: producto.nombre,
         descripcionProducto: producto.descripcion,
         esPrimeraCompra: isSuscripcion ? 'true' : 'false'
       }

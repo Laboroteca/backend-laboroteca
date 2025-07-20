@@ -86,7 +86,15 @@ async function handleStripeEvent(event) {
       await enviarAvisoImpago(email, nombre, 1, enlacePago, true); // true = email de cancelación inmediata
 
       // ✅ Cancelar también la suscripción en Stripe
-      const subscriptionId = invoice.subscription;
+      const subscriptionId =
+        invoice.subscription ||
+        invoice.subscription_details?.subscription ||
+        invoice.lines?.data?.[0]?.subscription ||
+        invoice.metadata?.subscription ||
+        null;
+
+      console.log('🧪 Subscription ID extraído del invoice:', subscriptionId);
+
       console.log('📛 Intentando cancelar suscripción en Stripe ID:', subscriptionId);
 
       if (subscriptionId) {

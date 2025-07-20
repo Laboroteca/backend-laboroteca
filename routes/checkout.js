@@ -92,7 +92,7 @@ router.post('/create-session', async (req, res) => {
         cp,
         tipoProducto,
         nombreProducto: producto.nombre,
-        descripcionProducto: producto.descripcion,
+        descripcionProducto: (datos.descripcionProducto || producto.descripcion || `${tipoProducto} "${producto.nombre}"`).trim(),
         esPrimeraCompra: isSuscripcion ? 'true' : 'false'
       }
     });

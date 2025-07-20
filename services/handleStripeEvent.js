@@ -64,11 +64,6 @@ async function handleStripeEvent(event) {
       console.warn(`⛔️ [IMPAGO] Evento duplicado ignorado: ${paymentIntentId}`);
       return { received: true, duplicate: true };
     }
-    await docRefIntento.set({
-      invoiceId,
-      email,
-      timestamp: Date.now()
-    });
 
     // --- Recuperar nombre (si hay) ---
     let nombre = invoice.customer_details?.name || '';
@@ -89,6 +84,18 @@ async function handleStripeEvent(event) {
     try {
       console.log(`⛔️ Primer intento de cobro fallido, CANCELANDO suscripción y SIN emitir factura para: ${email} – ${nombre}`);
       await enviarAvisoImpago(email, nombre, 1, enlacePago, true); // true = email de cancelación inmediata
+
+      // ✅ Cancelar también la suscripción en Stripe
+      const subscriptionId = invoice.subscription;
+      if (subscriptionId) {
+        try {
+          await stripe.subscriptions.del(subscriptionId);
+          console.log(`✅ Suscripción cancelada en Stripe: ${subscriptionId}`);
+        } catch (err) {
+          console.error(`❌ Error al cancelar suscripción en Stripe (${subscriptionId}):`, err.message);
+        }
+      }
+
       await desactivarMembresiaClub(email, false);
       await registrarBajaClub({ email, motivo: 'impago' });
       await docRefIntento.set({
@@ -116,7 +123,6 @@ async function handleStripeEvent(event) {
 
     console.warn(`⚠️ [Intento fallido] payment_intent ${intent.id} falló para ${email || '[email desconocido]'}`);
 
-    // Enviar email también por aquí, aunque es redundante (opcional)
     if (email && email.includes('@')) {
       try {
         await enviarAvisoImpago(email, 'cliente', 1, 'https://www.laboroteca.es/gestion-pago-club/', true);
@@ -129,6 +135,7 @@ async function handleStripeEvent(event) {
 
     return { warning: 'payment_intent_failed_sin_email' };
   }
+
 
 // 📌 Evento: invoice.paid (renovación Club Laboroteca)
 if (event.type === 'invoice.paid') {

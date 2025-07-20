@@ -140,9 +140,9 @@ module.exports = async function procesarCompra(datos) {
     }
 
     const membership_id = MEMBERPRESS_IDS[claveNormalizada];
-    if (membership_id) {
+    if (tipoProducto.toLowerCase() === 'club' && membership_id) {
       try {
-        console.log(`🔓 → Activando membresía con ID ${membership_id} para ${email}`);
+        console.log(`🔓 → Activando membresía CLUB con ID ${membership_id} para ${email}`);
         await activarMembresiaClub(email);
         await syncMemberpressClub({
           email,
@@ -150,11 +150,21 @@ module.exports = async function procesarCompra(datos) {
           membership_id,
           importe
         });
-        console.log('✅ Membresía activada correctamente');
+        console.log('✅ Membresía del CLUB activada correctamente');
       } catch (err) {
-        console.error('❌ Error activando membresía:', err.message || err);
+        console.error('❌ Error activando membresía del CLUB:', err.message || err);
+      }
+    } else if (tipoProducto.toLowerCase() === 'libro') {
+      try {
+        const { syncMemberpressLibro } = require('./syncMemberpressLibro');
+        console.log(`📘 → Activando membresía LIBRO para ${email}`);
+        await syncMemberpressLibro({ email, accion: 'activar', importe });
+        console.log('✅ Membresía del LIBRO activada correctamente');
+      } catch (err) {
+        console.error('❌ Error activando membresía del LIBRO:', err.message || err);
       }
     }
+
 
     const datosFiscalesRef = firestore.collection('datosFiscalesPorEmail').doc(email);
     try {

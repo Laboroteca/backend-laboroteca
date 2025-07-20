@@ -50,33 +50,6 @@ const pagoLimiter = rateLimit({
   message: { error: 'Demasiados intentos. Inténtalo más tarde.' }
 });
 
-const PRODUCTOS = {
-  'de cara a la jubilacion': {
-    nombre: 'De cara a la jubilación',
-    precio: 2990,
-    imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/06/De-cara-a-la-jubilacion-ignacio-solsona-en-PDF.webp',
-    descripcion: 'Libro "De cara a la jubilación". Edición digital. Membresía vitalicia.'
-  },
-  'curso ip total': {
-    nombre: 'Curso IP Total',
-    precio: 7900,
-    imagen: 'https://laboroteca.es/wp-content/uploads/2024/12/curso-ip-total-portada.png',
-    descripcion: 'Curso online de Incapacidad Permanente Total. Acceso inmediato y materiales descargables.'
-  },
-  'pack libros': {
-    nombre: 'Pack libros',
-    precio: 4990,
-    imagen: 'https://laboroteca.es/wp-content/uploads/2024/12/pack-libros-laboroteca.png',
-    descripcion: 'Pack: "De cara a la jubilación" + "Jubilación anticipada". Edición digital. Membresía vitalicia.'
-  },
-  'el club laboroteca': {
-    nombre: 'El Club Laboroteca',
-    precio: 999,
-    imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/06/Logo-Club-Laboroteca-ABOGADO.png',
-    descripcion: 'Suscripción mensual a El Club Laboroteca. Acceso a contenido exclusivo.'
-  },
-};
-
 function normalizarProducto(str) {
   return (str || '')
     .normalize('NFD')

@@ -8,8 +8,7 @@ const { subirFactura } = require('./gcs');
 const { guardarEnGoogleSheets } = require('./googleSheets');
 const { activarMembresiaClub } = require('./activarMembresiaClub');
 const { syncMemberpressClub } = require('./syncMemberpressClub');
-
-const MEMBERPRESS_ID_CLUB = 10663;
+const { normalizarProducto, MEMBERPRESS_IDS } = require('../utils/productos');
 
 module.exports = async function procesarCompra(datos) {
   let email = (datos.email_autorelleno || datos.email || '').trim().toLowerCase();
@@ -51,11 +50,7 @@ module.exports = async function procesarCompra(datos) {
   console.log('🧪 tipoProducto:', tipoProducto);
   console.log('🧪 nombreProducto:', nombreProducto);
 
-  const claveNormalizada = nombreProducto
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/\W+/g, '');
+  const claveNormalizada = normalizarProducto(nombreProducto);
 
   console.log('🔑 Clave normalizada para deduplicación:', claveNormalizada);
 
@@ -144,19 +139,20 @@ module.exports = async function procesarCompra(datos) {
       console.error('❌ Error en Google Sheets:', err);
     }
 
-    if (claveNormalizada.includes('clublaboroteca')) {
+    const membership_id = MEMBERPRESS_IDS[claveNormalizada];
+    if (membership_id) {
       try {
-        console.log('🔓 → Activando membresía del Club...');
+        console.log(`🔓 → Activando membresía con ID ${membership_id} para ${email}`);
         await activarMembresiaClub(email);
         await syncMemberpressClub({
           email,
           accion: 'activar',
-          membership_id: MEMBERPRESS_ID_CLUB,
+          membership_id,
           importe
         });
         console.log('✅ Membresía activada correctamente');
       } catch (err) {
-        console.error('❌ Error activando membresía del Club:', err.message || err);
+        console.error('❌ Error activando membresía:', err.message || err);
       }
     }
 

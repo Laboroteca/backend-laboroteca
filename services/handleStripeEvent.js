@@ -101,7 +101,7 @@ async function handleStripeEvent(event) {
 
       if (subscriptionId) {
         try {
-          await stripe.subscriptions.del(subscriptionId);
+          await stripe.subscriptions.cancel(subscriptionId);
           console.log(`✅ Suscripción cancelada en Stripe: ${subscriptionId}`);
         } catch (err) {
           console.error(`❌ Error al cancelar suscripción en Stripe (${subscriptionId}):`, err.message);

@@ -33,7 +33,6 @@ function normalizarProducto(str) {
 
 const MEMBERPRESS_IDS = {
   'el club laboroteca': 10663,
-  'test diario club laboroteca': 10663,
   'de cara a la jubilacion': 7994
 };
 
@@ -137,7 +136,7 @@ if (event.type === 'invoice.paid') {
     const invoice = event.data.object;
     const invoiceId = invoice.id;
     const customerId = invoice.customer;
-    const billingReason = invoice.billing_reason || '';
+    const billingReason = event.billing_reason || event.data.object.billing_reason;
 
     if (!invoiceId || !customerId) {
       console.warn('⚠️ Falta invoiceId o customerId en invoice.paid');
@@ -154,11 +153,12 @@ if (event.type === 'invoice.paid') {
     const descripcion = (invoice.description || '').toLowerCase();
     if (
       billingReason !== 'subscription_cycle' &&
-      !(billingReason === 'manual' && descripcion.includes('renovación'))
+      !(billingReason === 'manual' && event.livemode === false)
     ) {
-      console.log(`⚠️ Ignorado invoice.paid por no ser una renovación válida: ${billingReason}`);
+      console.log('📭 Ignorado evento no válido para facturación:', billingReason);
       return;
     }
+
 
     // ❌ Evitar duplicados por invoiceId
     const yaExiste = await firestore.collection('facturasEmitidas').doc(invoiceId).get();

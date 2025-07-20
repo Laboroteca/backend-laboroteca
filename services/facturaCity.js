@@ -82,7 +82,17 @@ async function crearFacturaEnFacturaCity(datosCliente) {
 
     // ✅ Ajuste clave: referencia según producto
     const descripcion = datosCliente.descripcionProducto || datosCliente.descripcion || datosCliente.producto;
-    const referencia = datosCliente.nombreProducto === 'el-club-laboroteca' ? 'CLUB001' : 'LIBRO001';
+    let referencia = 'OTRO001'; // Valor por defecto
+
+    if (datosCliente.nombreProducto === 'el-club-laboroteca') {
+      referencia = 'CLUB001';
+    } else if (datosCliente.tipoProducto === 'libro') {
+      referencia = 'LIBRO001';
+    } else if (datosCliente.tipoProducto === 'curso') {
+      referencia = 'CURSO001';
+    } else if (datosCliente.tipoProducto === 'guia') {
+      referencia = 'GUIA001';
+    }
 
     const lineas = [
       {

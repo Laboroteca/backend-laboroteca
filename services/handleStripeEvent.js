@@ -90,8 +90,10 @@ async function handleStripeEvent(event) {
         invoice.subscription ||
         invoice.subscription_details?.subscription ||
         invoice.lines?.data?.[0]?.subscription ||
+        invoice.lines?.data?.[0]?.parent?.invoice_item_details?.subscription ||
         invoice.metadata?.subscription ||
         null;
+
 
       console.log('🧪 Subscription ID extraído del invoice:', subscriptionId);
 

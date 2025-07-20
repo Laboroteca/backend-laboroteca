@@ -299,7 +299,7 @@ if (event.type === 'invoice.paid') {
 
     const descripcionProducto = m.descripcionProducto || rawNombreProducto || 'Producto Laboroteca';
     
-    const productoNormalizado = normalizarProducto(descripcionProducto);
+    const productoNormalizado = normalizarProducto(rawNombreProducto); // <- mejor base para normalizar clave
 
     const datosCliente = {
       nombre: m.nombre || name,

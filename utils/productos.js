@@ -14,7 +14,7 @@ const PRODUCTOS = {
     slug: 'el-club-laboroteca',
     descripcion: 'Suscripción mensual a El Club Laboroteca. Acceso a contenido exclusivo.',
     price_id: 'price_1RmY1YEe6Cd77jenSc0mZxBi',
-    imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/06/Logo-Club-Laboroteca-ABOGADO.png'
+    imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/07/Club-laboroteca-precio-suscripcion-mensual-2.webp'
   }
 };
 

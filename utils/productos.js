@@ -35,8 +35,8 @@ function normalizarProducto(nombreProducto = '') {
 
 // IDs internos de MemberPress por clave normalizada
 const MEMBERPRESS_IDS = {
-  'el-club-laboroteca': 10663
-  // Añade más si incorporas otros productos en el futuro
+  'el-club-laboroteca': 10663,
+  'de-cara-a-la-jubilacion': 7994
 };
 
 module.exports = {
@@ -44,4 +44,3 @@ module.exports = {
   normalizarProducto,
   MEMBERPRESS_IDS
 };
-

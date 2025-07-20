@@ -108,8 +108,19 @@ async function handleStripeEvent(event) {
         }
       }
 
-      await desactivarMembresiaClub(email, false);
+      await syncMemberpressClub({
+        email,
+        accion: 'desactivar',
+        membership_id: MEMBERPRESS_IDS['el club laboroteca']
+      });
+
+      await firestore.collection('usuariosClub').doc(email).set({
+        activo: false,
+        fechaBaja: new Date().toISOString()
+      }, { merge: true });
+
       await registrarBajaClub({ email, motivo: 'impago' });
+
       await docRefIntento.set({
         invoiceId,
         email,

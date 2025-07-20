@@ -86,7 +86,7 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   const nombreProducto = datos.nombreProducto || '';
   const descripcionProducto = datos.descripcionProducto || '';
   const precio = parseFloat((datos.importe || '22.90').toString().replace(',', '.'));
-  const imagenProducto = datos.imagenProducto || 'https://www.laboroteca.es/wp-content/uploads/2025/06/Portada-De-cara-a-la-jubilacion.png';
+  const imagenProducto = datos.imagenProducto || 'https://www.laboroteca.es/wp-content/uploads/2025/06/De-cara-a-la-jubilacion-libro-ignacio-solsona-laboroteca.webp';
 
   console.log('🧪 tipoProducto:', tipoProducto);
   console.log('🧪 nombreProducto:', nombreProducto);
@@ -165,7 +165,7 @@ app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
   const nombreProducto = datos.nombreProducto || '';
   const descripcionProducto = datos.descripcionProducto || '';
   const precio = parseFloat((datos.importe || '9.99').toString().replace(',', '.'));
-  const imagenProducto = datos.imagenProducto || 'https://www.laboroteca.es/wp-content/uploads/2025/06/Logo-Club-Laboroteca-ABOGADO.png';
+  const imagenProducto = datos.imagenProducto || 'https://www.laboroteca.es/wp-content/uploads/2025/07/Club-laboroteca-precio-suscripcion-mensual-2.webp';
 
   console.log('🧪 tipoProducto:', tipoProducto);
   console.log('🧪 nombreProducto:', nombreProducto);

@@ -18,4 +18,30 @@ const PRODUCTOS = {
   }
 };
 
-module.exports = PRODUCTOS;
+/**
+ * Normaliza un nombre de producto largo o decorado a una clave simple.
+ * Se usa para vincular con MemberPress.
+ * @param {string} nombreProducto
+ * @returns {string|null} clave normalizada
+ */
+function normalizarProducto(nombreProducto = '') {
+  const clave = nombreProducto.trim().toLowerCase();
+
+  if (clave.includes('de cara a la jubilacion')) return 'de-cara-a-la-jubilacion';
+  if (clave.includes('el club laboroteca')) return 'el-club-laboroteca';
+
+  return null;
+}
+
+// IDs internos de MemberPress por clave normalizada
+const MEMBERPRESS_IDS = {
+  'el-club-laboroteca': 10663
+  // Añade más si incorporas otros productos en el futuro
+};
+
+module.exports = {
+  ...PRODUCTOS,
+  normalizarProducto,
+  MEMBERPRESS_IDS
+};
+

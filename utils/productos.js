@@ -15,6 +15,13 @@ const PRODUCTOS = {
     descripcion: 'Suscripción mensual a El Club Laboroteca. Acceso a contenido exclusivo.',
     price_id: 'price_1RmY1YEe6Cd77jenSc0mZxBi',
     imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/06/Logo-Club-Laboroteca-ABOGADO.png'
+  },
+  'alta y cuota mensual en el club laboroteca. acceso a contenido exclusivo.': {
+    nombre: 'Alta y cuota mensual en El Club Laboroteca. Acceso a contenido exclusivo.',
+    slug: 'el-club-laboroteca',
+    descripcion: 'Alta y cuota mensual en El Club Laboroteca. Acceso a contenido exclusivo.',
+    price_id: 'price_1RmY1YEe6Cd77jenSc0mZxBi',
+    imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/06/Logo-Club-Laboroteca-ABOGADO.png'
   }
 };
 

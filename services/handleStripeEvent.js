@@ -363,10 +363,10 @@ if (event.type === 'invoice.paid') {
         await syncMemberpressLibro({
           email,
           accion: 'activar',
-          membership_id: 7994,
           importe: datosCliente.importe
         });
       }
+
 
 
 

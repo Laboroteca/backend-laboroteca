@@ -38,7 +38,12 @@ router.post('/confirmar-eliminacion', async (req, res) => {
 
     // 1. Cancelar membresías y borrar datos
     await desactivarMembresiaClub(email);
-    await eliminarUsuarioWordPress(email);
+    const resultadoWP = await eliminarUsuarioWordPress(email);
+    console.log('[🧹 WP] Resultado eliminación WordPress:', resultadoWP);
+
+    if (!resultadoWP.ok) {
+      throw new Error('No se pudo eliminar el usuario en WordPress: ' + resultadoWP.mensaje);
+    }
     await borrarDatosUsuarioFirestore(email);
 
     // 2. Eliminar el token

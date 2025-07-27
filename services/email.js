@@ -248,5 +248,6 @@ module.exports = {
   enviarAvisoImpago,
   enviarAvisoCancelacion,
   enviarConfirmacionBajaClub,
-  enviarEmailValidacionEliminacionCuenta //
+  enviarEmailValidacionEliminacionCuenta,
+  enviarEmailPersonalizado //
 };

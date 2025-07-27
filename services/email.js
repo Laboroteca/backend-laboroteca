@@ -243,11 +243,47 @@ Si no lo has solicitado tú, ignora este mensaje.`;
   });
 }
 
+// ✅ EMAIL DE ACTIVACIÓN DE CUENTA
+async function enviarEmailActivacion(email, token, nombre = '') {
+  const urlActivacion = `https://www.laboroteca.es/activar-cuenta?token=${token}`;
+
+  const subject = 'Activa tu cuenta en Laboroteca';
+  const html = `
+    <p>Hola ${nombre || 'amigo/a'},</p>
+    <p>Gracias por registrarte en Laboroteca. Para activar tu cuenta, haz clic en el siguiente botón:</p>
+    <p style="text-align: center; margin: 30px 0;">
+      <a href="${urlActivacion}" style="background-color: #205f19; color: #fff; padding: 12px 20px; text-decoration: none; border-radius: 6px;">Activar cuenta</a>
+    </p>
+    <p>O copia y pega este enlace en tu navegador:<br>
+    <a href="${urlActivacion}">${urlActivacion}</a></p>
+    <p>Un saludo,<br>El equipo de Laboroteca</p>
+  `;
+
+  const text = `Hola ${nombre || 'amigo/a'},
+
+Gracias por registrarte en Laboroteca. Para activar tu cuenta, visita este enlace:
+
+${urlActivacion}
+
+Un saludo,
+El equipo de Laboroteca`;
+
+  return enviarEmailPersonalizado({
+    to: email,
+    subject,
+    html,
+    text,
+    enviarACopy: true
+  });
+}
+
+
 module.exports = {
   enviarFacturaPorEmail,
   enviarAvisoImpago,
   enviarAvisoCancelacion,
   enviarConfirmacionBajaClub,
   enviarEmailValidacionEliminacionCuenta,
+  enviarEmailActivacion,
   enviarEmailPersonalizado //
 };

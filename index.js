@@ -44,6 +44,13 @@ app.use(express.urlencoded({ extended: true }));
 app.use(require('./routes/solicitarEliminacionCuenta'));
 app.use(require('./routes/confirmarEliminaciondecuenta'));
 
+const activarCuenta = require('./routes/activarCuenta');
+app.get('/activar-cuenta', activarCuenta);
+
+const reenviarActivacion = require('./routes/reenviarActivacion');
+app.post('/reenviar-activacion', reenviarActivacion);
+
+
 const pagoLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,

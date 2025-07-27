@@ -15,6 +15,7 @@ module.exports = async function (req, res) {
   const datos = req.body;
   console.log('📦 Datos recibidos desde FluentForms:\n', JSON.stringify(datos, null, 2));
   const { procesarRegistroPendiente } = require('../services/procesarRegistroPendiente');
+  const { enviarEmailActivacion } = require('../services/email');
 
   // Si es formulario de tipo 'registro', gestionar cuenta pendiente
   if (datos.tipoFormulario === 'registro') {

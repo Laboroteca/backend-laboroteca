@@ -8,6 +8,7 @@ const { eliminarUsuarioWordPress } = require('../services/eliminarUsuarioWordPre
 const desactivarMembresiaClub = require('./desactivarMembresiaClub');
 const { borrarDatosUsuarioFirestore } = require('../services/borrarDatosUsuarioFirestore');
 const { enviarEmailPersonalizado } = require('../services/email');
+const { registrarBajaClub } = require('../services/registrarBajaClub');
 
 router.post('/confirmar-eliminacion', async (req, res) => {
   const { token } = req.body;
@@ -45,6 +46,14 @@ router.post('/confirmar-eliminacion', async (req, res) => {
       throw new Error('No se pudo eliminar el usuario en WordPress: ' + resultadoWP.mensaje);
     }
     await borrarDatosUsuarioFirestore(email);
+
+    // ✅ Registrar baja en Google Sheets por eliminación de cuenta
+    await registrarBajaClub({
+      email,
+      nombre: '', // si quieres recuperar el nombre de algún lado, aquí puedes usarlo
+      motivo: 'eliminación de cuenta'
+    });
+   
 
     // 2. Eliminar el token
     await ref.delete();

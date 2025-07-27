@@ -5,7 +5,7 @@ const admin = require('../firebase');
 const firestore = admin.firestore();
 
 const { eliminarUsuarioWordPress } = require('../services/eliminarUsuarioWordPress');
-const desactivarMembresiaClub = require('../services/desactivarMembresiaClub');
+const desactivarMembresiaClubSinPassword = require('../services/desactivarMembresiaClubSinPassword');
 const { borrarDatosUsuarioFirestore } = require('../services/borrarDatosUsuarioFirestore');
 const { enviarEmailPersonalizado } = require('../services/email');
 
@@ -37,7 +37,7 @@ router.post('/confirmar-eliminacion', async (req, res) => {
     }
 
     // 1. Cancelar membresías y borrar datos
-    await desactivarMembresiaClub(email);
+    await desactivarMembresiaClubSinPassword(email);
     await eliminarUsuarioWordPress(email);
     await borrarDatosUsuarioFirestore(email);
 

@@ -37,7 +37,7 @@ router.post('/confirmar-eliminacion', async (req, res) => {
     }
 
     // 1. Cancelar membresías y borrar datos
-    await desactivarMembresiaClubSinPassword(email);
+    await desactivarMembresiaClub(email);
     await eliminarUsuarioWordPress(email);
     await borrarDatosUsuarioFirestore(email);
 

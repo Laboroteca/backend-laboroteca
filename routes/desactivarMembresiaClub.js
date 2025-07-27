@@ -13,33 +13,37 @@ async function desactivarMembresiaClub(email, password) {
     return { ok: false, mensaje: 'Email inválido.' };
   }
 
-  if (!password || typeof password !== 'string' || password.length < 4) {
-    return { ok: false, mensaje: 'Contraseña incorrecta.' };
-  }
-
   email = email.trim().toLowerCase();
 
-  // ✅ Paso 0: Validar credenciales usando eliminar-usuario (no elimina realmente)
-  try {
-    const resp = await axios.post('https://www.laboroteca.es/wp-json/laboroteca/v1/eliminar-usuario', {
-      email,
-      password,
-      validarSolo: true
-    }, {
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.LABOROTECA_API_KEY,
-      }
-    });
+  // 🔐 Validar credenciales solo si se ha pasado contraseña (baja voluntaria)
+  if (typeof password === 'string') {
+    if (password.length < 4) {
+      return { ok: false, mensaje: 'Contraseña incorrecta.' };
+    }
 
-    if (!resp.data?.ok) {
-      const msg = resp.data?.mensaje || 'Credenciales no válidas';
+    try {
+      const resp = await axios.post('https://www.laboroteca.es/wp-json/laboroteca/v1/eliminar-usuario', {
+        email,
+        password,
+        validarSolo: true
+      }, {
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.LABOROTECA_API_KEY,
+        }
+      });
+
+      if (!resp.data?.ok) {
+        const msg = resp.data?.mensaje || 'Credenciales no válidas';
+        return { ok: false, mensaje: msg };
+      }
+    } catch (err) {
+      const msg = err?.response?.data?.mensaje || err.message || 'Error al validar credenciales.';
+      console.error('❌ Error validando en WP:', msg);
       return { ok: false, mensaje: msg };
     }
-  } catch (err) {
-    const msg = err?.response?.data?.mensaje || err.message || 'Error al validar credenciales.';
-    console.error('❌ Error validando en WP:', msg);
-    return { ok: false, mensaje: msg };
+  } else {
+    console.log(`⚠️ desactivarMembresiaClub: llamada sin contraseña para ${email} (flujo especial: impago o eliminación confirmada)`);
   }
 
   // 🔻 Paso 1: Cancelar suscripciones activas en Stripe
@@ -107,25 +111,27 @@ async function desactivarMembresiaClub(email, password) {
     console.error(`❌ Error al enviar email:`, errEmail.message);
   }
 
-  // 🔻 Paso 5: Eliminar usuario en WordPress
-  try {
-    const resp = await axios.post('https://www.laboroteca.es/wp-json/laboroteca/v1/eliminar-usuario', {
-      email,
-      password
-    }, {
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.LABOROTECA_API_KEY,
-      },
-    });
+  // 🔻 Paso 5: Eliminar usuario en WordPress SOLO si se ha pasado contraseña
+  if (typeof password === 'string') {
+    try {
+      const resp = await axios.post('https://www.laboroteca.es/wp-json/laboroteca/v1/eliminar-usuario', {
+        email,
+        password
+      }, {
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.LABOROTECA_API_KEY,
+        },
+      });
 
-    if (resp.data?.ok) {
-      console.log(`🗑️ Usuario eliminado en WP: ${email}`);
-    } else {
-      console.warn('⚠️ Error eliminando en WP:', resp.data);
+      if (resp.data?.ok) {
+        console.log(`🗑️ Usuario eliminado en WP: ${email}`);
+      } else {
+        console.warn('⚠️ Error eliminando en WP:', resp.data);
+      }
+    } catch (errWP) {
+      console.error('❌ Error WordPress:', errWP.message);
     }
-  } catch (errWP) {
-    console.error('❌ Error WordPress:', errWP.message);
   }
 
   return { ok: true, cancelada: true };

@@ -14,6 +14,22 @@ module.exports = async function (req, res) {
 
   const datos = req.body;
   console.log('📦 Datos recibidos desde FluentForms:\n', JSON.stringify(datos, null, 2));
+  const { procesarRegistroPendiente } = require('../services/procesarRegistroPendiente');
+
+  // Si es formulario de tipo 'registro', gestionar cuenta pendiente
+  if (datos.tipoFormulario === 'registro') {
+    try {
+      const resultado = await procesarRegistroPendiente(datos);
+      if (resultado) {
+        await enviarEmailActivacion(resultado.email, resultado.token, resultado.nombre);
+        return res.status(200).json({ ok: true, mensaje: 'Registro pendiente. Revisa tu email para activarlo.' });
+      }
+    } catch (error) {
+      console.error('❌ Error al procesar el registro pendiente:', error);
+      return res.status(500).json({ error: 'Error registrando usuario pendiente.' });
+    }
+  }
+
 
   // 🔎 Normaliza claves
   const nombre = datos.nombre || datos.Nombre || '';

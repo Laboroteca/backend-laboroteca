@@ -5,7 +5,7 @@ const admin = require('../firebase');
 const firestore = admin.firestore();
 
 const { eliminarUsuarioWordPress } = require('../services/eliminarUsuarioWordPress');
-const desactivarMembresiaClubSinPassword = require('../services/desactivarMembresiaClubSinPassword');
+const desactivarMembresiaClub = require('./desactivarMembresiaClub');
 const { borrarDatosUsuarioFirestore } = require('../services/borrarDatosUsuarioFirestore');
 const { enviarEmailPersonalizado } = require('../services/email');
 

@@ -2,7 +2,8 @@
 
 const express = require('express');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-const { emailRegistradoEnWordPress } = require('../../utils/wordpress');
+const { emailRegistradoEnWordPress } = require('../utils/wordpress');
+
 
 const router = express.Router();
 const URL_IMAGEN_DEFAULT = 'https://www.laboroteca.es/wp-content/uploads/2025/07/ENTRADAS-LABOROTECA-scaled.webp';

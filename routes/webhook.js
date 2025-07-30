@@ -18,15 +18,14 @@ router.post(
   express.raw({ type: 'application/json' }),
   async (req, res) => {
     try {
-      console.log('🛎️ Stripe webhook recibido:', {
-        headers: req.headers,
-        body: req.body && req.body.length ? req.body.toString('utf8') : '[empty]'
-      });
+      // No toques req.body antes de verificar firma
+      console.log('🛎️ Stripe webhook recibido:');
+      console.log('headers:', req.headers);
     } catch (logErr) {}
 
     const sig = req.headers['stripe-signature'];
     let event;
-
+    
     try {
       event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
       console.log(`🎯 Webhook verificado: ${event.type}`);

@@ -84,7 +84,7 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   const tipoProducto = datos.tipoProducto || '';
   const nombreProducto = datos.nombreProducto || '';
   const descripcionProducto = datos.descripcionProducto || '';
-  const precio = parseFloat((datos.importe || '22.90').toString().replace(',', '.'));
+  const precio = parseFloat((datos.importe || '28').toString().replace(',', '.'));
   let imagenProducto = datos.imagenProducto || '';
 
   if (!imagenProducto && tipoProducto.toLowerCase() === 'entrada') {

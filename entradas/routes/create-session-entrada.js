@@ -34,10 +34,11 @@ router.post('/crear-sesion-entrada', async (req, res) => {
     const formularioId = (datos.formularioId || '').toString().trim();
 
     // Cálculo del precio (precio fijo por Stripe)
-    const totalAsistentes = parseInt(
-      String(datos.totalAsistentes || datos.input_totalAsistentes || datos.input_20 || '0').replace(/\D/g, '')
-    );
-
+    const totalAsistentes = parseInt(String(datos.totalAsistentes || '').trim());
+    if (isNaN(totalAsistentes) || totalAsistentes < 1) {
+      console.warn('⚠️ [crear-sesion-entrada] Valor inválido en totalAsistentes:', datos.totalAsistentes);
+      return res.status(400).json({ error: 'Número de asistentes inválido.' });
+    }
 
     const precioTotal = Number.isInteger(totalAsistentes) ? totalAsistentes * 1500 : 0;
 

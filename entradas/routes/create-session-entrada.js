@@ -73,17 +73,18 @@ router.post('/crear-sesion-entrada', async (req, res) => {
       payment_method_types: ['card'],
       customer_email: email,
       line_items: [{
-        quantity: totalAsistentes,
+        quantity: 1,
         price_data: {
-          currency: 'eur',
-          unit_amount: precioTotal,
-          product_data: {
+            currency: 'eur',
+            unit_amount: Math.round(precio * 100),
+            product_data: {
             name: nombreProducto,
             description: descripcionProducto,
             images: [imagenStripe]
-          }
+            }
         }
-      }],
+        }],
+
       success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(nombreProducto)}`,
       cancel_url: 'https://laboroteca.es/error',
       metadata: {

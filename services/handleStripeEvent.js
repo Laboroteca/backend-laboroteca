@@ -413,17 +413,29 @@ if (event.type === 'invoice.paid') {
       }
 
       // 🎫 Si es producto tipo Entrada, lanzar flujo de entradas QR
-      if (normalizarProducto(datosCliente.tipoProducto) === 'entrada') {
-        try {
-          const procesarEntradas = require('../entradas/services/procesarEntradas');
-          await procesarEntradas({ session, datosCliente });
-          console.log(`🎟️ Entradas generadas y enviadas para ${email}`);
-        } catch (err) {
-          console.error('❌ Error al procesar entradas QR:', err?.message);
-          await docRef.update({ error: true, errorMsg: `error entradas: ${err?.message}` });
-          throw err;
-        }
-      }
+     
+if (
+  normalizarProducto(datosCliente.tipoProducto) === 'entrada' &&
+  session.payment_status === 'paid'
+) {
+  try {
+    const totalAsistentes = parseInt(datosCliente.totalAsistentes || '0');
+    if (!totalAsistentes || isNaN(totalAsistentes) || totalAsistentes < 1) {
+      throw new Error('Número de asistentes inválido para generación de entradas.');
+    }
+
+    const procesarEntradas = require('../entradas/services/procesarEntradas');
+    await procesarEntradas({ session, datosCliente });
+
+    console.log(`🎟️ Entradas generadas y enviadas para ${email}`);
+    await docRef.update({ entradasGeneradas: true });
+  } catch (err) {
+    console.error('❌ Error al procesar entradas QR:', err?.message);
+    await docRef.update({ error: true, errorMsg: `error entradas: ${err?.message}` });
+    throw err;
+  }
+}
+
       
 
     } catch (err) {

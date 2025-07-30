@@ -1,9 +1,9 @@
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-const { normalizar } = require('../utils/normalizar');
-const { emailRegistradoEnWordPress } = require('../utils/wordpress');
 const express = require('express');
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const router = express.Router();
 
+const { normalizar } = require('../utils/normalizar');
+const { emailRegistradoEnWordPress } = require('../utils/wordpress');
 const PRODUCTOS = require('../utils/productos');
 
 router.post('/create-session', async (req, res) => {
@@ -27,13 +27,13 @@ router.post('/create-session', async (req, res) => {
     const imagenFormulario = (datos.imagenProducto || '').trim();
     const importeFormulario = parseFloat((datos.importe || '').toString().replace(',', '.'));
 
-
+    const isSuscripcion = tipoProducto.toLowerCase().includes('suscrip');
     const esEntrada = tipoProducto.toLowerCase() === 'entrada';
+    const totalAsistentes = parseInt(datos.totalAsistentes) || 1;
 
     const producto = esEntrada
       ? PRODUCTOS['entrada evento']
       : PRODUCTOS[normalizar(nombreProducto)];
-
 
     console.log('📩 [create-session] Solicitud recibida:', {
       nombre, apellidos, email, dni, direccion,
@@ -62,11 +62,9 @@ router.post('/create-session', async (req, res) => {
       return res.status(403).json({ error: 'El email no está registrado como usuario.' });
     }
 
-    const isSuscripcion = tipoProducto.toLowerCase().includes('suscrip');
-
-    const esEntrada = tipoProducto.toLowerCase() === 'entrada';
-    const totalAsistentes = parseInt(datos.totalAsistentes) || 1;
-    const importeTotalEntrada = !isNaN(importeFormulario) ? (importeFormulario * totalAsistentes) : producto.precio_cents / 100;
+    const importeFinalCents = esEntrada
+      ? Math.round((importeFormulario || 0) * 100) * totalAsistentes
+      : Math.round((importeFormulario || producto.precio_cents / 100) * 100);
 
     const line_items = isSuscripcion
       ? [{
@@ -74,15 +72,14 @@ router.post('/create-session', async (req, res) => {
           quantity: 1
         }]
       : esEntrada
-      ? [{
-          price: producto.price_id,
-          quantity: totalAsistentes
-        }]
-
+        ? [{
+            price: producto.price_id,
+            quantity: totalAsistentes
+          }]
         : [{
             price_data: {
               currency: 'eur',
-              unit_amount: !isNaN(importeFormulario) ? Math.round(importeFormulario * 100) : producto.precio_cents,
+              unit_amount: importeFinalCents,
               product_data: {
                 name: producto.nombre,
                 description: descripcionFormulario || producto.descripcion,
@@ -92,13 +89,11 @@ router.post('/create-session', async (req, res) => {
             quantity: 1
           }];
 
-
-          console.log('🧪 tipoProducto:', tipoProducto);
-          console.log('🧪 esEntrada:', esEntrada);
-          console.log('🧪 totalAsistentes:', totalAsistentes);
-          console.log('🧪 importeFormulario:', importeFormulario);
-          console.log('🧪 producto:', producto);
-
+    console.log('🧪 tipoProducto:', tipoProducto);
+    console.log('🧪 esEntrada:', esEntrada);
+    console.log('🧪 totalAsistentes:', totalAsistentes);
+    console.log('🧪 importeFormulario:', importeFormulario);
+    console.log('🧪 producto:', producto);
 
     const session = await stripe.checkout.sessions.create({
       mode: isSuscripcion ? 'subscription' : 'payment',
@@ -119,9 +114,8 @@ router.post('/create-session', async (req, res) => {
         tipoProducto,
         nombreProducto: producto.nombre,
         descripcionProducto: (datos.descripcionProducto || producto.descripcion || `${tipoProducto} "${producto.nombre}"`).trim(),
-        importe: importeFormulario.toFixed(2),
+        importe: (importeFormulario || 0).toFixed(2),
         totalAsistentes: totalAsistentes.toString(),
-
         esPrimeraCompra: isSuscripcion ? 'true' : 'false'
       }
     });
@@ -130,7 +124,7 @@ router.post('/create-session', async (req, res) => {
     res.json({ url: session.url });
 
   } catch (err) {
-    console.error('❌ [create-session] Error creando sesión de pago:', err && err.message ? err.message : err);
+    console.error('❌ [create-session] Error creando sesión de pago:', err?.message || err);
     res.status(500).json({ error: 'Error interno al crear la sesión' });
   }
 });

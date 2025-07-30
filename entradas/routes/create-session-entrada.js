@@ -11,6 +11,7 @@ const URL_IMAGEN_DEFAULT = 'https://www.laboroteca.es/wp-content/uploads/2025/07
 router.post('/crear-sesion-entrada', async (req, res) => {
   try {
     const datos = req.body;
+    console.log('📥 Datos crudos del formulario recibidos:\n', JSON.stringify(req.body, null, 2));
     console.log('📥 Datos recibidos en /crear-sesion-entrada:\n', JSON.stringify(datos, null, 2));
 
     // Campos del comprador

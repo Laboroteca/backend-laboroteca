@@ -10,17 +10,18 @@ const { enviarEmailConEntradas } = require('./enviarEmailConEntradas');
 
 module.exports = async function procesarEntradas({ session, datosCliente }) {
   const emailComprador = datosCliente.email;
-  const nombreActuacion = session.metadata.nombreActuacion || 'Evento Laboroteca';
+  const nombreActuacion = session.metadata.nombreProducto || 'Evento Laboroteca';
   const fechaActuacion = session.metadata.fechaActuacion || '';
   const slugEvento = nombreActuacion.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-  const imagenFondo = session.metadata.imagenFondo || null;
+  const imagenFondo = session.metadata.imagenEvento || null;
   const formularioId = session.metadata.formularioId;
+  const total = parseInt(session.metadata.totalAsistentes || 0);
 
   if (!formularioId) throw new Error('Falta el formularioId en metadata');
+  if (!total || total <= 0) throw new Error('Falta totalAsistentes válido');
 
   // Extraer asistentes desde metadata
   const asistentes = [];
-  const total = parseInt(session.metadata.totalAsistentes || 0);
   for (let i = 1; i <= total; i++) {
     const nombre = session.metadata[`asistente_${i}_nombre`] || '';
     const apellidos = session.metadata[`asistente_${i}_apellidos`] || '';

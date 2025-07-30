@@ -1,7 +1,6 @@
 const express = require('express');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const { emailRegistradoEnWordPress } = require('../utils/wordpress');
-const { normalizar } = require('../utils/normalizar');
 
 const router = express.Router();
 const URL_IMAGEN_DEFAULT = 'https://www.laboroteca.es/wp-content/uploads/2025/07/ENTRADAS-LABOROTECA-scaled.webp';
@@ -11,6 +10,7 @@ router.post('/crear-sesion-entrada', async (req, res) => {
     const datos = typeof req.body === 'object' ? req.body : (Object.values(req.body)[0] || {});
     console.log('📥 Datos recibidos en /crear-sesion-entrada:', datos);
 
+    // Campos del comprador
     const nombre = (datos.nombre || '').trim();
     const apellidos = (datos.apellidos || '').trim();
     const email = (datos.email || '').trim().toLowerCase();
@@ -18,47 +18,46 @@ router.post('/crear-sesion-entrada', async (req, res) => {
     const direccion = (datos.direccion || '').trim();
     const ciudad = (datos.ciudad || '').trim();
     const provincia = (datos.provincia || '').trim();
-    const cp = (datos.cp || '').trim();
-    const tipoProducto = (datos.tipoProducto || 'entrada').trim();
+    const cp = (datos.CP || datos.cp || '').trim();
+
+    // Campos del producto/evento
+    const tipoProducto = (datos.tipoProducto || '').trim();
     const nombreProducto = (datos.nombreProducto || '').trim();
     const descripcionProducto = (datos.descripcionProducto || `Entrada "${nombreProducto}"`).trim();
-    const slugEvento = normalizar(nombreProducto);
-    const imagenFondo = (datos.imagenFondo || URL_IMAGEN_DEFAULT).trim();
+    const direccionEvento = (datos.direccionEvento || '').trim();
+    const imagenEvento = (datos.imagenEvento || URL_IMAGEN_DEFAULT).trim();
     const fechaActuacion = (datos.fechaActuacion || '').trim();
-    const formularioId = (datos.formularioId || '').trim();
-    const totalAsistentes = parseInt(datos.totalAsistentes || 0);
+    const formularioId = (datos.formularioId || '').toString().trim();
 
-    console.log('🧾 Campos clave procesados:');
-    console.log({
+    const totalAsistentes = parseInt(datos.totalAsistentes || '0');
+    const precio = parseFloat((datos.importe || '0').toString().replace(',', '.')) || 0;
+
+    console.log('🧾 Campos procesados:', {
       nombre, apellidos, email, nombreProducto, tipoProducto, descripcionProducto,
-      imagenFondo, fechaActuacion, formularioId, totalAsistentes
+      direccionEvento, imagenEvento, fechaActuacion, formularioId, totalAsistentes, precio
     });
 
-    if (
-      !email || !nombre || !nombreProducto || !tipoProducto || !slugEvento || !formularioId || !totalAsistentes
-    ) {
-      console.warn('⚠️ [crear-sesion-entrada] Faltan datos obligatorios.', {
-        nombre, email, nombreProducto, tipoProducto, formularioId, totalAsistentes
-      });
+    // Validación de campos obligatorios
+    if (!email || !nombre || !nombreProducto || !tipoProducto || !precio || !totalAsistentes || !formularioId || !fechaActuacion) {
+      console.warn('⚠️ [crear-sesion-entrada] Faltan datos obligatorios.');
       return res.status(400).json({ error: 'Faltan datos obligatorios para crear la sesión.' });
     }
 
+    // Verificar email en WordPress
     const registrado = await emailRegistradoEnWordPress(email);
     if (!registrado) {
       console.warn('🚫 [crear-sesion-entrada] Email no registrado en WP:', email);
       return res.status(403).json({ error: 'El email no está registrado como usuario.' });
     }
 
-    // Recopilar asistentes
+    // Recoger asistentes
     const metadataAsistentes = {};
     for (let i = 1; i <= totalAsistentes; i++) {
       metadataAsistentes[`asistente_${i}_nombre`] = datos[`asistente_${i}_nombre`] || '';
       metadataAsistentes[`asistente_${i}_apellidos`] = datos[`asistente_${i}_apellidos`] || '';
     }
 
-    const unit_amount = 1500; // 15,00 € en céntimos
-    console.log('💶 Precio final por unidad:', unit_amount / 100, '€');
-
+    // Crear sesión de Stripe
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
       payment_method_types: ['card'],
@@ -67,11 +66,11 @@ router.post('/crear-sesion-entrada', async (req, res) => {
         quantity: totalAsistentes,
         price_data: {
           currency: 'eur',
-          unit_amount,
+          unit_amount: Math.round(precio * 100),
           product_data: {
             name: nombreProducto,
             description: descripcionProducto,
-            images: [imagenFondo]
+            images: [imagenEvento]
           }
         }
       }],
@@ -89,21 +88,20 @@ router.post('/crear-sesion-entrada', async (req, res) => {
         tipoProducto,
         nombreProducto,
         descripcionProducto,
-        imagenFondo,
+        direccionEvento,
+        imagenEvento,
         fechaActuacion,
-        slugEvento,
         formularioId,
         totalAsistentes: String(totalAsistentes),
         ...metadataAsistentes
       }
     });
 
-    console.log('✅ [crear-sesion-entrada] Sesión Stripe creada correctamente.');
-    console.log('🔗 URL de sesión:', session.url);
+    console.log('✅ Sesión Stripe creada correctamente:', session.url);
     res.json({ url: session.url });
 
   } catch (err) {
-    console.error('❌ [crear-sesion-entrada] Error creando sesión de pago:', err.message || err);
+    console.error('❌ Error creando sesión de entrada:', err.message || err);
     res.status(500).json({ error: 'Error interno al crear la sesión de entrada.' });
   }
 });

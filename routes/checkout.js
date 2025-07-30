@@ -70,18 +70,11 @@ router.post('/create-session', async (req, res) => {
           quantity: 1
         }]
       : esEntrada
-        ? [{
-            price_data: {
-              currency: 'eur',
-              unit_amount: Math.round(importeFormulario * 100), // precio por entrada
-              product_data: {
-                name: producto.nombre,
-                description: descripcionFormulario || producto.descripcion,
-                images: imagenFormulario ? [imagenFormulario] : [producto.imagen]
-              }
-            },
-            quantity: totalAsistentes
-          }]
+      ? [{
+          price: producto.price_id,
+          quantity: totalAsistentes
+        }]
+
         : [{
             price_data: {
               currency: 'eur',
@@ -94,8 +87,6 @@ router.post('/create-session', async (req, res) => {
             },
             quantity: 1
           }];
-
-
 
     const session = await stripe.checkout.sessions.create({
       mode: isSuscripcion ? 'subscription' : 'payment',

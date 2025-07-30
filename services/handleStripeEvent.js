@@ -399,6 +399,20 @@ if (event.type === 'invoice.paid') {
         });
       }
 
+      // 🎫 Si es producto tipo Entrada, lanzar flujo de entradas QR
+      if (datosCliente.tipoProducto.toLowerCase() === 'entrada') {
+        try {
+          const procesarEntradas = require('../entradas/services/procesarEntradas');
+          await procesarEntradas({ session, datosCliente });
+          console.log(`🎟️ Entradas generadas y enviadas para ${email}`);
+        } catch (err) {
+          console.error('❌ Error al procesar entradas QR:', err?.message);
+          await docRef.update({ error: true, errorMsg: `error entradas: ${err?.message}` });
+          throw err;
+        }
+      }
+      
+
     } catch (err) {
       errorProcesando = true;
       console.error('❌ Error general en flujo Stripe:', err?.message);

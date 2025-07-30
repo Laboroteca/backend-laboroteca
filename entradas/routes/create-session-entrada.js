@@ -66,36 +66,45 @@ router.post('/crear-sesion-entrada', async (req, res) => {
     }
 
     // Crear sesión de Stripe
-    const session = await stripe.checkout.sessions.create({
-      mode: 'payment',
-      payment_method_types: ['card'],
-      customer_email: email,
-      line_items: [{
-        quantity: totalAsistentes,
-        price: producto.price_id
-      }],
-      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(nombreProducto)}`,
-      cancel_url: 'https://laboroteca.es/error',
-      metadata: {
-        nombre,
-        apellidos,
-        email,
-        dni,
-        direccion,
-        ciudad,
-        provincia,
-        cp,
-        tipoProducto,
-        nombreProducto,
-        descripcionProducto,
-        direccionEvento,
-        imagenEvento: imagenPDF,
-        fechaActuacion,
-        formularioId,
-        totalAsistentes: String(totalAsistentes),
-        ...metadataAsistentes
+const session = await stripe.checkout.sessions.create({
+  mode: 'payment',
+  payment_method_types: ['card'],
+  customer_email: email,
+  line_items: [{
+    quantity: totalAsistentes,
+    price_data: {
+      currency: 'eur',
+      unit_amount: 1500, // 15,00 €
+      product_data: {
+        name: nombreProducto,
+        description: descripcionProducto,
+        images: [imagenStripe]
       }
-    });
+    }
+  }],
+  success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(nombreProducto)}`,
+  cancel_url: 'https://laboroteca.es/error',
+  metadata: {
+    nombre,
+    apellidos,
+    email,
+    dni,
+    direccion,
+    ciudad,
+    provincia,
+    cp,
+    tipoProducto,
+    nombreProducto,
+    descripcionProducto,
+    direccionEvento,
+    imagenEvento: imagenPDF,
+    fechaActuacion,
+    formularioId,
+    totalAsistentes: String(totalAsistentes),
+    ...metadataAsistentes
+  }
+});
+
 
     console.log('✅ Sesión Stripe creada correctamente:\n', session.url);
     res.json({ url: session.url });

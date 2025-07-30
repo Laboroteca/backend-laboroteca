@@ -34,8 +34,8 @@ router.post('/crear-sesion-entrada', async (req, res) => {
     const formularioId = (datos.formularioId || '').toString().trim();
 
     // Cálculo del precio (precio fijo por Stripe)
-    const totalAsistentes = parseInt(datos.totalAsistentes || '0');
-    const precioTotal = totalAsistentes * 1500; // 15,00 € en céntimos
+    const totalAsistentes = parseInt((datos.totalAsistentes || '').toString().trim(), 10) || 0;
+    const precioTotal = Number.isInteger(totalAsistentes) ? totalAsistentes * 1500 : 0;
 
     // 🔎 LOG DEBUG PRECIO ENTRADAS
     console.log('🧪 DEBUG PRECIO ENTRADAS');

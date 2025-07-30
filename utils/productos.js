@@ -1,5 +1,3 @@
-// utils/productos.js
-
 const PRODUCTOS = {
   'libro digital con acceso vitalicio. de cara a la jubilacion': {
     nombre: 'Libro digital con acceso vitalicio. De cara a la jubilación',
@@ -15,6 +13,14 @@ const PRODUCTOS = {
     descripcion: 'Suscripción mensual a El Club Laboroteca. Acceso a contenido exclusivo.',
     price_id: 'price_1RmY1YEe6Cd77jenSc0mZxBi',
     imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/07/Club-laboroteca-precio-suscripcion-mensual-2.webp'
+  },
+  'entrada evento': {
+    nombre: 'Entrada evento',
+    slug: 'entrada-evento',
+    descripcion: 'Entrada para evento presencial',
+    price_id: '', // No se usa en pagos únicos
+    imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/07/ENTRADAS-LABOROTECA-scaled.webp',
+    precio_cents: 1500
   }
 };
 

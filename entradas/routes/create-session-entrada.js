@@ -2,7 +2,7 @@
 
 const express = require('express');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-const { emailRegistradoEnWordPress } = require('../utils/wordpress');
+const { emailRegistradoEnWordPress } = require('../../utils/wordpress');
 
 const router = express.Router();
 const URL_IMAGEN_DEFAULT = 'https://www.laboroteca.es/wp-content/uploads/2025/07/ENTRADAS-LABOROTECA-scaled.webp';
@@ -27,46 +27,27 @@ router.post('/crear-sesion-entrada', async (req, res) => {
     const nombreProducto = (datos.nombreProducto || '').trim();
     const descripcionProducto = (datos.descripcionProducto || `Entrada "${nombreProducto}"`).trim();
     const direccionEvento = (datos.direccionEvento || '').trim();
-    const imagenPDF = (datos.imagenEvento || '').trim(); // Para el PDF
+    const imagenPDF = (datos.imagenEvento || '').trim();
     const imagenStripe = URL_IMAGEN_DEFAULT;
     const fechaActuacion = (datos.fechaActuacion || '').trim();
     const formularioId = (datos.formularioId || '').toString().trim();
 
     // Cálculo del precio
     const totalAsistentes = parseInt(datos.totalAsistentes || '0');
-    const importeRaw = (datos.importe || '0').toString();
-    const importeUnitario = parseFloat(importeRaw.replace(',', '.')) || 0;
-    const precio = totalAsistentes * importeUnitario;
+    const importeUnitario = parseFloat((datos.importe || '0').toString().replace(',', '.')) || 0;
+    const precioTotal = Math.round(importeUnitario * 100); // precio unitario en céntimos
 
     console.log('🧾 Cálculo de precio:\n', {
       totalAsistentes,
-      importeRaw,
       importeUnitario,
-      precio
-    });
-
-    console.log('📦 Producto procesado:\n', {
-      tipoProducto,
-      nombreProducto,
-      descripcionProducto,
-      direccionEvento,
-      fechaActuacion,
-      formularioId
-    });
-
-    console.log('👤 Comprador procesado:\n', {
-      nombre,
-      apellidos,
-      email,
-      dni,
-      direccion,
-      ciudad,
-      provincia,
-      cp
+      precioTotalTotal: precioTotal * totalAsistentes
     });
 
     // Validación de campos obligatorios
-    if (!email || !nombre || !nombreProducto || !tipoProducto || !precio || !totalAsistentes || !formularioId || !fechaActuacion) {
+    if (
+      !email || !nombre || !nombreProducto || !tipoProducto || !precioTotal || !totalAsistentes ||
+      !formularioId || !fechaActuacion
+    ) {
       console.warn('⚠️ [crear-sesion-entrada] Faltan datos obligatorios.');
       return res.status(400).json({ error: 'Faltan datos obligatorios para crear la sesión.' });
     }
@@ -94,7 +75,7 @@ router.post('/crear-sesion-entrada', async (req, res) => {
         quantity: totalAsistentes,
         price_data: {
           currency: 'eur',
-          unit_amount: Math.round(precio * 100),
+          unit_amount: precioTotal,
           product_data: {
             name: nombreProducto,
             description: descripcionProducto,

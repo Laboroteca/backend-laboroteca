@@ -1,6 +1,6 @@
 const express = require('express');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-const { emailRegistradoEnWordPress } = require('../../utils/wordpress');
+const { emailRegistradoEnWordPress } = require('../utils/wordpress');
 const { normalizar } = require('../../utils/normalizar');
 
 const router = express.Router();

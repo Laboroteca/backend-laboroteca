@@ -411,7 +411,6 @@ if (event.type === 'invoice.paid') {
           throw err;
         }
       }
-
       
 
     } catch (err) {

@@ -37,7 +37,9 @@ router.post('/crear-sesion-entrada', async (req, res) => {
     // Cálculo del precio
     const totalAsistentes = parseInt(datos.totalAsistentes || '0');
     const importeUnitario = parseFloat((datos.importe || '0').toString().replace(',', '.')) || 0;
-    const precioTotal = Math.round(importeUnitario * 100); // precio unitario en céntimos
+    const precioUnitarioEnCentimos = Math.round(importeUnitario * 100);
+    const precioTotal = precioUnitarioEnCentimos * totalAsistentes;
+
 
     console.log('🧾 Cálculo de precio:\n', {
       totalAsistentes,

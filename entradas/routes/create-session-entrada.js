@@ -69,25 +69,24 @@ router.post('/crear-sesion-entrada', async (req, res) => {
 
     // Crear sesión de Stripe
     const session = await stripe.checkout.sessions.create({
-      mode: 'payment',
-      payment_method_types: ['card'],
-      customer_email: email,
-      line_items: [{
-        quantity: 1,
+    mode: 'payment',
+    payment_method_types: ['card'],
+    customer_email: email,
+    line_items: [{
+        quantity: totalAsistentes,
         price_data: {
-            currency: 'eur',
-            unit_amount: precioTotal,
-            product_data: {
+        currency: 'eur',
+        unit_amount: precioTotal, // precio de una entrada en céntimos
+        product_data: {
             name: nombreProducto,
             description: descripcionProducto,
             images: [imagenStripe]
-            }
         }
-        }],
-
-      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(nombreProducto)}`,
-      cancel_url: 'https://laboroteca.es/error',
-      metadata: {
+        }
+    }],
+    success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(nombreProducto)}`,
+    cancel_url: 'https://laboroteca.es/error',
+    metadata: {
         nombre,
         apellidos,
         email,
@@ -105,8 +104,9 @@ router.post('/crear-sesion-entrada', async (req, res) => {
         formularioId,
         totalAsistentes: String(totalAsistentes),
         ...metadataAsistentes
-      }
+    }
     });
+
 
     console.log('✅ Sesión Stripe creada correctamente:\n', session.url);
     res.json({ url: session.url });

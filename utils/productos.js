@@ -23,6 +23,7 @@ const PRODUCTOS = {
   }
 };
 
+
 /**
  * Normaliza un nombre de producto largo o decorado a una clave simple.
  * Se usa para vincular con MemberPress.
@@ -32,6 +33,7 @@ const PRODUCTOS = {
 function normalizarProducto(nombreProducto = '') {
   const clave = nombreProducto.trim().toLowerCase();
 
+  if (clave.includes('entrada')) return 'entrada';
   if (clave.includes('de cara a la jubilacion')) return 'de-cara-a-la-jubilacion';
   if (clave.includes('el club laboroteca')) return 'el-club-laboroteca';
 

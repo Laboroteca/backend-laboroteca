@@ -1,4 +1,5 @@
-const { enviarEmailPersonalizado } = require('./email');
+const { enviarEmailPersonalizado } = require('../../services/email');
+
 
 /**
  * Envía un email al comprador con las entradas adjuntas y la factura (si la hay).

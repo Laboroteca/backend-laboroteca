@@ -18,9 +18,9 @@ const PRODUCTOS = {
     nombre: 'Entrada evento',
     slug: 'entrada-evento',
     descripcion: 'Entrada para evento presencial',
-    price_id: 'price_1RqWUuEe6Cd77jenDQ3Vu5hY', // ESTE
     imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/07/ENTRADAS-LABOROTECA-scaled.webp'
   }
+
 };
 
 

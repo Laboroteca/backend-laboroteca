@@ -1,10 +1,7 @@
-// /entradas/routes/create-session-entrada.js
-
 const express = require('express');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const { emailRegistradoEnWordPress } = require('../utils/wordpress');
 const PRODUCTOS = require('../../utils/productos');
-
 
 const router = express.Router();
 const URL_IMAGEN_DEFAULT = 'https://www.laboroteca.es/wp-content/uploads/2025/07/ENTRADAS-LABOROTECA-scaled.webp';
@@ -36,17 +33,13 @@ router.post('/crear-sesion-entrada', async (req, res) => {
     const fechaActuacion = (datos.fechaActuacion || '').trim();
     const formularioId = (datos.formularioId || '').toString().trim();
 
-    // Cálculo del precio
+    // Cálculo del precio (precio fijo por Stripe)
     const totalAsistentes = parseInt(datos.totalAsistentes || '0');
-    const importeUnitario = parseFloat((datos.importe || '0').toString().replace(',', '.')) || 0;
-    const precioUnitarioEnCentimos = Math.round(importeUnitario * 100);
-    const precioTotal = precioUnitarioEnCentimos * totalAsistentes;
-
+    const precioTotal = totalAsistentes * 1500; // 15,00 € en céntimos
 
     console.log('🧾 Cálculo de precio:\n', {
       totalAsistentes,
-      importeUnitario,
-      precioTotalTotal: precioTotal * totalAsistentes
+      precioTotal
     });
 
     // Validación de campos obligatorios
@@ -74,17 +67,16 @@ router.post('/crear-sesion-entrada', async (req, res) => {
 
     // Crear sesión de Stripe
     const session = await stripe.checkout.sessions.create({
-    mode: 'payment',
-    payment_method_types: ['card'],
-    customer_email: email,
-    line_items: [{
-      quantity: totalAsistentes,
-      price: producto.price_id
-    }],
-
-    success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(nombreProducto)}`,
-    cancel_url: 'https://laboroteca.es/error',
-    metadata: {
+      mode: 'payment',
+      payment_method_types: ['card'],
+      customer_email: email,
+      line_items: [{
+        quantity: totalAsistentes,
+        price: producto.price_id
+      }],
+      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(nombreProducto)}`,
+      cancel_url: 'https://laboroteca.es/error',
+      metadata: {
         nombre,
         apellidos,
         email,
@@ -102,9 +94,8 @@ router.post('/crear-sesion-entrada', async (req, res) => {
         formularioId,
         totalAsistentes: String(totalAsistentes),
         ...metadataAsistentes
-    }
+      }
     });
-
 
     console.log('✅ Sesión Stripe creada correctamente:\n', session.url);
     res.json({ url: session.url });

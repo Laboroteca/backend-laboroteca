@@ -28,8 +28,12 @@ router.post('/create-session', async (req, res) => {
     const importeFormulario = parseFloat((datos.importe || '').toString().replace(',', '.'));
 
 
-    const clave = normalizar(nombreProducto);
-    const producto = PRODUCTOS[clave];
+    const esEntrada = tipoProducto.toLowerCase() === 'entrada';
+
+    const producto = esEntrada
+      ? PRODUCTOS['entrada evento']
+      : PRODUCTOS[normalizar(nombreProducto)];
+
 
     console.log('📩 [create-session] Solicitud recibida:', {
       nombre, apellidos, email, dni, direccion,

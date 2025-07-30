@@ -45,6 +45,7 @@ app.use(require('./routes/solicitarEliminacionCuenta'));
 app.use(require('./routes/confirmarEliminaciondecuenta'));
 
 app.use('/entradas/crear', require('./entradas/routes/crearEntrada'));
+app.use('/entradas/sesion', require('./entradas/routes/create-session-entrada'));
 
 
 const pagoLimiter = rateLimit({

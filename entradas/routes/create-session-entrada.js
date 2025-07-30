@@ -76,7 +76,7 @@ router.post('/crear-sesion-entrada', async (req, res) => {
         quantity: 1,
         price_data: {
             currency: 'eur',
-            unit_amount: Math.round(precio * 100),
+            unit_amount: precioTotal,
             product_data: {
             name: nombreProducto,
             description: descripcionProducto,

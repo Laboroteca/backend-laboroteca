@@ -37,6 +37,17 @@ router.post('/crear-sesion-entrada', async (req, res) => {
     const totalAsistentes = parseInt(datos.totalAsistentes || '0');
     const precioTotal = totalAsistentes * 1500; // 15,00 € en céntimos
 
+    // 🔎 LOG DEBUG PRECIO ENTRADAS
+    console.log('🧪 DEBUG PRECIO ENTRADAS');
+    console.log('👉 totalAsistentes:', totalAsistentes);
+    console.log('👉 precio unitario esperado: 15.00 €');
+    console.log('👉 precioTotal (en céntimos):', precioTotal);
+    console.log('👉 precioTotal (en euros):', precioTotal / 100);
+    console.log('👉 tipoProducto:', tipoProducto);
+    console.log('👉 nombreProducto:', nombreProducto);
+    console.log('👉 descripcionProducto:', descripcionProducto);
+
+
     console.log('🧾 Cálculo de precio:\n', {
       totalAsistentes,
       precioTotal

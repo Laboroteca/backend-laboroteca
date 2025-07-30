@@ -331,6 +331,13 @@ if (event.type === 'invoice.paid') {
     const memberpressId = MEMBERPRESS_IDS[productoSlug];
 
     const descripcionProducto = m.descripcionProducto || rawNombreProducto || 'Producto Laboroteca';
+
+    console.log('🧪 handleStripeEvent - Precio y descripción recibida desde metadata:');
+    console.log('👉 session.metadata.nombreProducto:', session.metadata?.nombreProducto);
+    console.log('👉 session.metadata.descripcionProducto:', session.metadata?.descripcionProducto);
+    console.log('👉 tipoProducto:', session.metadata?.tipoProducto);
+    console.log('👉 totalAsistentes:', session.metadata?.totalAsistentes);
+
     
     const productoNormalizado = normalizarProducto(rawNombreProducto); // <- mejor base para normalizar clave
 
@@ -356,6 +363,12 @@ if (event.type === 'invoice.paid') {
 
     try {
       await guardarEnGoogleSheets(datosCliente);
+
+      console.log('📤 Llamando a crearFacturaEnFacturaCity con:');
+      console.log('🧾 descripcionProducto:', datosCliente.descripcionProducto);
+      console.log('🧾 importe:', datosCliente.importe);
+      console.log('🧾 tipoProducto:', datosCliente.tipoProducto);
+
       const pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
 
       const nombreArchivo = `facturas/${email}/${Date.now()}-${datosCliente.producto}.pdf`;

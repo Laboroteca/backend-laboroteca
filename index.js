@@ -54,14 +54,8 @@ const pagoLimiter = rateLimit({
   message: { error: 'Demasiados intentos. Inténtalo más tarde.' }
 });
 
-function normalizarProducto(str) {
-  return (str || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .normalize('NFC')
-    .trim()
-    .toLowerCase();
-}
+// ✅ Usar la función correcta desde utils
+const { normalizarProducto } = require('./utils/productos');
 
 async function verificarEmailEnWordPress(email) {
   console.log('🔓 Verificación desactivada. Email:', email);
@@ -71,6 +65,7 @@ async function verificarEmailEnWordPress(email) {
 app.get('/', (req, res) => {
   res.send('✔️ API de Laboroteca activa');
 });
+
 
 app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   const datos = req.body;

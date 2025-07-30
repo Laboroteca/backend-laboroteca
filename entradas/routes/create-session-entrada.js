@@ -1,5 +1,4 @@
 // /entradas/routes/create-session-entrada.js
-// 
 
 const express = require('express');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
@@ -11,7 +10,7 @@ const URL_IMAGEN_DEFAULT = 'https://www.laboroteca.es/wp-content/uploads/2025/07
 router.post('/crear-sesion-entrada', async (req, res) => {
   try {
     const datos = req.body;
-    console.log('📥 Datos recibidos en /crear-sesion-entrada:', datos);
+    console.log('📥 Datos recibidos en /crear-sesion-entrada:\n', JSON.stringify(datos, null, 2));
 
     // Campos del comprador
     const nombre = (datos.nombre || '').trim();
@@ -21,7 +20,7 @@ router.post('/crear-sesion-entrada', async (req, res) => {
     const direccion = (datos.direccion || '').trim();
     const ciudad = (datos.ciudad || '').trim();
     const provincia = (datos.provincia || '').trim();
-    const cp = (datos.cp || '').trim(); // minúsculas, como en Fluent
+    const cp = (datos.cp || '').trim();
 
     // Campos del producto/evento
     const tipoProducto = (datos.tipoProducto || '').trim();
@@ -29,17 +28,41 @@ router.post('/crear-sesion-entrada', async (req, res) => {
     const descripcionProducto = (datos.descripcionProducto || `Entrada "${nombreProducto}"`).trim();
     const direccionEvento = (datos.direccionEvento || '').trim();
     const imagenPDF = (datos.imagenEvento || '').trim(); // Para el PDF
-    const imagenStripe = URL_IMAGEN_DEFAULT; // Imagen fija para Stripe
+    const imagenStripe = URL_IMAGEN_DEFAULT;
     const fechaActuacion = (datos.fechaActuacion || '').trim();
     const formularioId = (datos.formularioId || '').toString().trim();
 
+    // Cálculo del precio
     const totalAsistentes = parseInt(datos.totalAsistentes || '0');
-    const importeUnitario = parseFloat((datos.importe || '0').toString().replace(',', '.')) || 0;
+    const importeRaw = (datos.importe || '0').toString();
+    const importeUnitario = parseFloat(importeRaw.replace(',', '.')) || 0;
     const precio = totalAsistentes * importeUnitario;
 
-    console.log('🧾 Campos procesados:', {
-      nombre, apellidos, email, nombreProducto, tipoProducto, descripcionProducto,
-      direccionEvento, imagenPDF, fechaActuacion, formularioId, totalAsistentes, precio
+    console.log('🧾 Cálculo de precio:\n', {
+      totalAsistentes,
+      importeRaw,
+      importeUnitario,
+      precio
+    });
+
+    console.log('📦 Producto procesado:\n', {
+      tipoProducto,
+      nombreProducto,
+      descripcionProducto,
+      direccionEvento,
+      fechaActuacion,
+      formularioId
+    });
+
+    console.log('👤 Comprador procesado:\n', {
+      nombre,
+      apellidos,
+      email,
+      dni,
+      direccion,
+      ciudad,
+      provincia,
+      cp
     });
 
     // Validación de campos obligatorios
@@ -102,7 +125,7 @@ router.post('/crear-sesion-entrada', async (req, res) => {
       }
     });
 
-    console.log('✅ Sesión Stripe creada correctamente:', session.url);
+    console.log('✅ Sesión Stripe creada correctamente:\n', session.url);
     res.json({ url: session.url });
 
   } catch (err) {

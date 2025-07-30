@@ -79,7 +79,7 @@ router.post('/crear-sesion-entrada', async (req, res) => {
         quantity: totalAsistentes,
         price_data: {
         currency: 'eur',
-        unit_amount: precioTotal, // precio de una entrada en céntimos
+        unit_amount: precioUnitarioEnCentimos,
         product_data: {
             name: nombreProducto,
             description: descripcionProducto,

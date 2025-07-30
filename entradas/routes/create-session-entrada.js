@@ -5,7 +5,6 @@ const { normalizar } = require('../utils/normalizar');
 
 const router = express.Router();
 
-const PRICE_ID_ENTRADA = 'price_1RqWUuEe6Cd77jenDQ3Vu5hY'; // ID fijo del producto en Stripe
 const URL_IMAGEN = 'https://www.laboroteca.es/wp-content/uploads/2025/07/ENTRADAS-LABOROTECA-scaled.webp';
 
 router.post('/crear-sesion-entrada', async (req, res) => {
@@ -24,7 +23,7 @@ router.post('/crear-sesion-entrada', async (req, res) => {
     const nombreProducto = (datos.nombreProducto || '').trim();
     const descripcionProducto = (datos.descripcionProducto || `Entrada "${nombreProducto}"`).trim();
     const slugEvento = normalizar(nombreProducto);
-    const imagenFondo = (datos.imagenFondo || '').trim();
+    const imagenFondo = (datos.imagenFondo || URL_IMAGEN).trim();
     const fechaActuacion = (datos.fechaActuacion || '').trim();
     const formularioId = (datos.formularioId || '').trim();
     const totalAsistentes = parseInt(datos.totalAsistentes || 0);
@@ -56,8 +55,16 @@ router.post('/crear-sesion-entrada', async (req, res) => {
       payment_method_types: ['card'],
       customer_email: email,
       line_items: [{
-        price: PRICE_ID_ENTRADA,
-        quantity: totalAsistentes
+        quantity: totalAsistentes,
+        price_data: {
+          currency: 'eur',
+          unit_amount: 1500, // 15,00 €
+          product_data: {
+            name: nombreProducto,
+            description: descripcionProducto,
+            images: [imagenFondo]
+          }
+        }
       }],
       success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(nombreProducto)}`,
       cancel_url: 'https://laboroteca.es/error',

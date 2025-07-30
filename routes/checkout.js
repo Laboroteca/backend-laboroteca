@@ -7,6 +7,12 @@ const { emailRegistradoEnWordPress } = require('../utils/wordpress');
 const PRODUCTOS = require('../utils/productos');
 
 router.post('/create-session', async (req, res) => {
+  // ❌ Bloquear intentos de lanzar entradas por esta ruta
+if ((req.body?.tipoProducto || '').toLowerCase() === 'entrada') {
+  console.warn('🚫 [create-session] Entrada bloqueada en checkout.js');
+  return res.status(400).json({ error: 'Las entradas no se procesan por esta ruta.' });
+}
+
   try {
     const body = req.body;
     const datos = typeof body === 'object' && (body.email || body.email_autorelleno || body.nombre)

@@ -400,7 +400,7 @@ if (event.type === 'invoice.paid') {
       }
 
       // 🎫 Si es producto tipo Entrada, lanzar flujo de entradas QR
-      if ((datosCliente.tipoProducto || '').toLowerCase().includes('entrada')) {
+      if (normalizarProducto(datosCliente.tipoProducto) === 'entrada') {
         try {
           const procesarEntradas = require('../entradas/services/procesarEntradas');
           await procesarEntradas({ session, datosCliente });

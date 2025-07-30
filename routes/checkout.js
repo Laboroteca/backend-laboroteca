@@ -60,23 +60,41 @@ router.post('/create-session', async (req, res) => {
 
     const isSuscripcion = tipoProducto.toLowerCase().includes('suscrip');
 
+    const esEntrada = tipoProducto.toLowerCase() === 'entrada';
+    const totalAsistentes = parseInt(datos.totalAsistentes) || 1;
+    const importeTotalEntrada = !isNaN(importeFormulario) ? (importeFormulario * totalAsistentes) : producto.precio_cents / 100;
+
     const line_items = isSuscripcion
       ? [{
           price: producto.price_id,
           quantity: 1
         }]
-      : [{
-          price_data: {
-            currency: 'eur',
-            unit_amount: !isNaN(importeFormulario) ? Math.round(importeFormulario * 100) : producto.precio_cents,
-            product_data: {
-              name: producto.nombre,
-              description: descripcionFormulario || producto.descripcion,
-              images: imagenFormulario ? [imagenFormulario] : [producto.imagen]
-            }
-          },
-          quantity: 1
-        }];
+      : esEntrada
+        ? [{
+            price_data: {
+              currency: 'eur',
+              unit_amount: Math.round(importeFormulario * 100), // precio por entrada
+              product_data: {
+                name: producto.nombre,
+                description: descripcionFormulario || producto.descripcion,
+                images: imagenFormulario ? [imagenFormulario] : [producto.imagen]
+              }
+            },
+            quantity: totalAsistentes
+          }]
+        : [{
+            price_data: {
+              currency: 'eur',
+              unit_amount: !isNaN(importeFormulario) ? Math.round(importeFormulario * 100) : producto.precio_cents,
+              product_data: {
+                name: producto.nombre,
+                description: descripcionFormulario || producto.descripcion,
+                images: imagenFormulario ? [imagenFormulario] : [producto.imagen]
+              }
+            },
+            quantity: 1
+          }];
+
 
 
     const session = await stripe.checkout.sessions.create({
@@ -98,6 +116,9 @@ router.post('/create-session', async (req, res) => {
         tipoProducto,
         nombreProducto: producto.nombre,
         descripcionProducto: (datos.descripcionProducto || producto.descripcion || `${tipoProducto} "${producto.nombre}"`).trim(),
+        importe: importeFormulario.toFixed(2),
+        totalAsistentes: totalAsistentes.toString(),
+
         esPrimeraCompra: isSuscripcion ? 'true' : 'false'
       }
     });

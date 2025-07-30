@@ -4,13 +4,13 @@ const { emailRegistradoEnWordPress } = require('../utils/wordpress');
 const { normalizar } = require('../utils/normalizar');
 
 const router = express.Router();
-
-const URL_IMAGEN = 'https://www.laboroteca.es/wp-content/uploads/2025/07/ENTRADAS-LABOROTECA-scaled.webp';
+const URL_IMAGEN_DEFAULT = 'https://www.laboroteca.es/wp-content/uploads/2025/07/ENTRADAS-LABOROTECA-scaled.webp';
 
 router.post('/crear-sesion-entrada', async (req, res) => {
   try {
     const datos = typeof req.body === 'object' ? req.body : (Object.values(req.body)[0] || {});
-    
+    console.log('📥 Datos recibidos en /crear-sesion-entrada:', datos);
+
     const nombre = (datos.nombre || '').trim();
     const apellidos = (datos.apellidos || '').trim();
     const email = (datos.email || '').trim().toLowerCase();
@@ -23,10 +23,16 @@ router.post('/crear-sesion-entrada', async (req, res) => {
     const nombreProducto = (datos.nombreProducto || '').trim();
     const descripcionProducto = (datos.descripcionProducto || `Entrada "${nombreProducto}"`).trim();
     const slugEvento = normalizar(nombreProducto);
-    const imagenFondo = (datos.imagenFondo || URL_IMAGEN).trim();
+    const imagenFondo = (datos.imagenFondo || URL_IMAGEN_DEFAULT).trim();
     const fechaActuacion = (datos.fechaActuacion || '').trim();
     const formularioId = (datos.formularioId || '').trim();
     const totalAsistentes = parseInt(datos.totalAsistentes || 0);
+
+    console.log('🧾 Campos clave procesados:');
+    console.log({
+      nombre, apellidos, email, nombreProducto, tipoProducto, descripcionProducto,
+      imagenFondo, fechaActuacion, formularioId, totalAsistentes
+    });
 
     if (
       !email || !nombre || !nombreProducto || !tipoProducto || !slugEvento || !formularioId || !totalAsistentes
@@ -50,6 +56,9 @@ router.post('/crear-sesion-entrada', async (req, res) => {
       metadataAsistentes[`asistente_${i}_apellidos`] = datos[`asistente_${i}_apellidos`] || '';
     }
 
+    const unit_amount = 1500; // 15,00 € en céntimos
+    console.log('💶 Precio final por unidad:', unit_amount / 100, '€');
+
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
       payment_method_types: ['card'],
@@ -58,7 +67,7 @@ router.post('/crear-sesion-entrada', async (req, res) => {
         quantity: totalAsistentes,
         price_data: {
           currency: 'eur',
-          unit_amount: 1500, // 15,00 €
+          unit_amount,
           product_data: {
             name: nombreProducto,
             description: descripcionProducto,
@@ -89,7 +98,8 @@ router.post('/crear-sesion-entrada', async (req, res) => {
       }
     });
 
-    console.log('✅ [crear-sesion-entrada] Sesión Stripe creada:', session.url);
+    console.log('✅ [crear-sesion-entrada] Sesión Stripe creada correctamente.');
+    console.log('🔗 URL de sesión:', session.url);
     res.json({ url: session.url });
 
   } catch (err) {

@@ -23,6 +23,10 @@ router.post('/create-session', async (req, res) => {
     const cp = (datos.cp || '').trim();
     const tipoProducto = (datos.tipoProducto || '').trim();
     const nombreProducto = (datos.nombreProducto || '').trim();
+    const descripcionFormulario = (datos.descripcionProducto || '').trim();
+    const imagenFormulario = (datos.imagenProducto || '').trim();
+    const importeFormulario = parseFloat((datos.importe || '').toString().replace(',', '.'));
+
 
     const clave = normalizar(nombreProducto);
     const producto = PRODUCTOS[clave];
@@ -64,15 +68,16 @@ router.post('/create-session', async (req, res) => {
       : [{
           price_data: {
             currency: 'eur',
-            unit_amount: producto.precio_cents,
+            unit_amount: !isNaN(importeFormulario) ? Math.round(importeFormulario * 100) : producto.precio_cents,
             product_data: {
               name: producto.nombre,
-              description: producto.descripcion,
-              images: [producto.imagen]
+              description: descripcionFormulario || producto.descripcion,
+              images: imagenFormulario ? [imagenFormulario] : [producto.imagen]
             }
           },
           quantity: 1
         }];
+
 
     const session = await stripe.checkout.sessions.create({
       mode: isSuscripcion ? 'subscription' : 'payment',

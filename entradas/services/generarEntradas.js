@@ -1,4 +1,5 @@
 // /entradas/services/generarEntradas.js
+// 
 
 const fs = require('fs/promises');
 const path = require('path');
@@ -80,7 +81,7 @@ async function generarEntradas({
     const buffers = [];
     pdf.on('data', buffers.push.bind(buffers));
 
-    if (imagenFondo) {
+    if (imagenFondo && imagenFondo.startsWith('http')) {
       try {
         const fondoData = await fetch(imagenFondo).then(r => r.arrayBuffer());
         const fondoPath = path.join(__dirname, `../../temp_fondo_${codigo}.jpg`);
@@ -88,7 +89,7 @@ async function generarEntradas({
         pdf.image(fondoPath, 0, 0, { width: 595.28, height: 841.89 });
         await fs.unlink(fondoPath);
       } catch (err) {
-        console.warn(`⚠️ No se pudo cargar imagen de fondo para ${codigo}`);
+        console.warn(`⚠️ No se pudo cargar imagen de fondo para ${codigo}:`, err.message);
       }
     }
 
@@ -110,30 +111,39 @@ async function generarEntradas({
     console.log(`✅ Entrada subida a GCS: ${nombreArchivo}`);
 
     // Registro en hoja del evento
-    await sheets.spreadsheets.values.append({
-      spreadsheetId,
-      range: 'A2',
-      valueInputOption: 'RAW',
-      insertDataOption: 'INSERT_ROWS',
-      requestBody: {
-        values: [
-          [fechaVenta, nombreCompleto, i + 1, codigo, 'NO']
-        ]
-      }
-    });
+    try {
+      await sheets.spreadsheets.values.append({
+        spreadsheetId,
+        range: 'A2',
+        valueInputOption: 'RAW',
+        insertDataOption: 'INSERT_ROWS',
+        requestBody: {
+          values: [
+            [fechaVenta, nombreCompleto, i + 1, codigo, 'NO']
+          ]
+        }
+      });
+    } catch (err) {
+      console.error(`❌ Error registrando en Google Sheets entrada ${codigo}:`, err.message);
+    }
 
-    // Firebase
-    await firestore.collection('entradas').doc(codigo).set({
-      codigo,
-      email,
-      nombre: asistente.nombre,
-      apellidos: asistente.apellidos,
-      slugEvento,
-      fechaEvento,
-      descripcionProducto,
-      usada: false,
-      timestamp: Date.now()
-    });
+    // Registro en Firebase
+    try {
+      await firestore.collection('entradas').doc(codigo).set({
+        codigo,
+        email,
+        nombre: asistente.nombre,
+        apellidos: asistente.apellidos,
+        slugEvento,
+        fechaEvento,
+        descripcionProducto,
+        nEntrada: i + 1,
+        usada: false,
+        timestamp: Date.now()
+      });
+    } catch (err) {
+      console.error(`❌ Error guardando en Firestore entrada ${codigo}:`, err.message);
+    }
 
     entradas.push({ codigo, nombreArchivo, buffer: pdfBuffer });
   }

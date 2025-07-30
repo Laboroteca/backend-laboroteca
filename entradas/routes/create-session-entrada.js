@@ -1,3 +1,6 @@
+// /entradas/routes/create-session-entrada.js
+// 
+
 const express = require('express');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const { emailRegistradoEnWordPress } = require('../utils/wordpress');
@@ -7,7 +10,7 @@ const URL_IMAGEN_DEFAULT = 'https://www.laboroteca.es/wp-content/uploads/2025/07
 
 router.post('/crear-sesion-entrada', async (req, res) => {
   try {
-    const datos = typeof req.body === 'object' ? req.body : (Object.values(req.body)[0] || {});
+    const datos = req.body;
     console.log('📥 Datos recibidos en /crear-sesion-entrada:', datos);
 
     // Campos del comprador
@@ -18,23 +21,25 @@ router.post('/crear-sesion-entrada', async (req, res) => {
     const direccion = (datos.direccion || '').trim();
     const ciudad = (datos.ciudad || '').trim();
     const provincia = (datos.provincia || '').trim();
-    const cp = (datos.CP || datos.cp || '').trim();
+    const cp = (datos.cp || '').trim(); // minúsculas, como en Fluent
 
     // Campos del producto/evento
     const tipoProducto = (datos.tipoProducto || '').trim();
     const nombreProducto = (datos.nombreProducto || '').trim();
     const descripcionProducto = (datos.descripcionProducto || `Entrada "${nombreProducto}"`).trim();
     const direccionEvento = (datos.direccionEvento || '').trim();
-    const imagenEvento = (datos.imagenEvento || URL_IMAGEN_DEFAULT).trim();
+    const imagenPDF = (datos.imagenEvento || '').trim(); // Para el PDF
+    const imagenStripe = URL_IMAGEN_DEFAULT; // Imagen fija para Stripe
     const fechaActuacion = (datos.fechaActuacion || '').trim();
     const formularioId = (datos.formularioId || '').toString().trim();
 
     const totalAsistentes = parseInt(datos.totalAsistentes || '0');
-    const precio = parseFloat((datos.importe || '0').toString().replace(',', '.')) || 0;
+    const importeUnitario = parseFloat((datos.importe || '0').toString().replace(',', '.')) || 0;
+    const precio = totalAsistentes * importeUnitario;
 
     console.log('🧾 Campos procesados:', {
       nombre, apellidos, email, nombreProducto, tipoProducto, descripcionProducto,
-      direccionEvento, imagenEvento, fechaActuacion, formularioId, totalAsistentes, precio
+      direccionEvento, imagenPDF, fechaActuacion, formularioId, totalAsistentes, precio
     });
 
     // Validación de campos obligatorios
@@ -70,7 +75,7 @@ router.post('/crear-sesion-entrada', async (req, res) => {
           product_data: {
             name: nombreProducto,
             description: descripcionProducto,
-            images: [imagenEvento]
+            images: [imagenStripe]
           }
         }
       }],
@@ -89,7 +94,7 @@ router.post('/crear-sesion-entrada', async (req, res) => {
         nombreProducto,
         descripcionProducto,
         direccionEvento,
-        imagenEvento,
+        imagenEvento: imagenPDF,
         fechaActuacion,
         formularioId,
         totalAsistentes: String(totalAsistentes),

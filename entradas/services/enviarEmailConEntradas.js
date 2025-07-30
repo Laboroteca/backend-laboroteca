@@ -1,3 +1,6 @@
+// /entradas/services/enviarEmailConEntradas.js
+// 
+
 const { enviarEmailPersonalizado } = require('../../services/email');
 
 /**

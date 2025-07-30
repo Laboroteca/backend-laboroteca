@@ -14,13 +14,12 @@ const PRODUCTOS = {
     price_id: 'price_1RmY1YEe6Cd77jenSc0mZxBi',
     imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/07/Club-laboroteca-precio-suscripcion-mensual-2.webp'
   },
-  'entrada evento': {
+    'entrada evento': {
     nombre: 'Entrada evento',
     slug: 'entrada-evento',
     descripcion: 'Entrada para evento presencial',
-    price_id: '', // No se usa en pagos únicos
-    imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/07/ENTRADAS-LABOROTECA-scaled.webp',
-    precio_cents: 1500
+    price_id: 'price_1RqWUuEe6Cd77jenDQ3Vu5hY', // ESTE
+    imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/07/ENTRADAS-LABOROTECA-scaled.webp'
   }
 };
 

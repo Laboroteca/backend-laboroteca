@@ -3,6 +3,7 @@
 const express = require('express');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const { emailRegistradoEnWordPress } = require('../utils/wordpress');
+const PRODUCTOS = require('../../utils/productos');
 
 
 const router = express.Router();
@@ -26,6 +27,7 @@ router.post('/crear-sesion-entrada', async (req, res) => {
 
     // Campos del producto/evento
     const tipoProducto = (datos.tipoProducto || '').trim();
+    const producto = PRODUCTOS['entrada evento'];
     const nombreProducto = (datos.nombreProducto || '').trim();
     const descripcionProducto = (datos.descripcionProducto || `Entrada "${nombreProducto}"`).trim();
     const direccionEvento = (datos.direccionEvento || '').trim();
@@ -76,17 +78,10 @@ router.post('/crear-sesion-entrada', async (req, res) => {
     payment_method_types: ['card'],
     customer_email: email,
     line_items: [{
-        quantity: totalAsistentes,
-        price_data: {
-        currency: 'eur',
-        unit_amount: precioUnitarioEnCentimos,
-        product_data: {
-            name: nombreProducto,
-            description: descripcionProducto,
-            images: [imagenStripe]
-        }
-        }
+      quantity: totalAsistentes,
+      price: producto.price_id
     }],
+
     success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(nombreProducto)}`,
     cancel_url: 'https://laboroteca.es/error',
     metadata: {

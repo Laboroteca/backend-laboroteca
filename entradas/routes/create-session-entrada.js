@@ -35,11 +35,9 @@ router.post('/crear-sesion-entrada', async (req, res) => {
 
     // Cálculo del precio (precio fijo por Stripe)
     const totalAsistentes = parseInt(
-      datos.totalAsistentes || 
-      datos.input_totalAsistentes || 
-      datos.input_20 || 
-      '0'
+      String(datos.totalAsistentes || datos.input_totalAsistentes || datos.input_20 || '0').replace(/\D/g, '')
     );
+
 
     const precioTotal = Number.isInteger(totalAsistentes) ? totalAsistentes * 1500 : 0;
 

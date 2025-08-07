@@ -373,6 +373,8 @@ if (event.type === 'invoice.paid') {
       console.log('🧾 importe:', datosCliente.importe);
       console.log('🧾 tipoProducto:', datosCliente.tipoProducto);
 
+      // 🧾 Comprobación de asistentes antes de facturar
+      console.log(`🧾 totalAsistentes para factura: ${datosCliente.totalAsistentes}`);
       const pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
 
       const nombreArchivo = `facturas/${email}/${Date.now()}-${datosCliente.producto}.pdf`;

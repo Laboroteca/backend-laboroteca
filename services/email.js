@@ -6,7 +6,7 @@ const fetch = require('node-fetch');
  * @param {Object} opciones - { to, subject, html, text, pdfBuffer, enviarACopy }
  * @returns {Promise<string>}
  */
-async function enviarEmailPersonalizado({ to, subject, html, text, pdfBuffer = null, enviarACopy = false }) {
+async function enviarEmailPersonalizado({ to, subject, html, text, pdfBuffer = null, enviarACopy = false, attachments = [] }) {
   const destinatarios = Array.isArray(to) ? [...to] : [to];
   if (enviarACopy) destinatarios.push('laboroteca@gmail.com');
 
@@ -36,13 +36,16 @@ También puede reclamar ante la autoridad de control si lo considera necesario.
     text_body: text + '\n\n' + pieText
   };
 
-  if (pdfBuffer && Buffer.isBuffer(pdfBuffer) && pdfBuffer.length > 5000) {
-    body.attachments = [{
-      filename: 'Factura Laboroteca.pdf',
-      fileblob: pdfBuffer.toString('base64'),
-      mimetype: 'application/pdf'
-    }];
-  }
+// 🔁 Añadir adjuntos si vienen por `attachments` o por `pdfBuffer`
+    if (Array.isArray(attachments) && attachments.length > 0) {
+      body.attachments = attachments;
+    } else if (pdfBuffer && Buffer.isBuffer(pdfBuffer) && pdfBuffer.length > 5000) {
+      body.attachments = [{
+        filename: 'Factura Laboroteca.pdf',
+        fileblob: pdfBuffer.toString('base64'),
+        mimetype: 'application/pdf'
+      }];
+    }
 
   const response = await fetch('https://api.smtp2go.com/v3/email/send', {
     method: 'POST',

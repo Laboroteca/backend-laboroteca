@@ -357,6 +357,10 @@ if (event.type === 'invoice.paid') {
       producto: productoNormalizado
     };
 
+    if (productoNormalizado === 'entrada') {
+      datosCliente.totalAsistentes = parseInt(m.totalAsistentes || '0');
+    }
+
     console.log('📦 Procesando producto:', productoSlug, '-', datosCliente.importe, '€');
 
     let errorProcesando = false;

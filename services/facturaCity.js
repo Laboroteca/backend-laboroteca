@@ -94,15 +94,24 @@ async function crearFacturaEnFacturaCity(datosCliente) {
       referencia = 'GUIA001';
     }
 
+    let cantidad = 1;
+
+    // Solo si es producto tipo "entrada", usamos totalAsistentes como cantidad
+    if ((datosCliente.tipoProducto || '').toLowerCase() === 'entrada') {
+      const asistentes = parseInt(datosCliente.totalAsistentes || '1', 10);
+      cantidad = isNaN(asistentes) ? 1 : asistentes;
+    }
+
     const lineas = [
       {
         referencia,
         descripcion,
-        cantidad: 1,
+        cantidad,
         pvpunitario: precioBase,
         codimpuesto: 'IVA21'
       }
     ];
+
 
     const factura = {
       codcliente,

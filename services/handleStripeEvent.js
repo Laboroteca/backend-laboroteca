@@ -423,7 +423,13 @@ if (
   session.payment_status === 'paid'
 ) {
   try {
-    const totalAsistentes = parseInt(datosCliente.totalAsistentes || '0');
+    // 👇 Refuerzo clave: totalAsistentes desde metadata si no viene en datosCliente
+    let totalAsistentes = parseInt(datosCliente.totalAsistentes || '0', 10);
+    if (!totalAsistentes || isNaN(totalAsistentes) || totalAsistentes < 1) {
+      totalAsistentes = parseInt(session.metadata?.totalAsistentes || '0', 10);
+      datosCliente.totalAsistentes = totalAsistentes; // Refuerzo para procesarEntradas
+    }
+
     if (!totalAsistentes || isNaN(totalAsistentes) || totalAsistentes < 1) {
       throw new Error('Número de asistentes inválido para generación de entradas.');
     }

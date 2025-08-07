@@ -72,7 +72,6 @@ Laboroteca`;
     subject,
     html,
     text,
-    pdfBuffer: null,
     attachments
   });
 

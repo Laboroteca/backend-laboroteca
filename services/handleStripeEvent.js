@@ -393,7 +393,9 @@ if (event.type === 'invoice.paid') {
         importe: datosCliente.importe
       });
 
-      await enviarFacturaPorEmail(datosCliente, pdfBuffer);
+      if (datosCliente.tipoProducto?.toLowerCase() !== 'entrada') {
+        await enviarFacturaPorEmail(datosCliente, pdfBuffer);
+      }
 
       
         // 🛡️ Guardar los datos del formulario solo si están completos

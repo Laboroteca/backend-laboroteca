@@ -1,28 +1,20 @@
 const { google } = require('googleapis');
-const { auth } = require('../../google/sheetsAuth'); // Asegúrate de que este archivo contiene tus credenciales
+const { auth } = require('../../google/sheetsAuth');
 
 /**
  * Guarda una entrada en la hoja del evento correspondiente.
- * @param {Object} datos
- * @param {string} datos.sheetId - ID de la hoja del evento
- * @param {string} datos.comprador - Email del comprador
- * @param {string} datos.codigo - Código único de la entrada
- * @param {string} [datos.usado] - "NO" por defecto
- * @param {string} [datos.fecha] - ISO string (opcional, por defecto new Date())
  */
 async function guardarEntradaEnSheet({ sheetId, comprador, codigo, usado = 'NO', fecha = null }) {
   try {
+    const fechaVenta = fecha || new Date().toISOString().split('T')[0];
+    const fila = [fechaVenta, comprador, codigo, usado];
+
+    console.log('📤 Datos que se van a guardar en el sheet:', fila);
+
     const authClient = await auth();
     const sheets = google.sheets({ version: 'v4', auth: authClient });
 
-    const fila = [
-      fecha || new Date().toISOString().split('T')[0],
-      comprador,
-      codigo,
-      usado
-    ];
-
-    await sheets.spreadsheets.values.append({
+    const result = await sheets.spreadsheets.values.append({
       spreadsheetId: sheetId,
       range: 'A:D',
       valueInputOption: 'USER_ENTERED',
@@ -32,7 +24,8 @@ async function guardarEntradaEnSheet({ sheetId, comprador, codigo, usado = 'NO',
       }
     });
 
-    console.log(`✅ Entrada registrada en hoja del evento (${sheetId}): ${codigo}`);
+    console.log('✅ Resultado append:', result.statusText || result.status);
+    console.log(`✅ Entrada registrada correctamente en la hoja (${sheetId}):`, codigo);
   } catch (err) {
     console.error(`❌ Error al guardar entrada en hoja (${sheetId}):`, err.message);
     throw err;

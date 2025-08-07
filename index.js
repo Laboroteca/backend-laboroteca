@@ -50,7 +50,7 @@ app.use('/entradas/sesion', require('./entradas/routes/create-session-entrada'))
 
 const pagoLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 5,
+  max: 500,
   message: { error: 'Demasiados intentos. Inténtalo más tarde.' }
 });
 
@@ -69,6 +69,7 @@ app.get('/', (req, res) => {
 
 app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   const datos = req.body;
+  console.log('📥 Datos recibidos en /crear-sesion-pago:\n', JSON.stringify(datos, null, 2));
 
   const email = (typeof datos.email_autorelleno === 'string' && datos.email_autorelleno.includes('@'))
     ? datos.email_autorelleno.trim().toLowerCase()
@@ -150,10 +151,12 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
     });
 
     return res.json({ url: session.url });
-  } catch (error) {
-    console.error('❌ Error Stripe (crear-sesion-pago):', error.message);
-    return res.status(500).json({ error: 'Error al crear el pago' });
-  }
+    catch (error) {
+      console.error('❌ Error Stripe (crear-sesion-pago):', error.message || error);
+      console.error('❌ Error completo:', error);
+      return res.status(500).json({ error: 'Error al crear el pago' });
+    }
+
 });
 
 app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {

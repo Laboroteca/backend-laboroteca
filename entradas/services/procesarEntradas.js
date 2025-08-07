@@ -62,7 +62,7 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
       fecha: fechaGeneracion
     });
 
-    archivosPDF.push({ buffer: entradaBuffer });
+    archivosPDF.push({ buffer: pdfBuffer }); // ✅ pdfBuffer sí está definido
   }
 
   await enviarEmailConEntradas({

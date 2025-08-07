@@ -1,5 +1,5 @@
 const { google } = require('googleapis');
-const { auth } = require('../../google/sheetsAuth');
+const { auth } = require('../google/sheetsAuth');
 
 /**
  * Guarda una entrada en la hoja del evento correspondiente.

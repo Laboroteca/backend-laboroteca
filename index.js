@@ -86,11 +86,12 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   const nombreProducto = datos.nombreProducto || '';
   const descripcionProducto = datos.descripcionProducto || '';
   const precio = parseFloat((datos.importe || '22.90').toString().replace(',', '.'));
-  let imagenProducto = datos.imagenProducto || '';
-
-  if (!imagenProducto && tipoProducto.toLowerCase() === 'entrada') {
-    imagenProducto = 'https://www.laboroteca.es/wp-content/uploads/2025/07/ENTRADAS-LABOROTECA-scaled.webp';
+  let imagenProducto = datos.imagenProducto?.trim();
+  if (!imagenProducto) {
+    imagenProducto = 'https://www.laboroteca.es/wp-content/uploads/2025/07/LIBRO-POR-DEFECTO.webp'; // o lo que quieras como fallback para libros/cursos
   }
+
+
 
   // Si no hay imagen, no se pone
   if (!imagenProducto) {
@@ -177,7 +178,11 @@ app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
   const nombreProducto = datos.nombreProducto || '';
   const descripcionProducto = datos.descripcionProducto || '';
   const precio = parseFloat((datos.importe || '9.99').toString().replace(',', '.'));
-  const imagenProducto = datos.imagenProducto || 'https://www.laboroteca.es/wp-content/uploads/2025/07/Club-laboroteca-precio-suscripcion-mensual-2.webp';
+  let imagenProducto = datos.imagenProducto?.trim() || '';
+  if (!imagenProducto) {
+    imagenProducto = 'https://www.laboroteca.es/wp-content/uploads/2025/07/Club-laboroteca-precio-suscripcion-mensual-2.webp';
+  }
+
 
   console.log('🧪 tipoProducto:', tipoProducto);
   console.log('🧪 nombreProducto:', nombreProducto);

@@ -151,7 +151,7 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
     });
 
     return res.json({ url: session.url });
-    catch (error) {
+    } catch (error) {
       console.error('❌ Error Stripe (crear-sesion-pago):', error.message || error);
       console.error('❌ Error completo:', error);
       return res.status(500).json({ error: 'Error al crear el pago' });

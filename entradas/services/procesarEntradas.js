@@ -1,6 +1,3 @@
-// /entradas/services/procesarEntradas.js
-// 
-
 const path = require('path');
 const fs = require('fs').promises;
 const dayjs = require('dayjs');
@@ -11,7 +8,15 @@ const { subirEntrada } = require('../utils/gcsEntradas');
 const { guardarEntradaEnSheet } = require('../utils/sheetsEntradas');
 const { enviarEmailConEntradas } = require('./enviarEmailConEntradas');
 
-module.exports = async function procesarEntradas({ session, datosCliente }) {
+/**
+ * Procesa la compra de entradas: genera PDFs, guarda en Sheets y envía email con adjuntos.
+ * 
+ * @param {Object} params
+ * @param {Object} params.session - Sesión de Stripe
+ * @param {Object} params.datosCliente - Datos del comprador
+ * @param {Buffer|null} [params.pdfBuffer] - Factura en PDF (opcional, solo si se ha generado antes)
+ */
+module.exports = async function procesarEntradas({ session, datosCliente, pdfBuffer = null }) {
   const emailComprador = datosCliente.email;
   const nombreActuacion = session.metadata.nombreProducto || 'Evento Laboroteca';
   const fechaActuacion = session.metadata.fechaActuacion || '';
@@ -23,13 +28,10 @@ module.exports = async function procesarEntradas({ session, datosCliente }) {
   if (!formularioId) throw new Error('Falta el formularioId en metadata');
   if (!total || total <= 0) throw new Error('Falta totalAsistentes válido');
 
-  // Extraer asistentes desde metadata
-  // 🔁 Generar entradas anónimas
   const asistentes = Array.from({ length: total }, () => ({
     nombre: '',
     apellidos: ''
   }));
-
 
   const archivosPDF = [];
   const fechaGeneracion = dayjs().format('YYYY-MM-DD HH:mm:ss');
@@ -38,8 +40,7 @@ module.exports = async function procesarEntradas({ session, datosCliente }) {
   for (const [index, asistente] of asistentes.entries()) {
     const codigo = generarCodigoEntrada(slugEvento);
 
-    // 1. Generar PDF
-    const pdfBuffer = await generarEntradaPDF({
+    const entradaBuffer = await generarEntradaPDF({
       nombre: asistente.nombre,
       apellidos: asistente.apellidos,
       codigo,
@@ -48,42 +49,32 @@ module.exports = async function procesarEntradas({ session, datosCliente }) {
       imagenFondo
     });
 
-    // 2. Subir a GCS
     const nombreArchivo = `entradas/${slugEvento}/${codigo}.pdf`;
-    await subirEntrada(nombreArchivo, pdfBuffer);
+    await subirEntrada(nombreArchivo, entradaBuffer);
 
-    // 3. Guardar en hoja del evento
     await guardarEntradaEnSheet({
       sheetId,
       codigo,
-      comprador: emailComprador, // 👈 CAMBIO CLAVE
+      comprador: emailComprador,
       usado: 'NO',
       fecha: fechaGeneracion
     });
 
-
-    // 4. Guardar para enviar por email
-    archivosPDF.push({ buffer: pdfBuffer });
+    archivosPDF.push({ buffer: entradaBuffer });
   }
 
-  // 5. Enviar email con todas las entradas
   await enviarEmailConEntradas({
     email: emailComprador,
     nombre: datosCliente.nombre,
     entradas: archivosPDF,
     descripcionProducto: nombreActuacion,
     importe: datosCliente.importe,
-    facturaAdjunta: datosCliente.facturaBuffer || null
+    facturaAdjunta: pdfBuffer || null // 👈🏼 Se adjunta correctamente aquí
   });
 
   console.log(`✅ Entradas generadas para ${emailComprador}: ${asistentes.length}`);
 };
 
-/**
- * Retorna el ID de la hoja de Google Sheets correspondiente a un formulario de evento
- * @param {string|number} formularioId
- * @returns {string} sheetId
- */
 function obtenerSheetIdPorFormulario(formularioId) {
   const mapa = {
     '22': '1W-0N5kBYxNk_DoSNWDBK7AwkM66mcQIpDHQnPooDW6s',

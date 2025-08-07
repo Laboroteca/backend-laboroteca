@@ -56,13 +56,11 @@ module.exports = async function procesarEntradas({ session, datosCliente }) {
     await guardarEntradaEnSheet({
       sheetId,
       codigo,
-      nombre: asistente.nombre,
-      apellidos: asistente.apellidos,
-      email: emailComprador,
-      fecha: fechaGeneracion,
-      nombreActuacion,
-      usado: 'NO'
+      comprador: emailComprador, // 👈 CAMBIO CLAVE
+      usado: 'NO',
+      fecha: fechaGeneracion
     });
+
 
     // 4. Guardar para enviar por email
     archivosPDF.push({ buffer: pdfBuffer });

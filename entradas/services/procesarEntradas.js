@@ -40,12 +40,14 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
   for (const [index, asistente] of asistentes.entries()) {
     const codigo = generarCodigoEntrada(slugEvento);
 
-    const entradaBuffer = await generarEntradaPDF({
+    const pdfBuffer = await generarEntradaPDF({
       nombre: asistente.nombre,
       apellidos: asistente.apellidos,
       codigo,
       nombreActuacion,
       fechaActuacion,
+      descripcionProducto: session.metadata.descripcionProducto || '',
+      direccionEvento: session.metadata.direccionEvento || '',
       imagenFondo
     });
 

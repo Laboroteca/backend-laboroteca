@@ -374,6 +374,14 @@ if (event.type === 'invoice.paid') {
       console.log('🧾 tipoProducto:', datosCliente.tipoProducto);
 
       // 🧾 Comprobación de asistentes antes de facturar
+      // Refuerzo final ANTES de facturar:
+      if (
+        normalizarProducto(datosCliente.tipoProducto) === 'entrada' &&
+        (!datosCliente.totalAsistentes || parseInt(datosCliente.totalAsistentes, 10) < 1)
+      ) {
+        datosCliente.totalAsistentes = parseInt(session.metadata?.totalAsistentes || '1', 10);
+      }
+
       console.log(`🧾 totalAsistentes para factura: ${datosCliente.totalAsistentes}`);
       const pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
 

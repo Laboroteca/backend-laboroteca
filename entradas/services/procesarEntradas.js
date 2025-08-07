@@ -52,7 +52,7 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
     });
 
     const nombreArchivo = `entradas/${slugEvento}/${codigo}.pdf`;
-    await subirEntrada(nombreArchivo, entradaBuffer);
+    await subirEntrada(nombreArchivo, pdfBuffer);
 
     await guardarEntradaEnSheet({
       sheetId,

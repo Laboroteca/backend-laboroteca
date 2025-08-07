@@ -87,7 +87,7 @@ router.post('/crear-sesion-entrada', async (req, res) => {
           }
         }
       }],
-      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(nombreProducto)}`,
+      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(nombreProducto)}&tipoProducto=${encodeURIComponent(tipoProducto)}`,
       cancel_url: 'https://laboroteca.es/error',
       metadata: {
         nombre,

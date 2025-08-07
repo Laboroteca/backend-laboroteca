@@ -88,10 +88,8 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   const precio = parseFloat((datos.importe || '22.90').toString().replace(',', '.'));
   let imagenProducto = datos.imagenProducto?.trim();
   if (!imagenProducto) {
-    imagenProducto = 'https://www.laboroteca.es/wp-content/uploads/2025/07/LIBRO-POR-DEFECTO.webp'; // o lo que quieras como fallback para libros/cursos
+    imagenProducto = 'https://www.laboroteca.es/wp-content/uploads/2025/06/DE-CARA-A-LA-JUBILACION-PDF-IGNACIO-SOLSONA-ABOGADO-scaled.webp'; // o lo que quieras como fallback para libros/cursos
   }
-
-
 
   // Si no hay imagen, no se pone
   if (!imagenProducto) {

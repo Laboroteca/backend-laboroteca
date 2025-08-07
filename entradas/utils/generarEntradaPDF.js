@@ -19,34 +19,35 @@ async function generarEntradaPDF({
 
   doc.on('data', buffers.push.bind(buffers));
 
-  // Imagen de fondo (JPG por defecto si no se pasa imagenFondo)
+  // Imagen de fondo (usar imagen por defecto si no se especifica)
   const urlFondo = imagenFondo?.startsWith('http')
     ? imagenFondo
     : 'https://www.laboroteca.es/wp-content/uploads/2025/08/entradas-laboroteca-scaled.jpg';
 
   try {
-    const fondoData = await fetch(urlFondo).then(r => r.arrayBuffer());
-    const fondoPath = path.join(__dirname, `../../temp_fondo_${codigo}.jpg`);
-    await fs.writeFile(fondoPath, Buffer.from(fondoData));
-    doc.image(fondoPath, 0, 0, { width: 595.28, height: 841.89 });
-    await fs.unlink(fondoPath);
+    const response = await fetch(urlFondo);
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const tempPath = path.join(__dirname, `../../temp_fondo_${codigo}.jpg`);
+
+    await fs.writeFile(tempPath, buffer);
+    doc.image(tempPath, 0, 0, { width: 595.28, height: 841.89 });
+    await fs.unlink(tempPath);
   } catch (err) {
     console.warn(`⚠️ No se pudo cargar imagen de fondo para ${codigo}:`, err.message);
   }
 
-  // Código QR
+  // Generar código QR
   const qrData = `https://laboroteca.es/validar-entrada?codigo=${codigo}`;
   const qrImage = await QRCode.toBuffer(qrData);
 
-  // Colores y estilos
-  const blanco = '#FFFFFF';
+  // Estilos
   const negro = '#000000';
-
-  // Posiciones dentro del área blanca
   const startX = 200;
   let posY = 150;
   const lineSpacing = 30;
 
+  // Datos sobre fondo blanco
   doc.fillColor(negro).fontSize(16).font('Helvetica-Bold');
   doc.text(`Código: ${codigo}`, startX, posY);
   posY += lineSpacing;
@@ -62,7 +63,7 @@ async function generarEntradaPDF({
 
   doc.font('Helvetica').text(direccionEvento, startX, posY);
 
-  // Imagen del QR en la parte izquierda
+  // Código QR a la izquierda
   doc.image(qrImage, 50, 150, { width: 120 });
 
   doc.end();

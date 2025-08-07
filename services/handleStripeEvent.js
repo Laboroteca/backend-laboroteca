@@ -373,29 +373,35 @@ if (event.type === 'invoice.paid') {
       console.log('🧾 importe:', datosCliente.importe);
       console.log('🧾 tipoProducto:', datosCliente.tipoProducto);
 
-      // 🧾 Comprobación de asistentes antes de facturar
-      // Refuerzo final ANTES de facturar:
-      if (
-        normalizarProducto(datosCliente.tipoProducto) === 'entrada' &&
-        (!datosCliente.totalAsistentes || parseInt(datosCliente.totalAsistentes, 10) < 1)
-      ) {
-        datosCliente.totalAsistentes = parseInt(session.metadata?.totalAsistentes || '1', 10);
-      }
+// 🧾 Comprobación de asistentes antes de facturar
+    if (
+      normalizarProducto(datosCliente.tipoProducto) === 'entrada' &&
+      (!datosCliente.totalAsistentes || parseInt(datosCliente.totalAsistentes, 10) < 1)
+    ) {
+      datosCliente.totalAsistentes = parseInt(session.metadata?.totalAsistentes || '1', 10);
+    }
 
-      console.log(`🧾 totalAsistentes para factura: ${datosCliente.totalAsistentes}`);
-      const pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
+    console.log(`🧾 totalAsistentes para factura: ${datosCliente.totalAsistentes}`);
 
-      const nombreArchivo = `facturas/${email}/${Date.now()}-${datosCliente.producto}.pdf`;
-      await subirFactura(nombreArchivo, pdfBuffer, {
-        email,
-        nombreProducto: datosCliente.producto,
-        tipoProducto: datosCliente.tipoProducto,
-        importe: datosCliente.importe
-      });
+    // 1. Crear factura
+    const pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
 
-      if (datosCliente.tipoProducto?.toLowerCase() !== 'entrada') {
-        await enviarFacturaPorEmail(datosCliente, pdfBuffer);
-      }
+    // 2. Subir factura a GCS
+    const nombreArchivo = `facturas/${email}/${Date.now()}-${datosCliente.producto}.pdf`;
+    await subirFactura(nombreArchivo, pdfBuffer, {
+      email,
+      nombreProducto: datosCliente.producto,
+      tipoProducto: datosCliente.tipoProducto,
+      importe: datosCliente.importe
+    });
+
+    // 3. Enviar factura o preparar envío con entradas
+    if (datosCliente.tipoProducto?.toLowerCase() === 'entrada') {
+      const procesarEntradas = require('../entradas/services/procesarEntradas');
+      await procesarEntradas({ session, datosCliente, pdfBuffer }); // 🔁 PASA pdfBuffer aquí
+    } else {
+      await enviarFacturaPorEmail(datosCliente, pdfBuffer); // 👍 Libros, Club, etc.
+    }
 
       
         // 🛡️ Guardar los datos del formulario solo si están completos

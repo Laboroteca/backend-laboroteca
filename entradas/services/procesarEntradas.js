@@ -24,14 +24,12 @@ module.exports = async function procesarEntradas({ session, datosCliente }) {
   if (!total || total <= 0) throw new Error('Falta totalAsistentes válido');
 
   // Extraer asistentes desde metadata
-  const asistentes = [];
-  for (let i = 1; i <= total; i++) {
-    const nombre = session.metadata[`asistente_${i}_nombre`] || '';
-    const apellidos = session.metadata[`asistente_${i}_apellidos`] || '';
-    if (nombre) asistentes.push({ nombre, apellidos });
-  }
+  // 🔁 Generar entradas anónimas
+  const asistentes = Array.from({ length: total }, () => ({
+    nombre: '',
+    apellidos: ''
+  }));
 
-  if (asistentes.length === 0) throw new Error('No hay asistentes válidos');
 
   const archivosPDF = [];
   const fechaGeneracion = dayjs().format('YYYY-MM-DD HH:mm:ss');

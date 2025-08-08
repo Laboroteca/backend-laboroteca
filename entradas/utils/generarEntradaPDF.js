@@ -15,78 +15,91 @@ async function generarEntradaPDF({
 }) {
   const doc = new PDFDocument({ size: 'A4', margin: 0 });
   const buffers = [];
-
   doc.on('data', buffers.push.bind(buffers));
 
-  // Imagen de fondo (mantener proporciones, centrada)
+  // Imagen de fondo con proporción
   const urlFondo = imagenFondo?.startsWith('http')
     ? imagenFondo
     : 'https://www.laboroteca.es/wp-content/uploads/2025/08/entradas-laboroteca-1.jpg';
 
   try {
     const response = await fetch(urlFondo);
-    if (!response.ok) throw new Error(`Error ${response.status} al descargar la imagen`);
+    if (!response.ok) throw new Error(`Error ${response.status} al descargar imagen`);
 
     const arrayBuffer = await response.arrayBuffer();
     const inputBuffer = Buffer.from(arrayBuffer);
-
     const pngBuffer = await sharp(inputBuffer).png().toBuffer();
     const metadata = await sharp(pngBuffer).metadata();
 
-    const imageWidth = metadata.width;
-    const imageHeight = metadata.height;
-    const pageWidth = doc.page.width;
-    const pageHeight = doc.page.height;
-
-    const scale = Math.min(pageWidth / imageWidth, pageHeight / imageHeight);
-    const renderWidth = imageWidth * scale;
-    const renderHeight = imageHeight * scale;
-
-    const x = (pageWidth - renderWidth) / 2;
-    const y = (pageHeight - renderHeight) / 2;
+    const scale = Math.min(doc.page.width / metadata.width, doc.page.height / metadata.height);
+    const renderWidth = metadata.width * scale;
+    const renderHeight = metadata.height * scale;
+    const x = (doc.page.width - renderWidth) / 2;
+    const y = (doc.page.height - renderHeight) / 2;
 
     doc.image(pngBuffer, x, y, { width: renderWidth, height: renderHeight });
-
-    console.log(`✅ Imagen de fondo aplicada correctamente para ${codigo}`);
   } catch (err) {
     console.warn(`⚠️ No se pudo cargar imagen de fondo para ${codigo}:`, err.message);
   }
 
-  // Generar QR
-  const qrData = `https://laboroteca.es/validar-entrada?codigo=${codigo}`;
-  const qrImage = await QRCode.toBuffer(qrData);
+  // QR a la izquierda
+  const qrX = 50;
+  const qrY = 100;
+  const qrSize = 200;
+  const qrBuffer = await QRCode.toBuffer(`https://laboroteca.es/validar-entrada?codigo=${codigo}`);
+  doc.image(qrBuffer, qrX, qrY, { width: qrSize });
 
-  // 🔲 FONDO BLANCO RECTANGULAR
-  const boxX = 50;
-  const boxY = 500;
-  const boxWidth = 500;
-  const boxHeight = 200;
+  // "Código" arriba a la derecha del QR
+  const textX = qrX + qrSize + 20;
+  let posY = qrY;
+  const lineHeight = 40;
+  const boxPadding = 10;
+  const boxWidth = 300;
 
-  doc.rect(boxX, boxY, boxWidth, boxHeight).fillOpacity(0.9).fill('white');
+  const drawTextBox = (texto, fontSize = 18, bold = false) => {
+    const boxHeight = lineHeight;
+    doc.fillColor('white')
+      .rect(textX, posY, boxWidth, boxHeight)
+      .fill();
+    doc.fillColor('black')
+      .font(bold ? 'Helvetica-Bold' : 'Helvetica')
+      .fontSize(fontSize)
+      .text(texto, textX + boxPadding, posY + 10, {
+        width: boxWidth - 2 * boxPadding,
+        align: 'left'
+      });
+    posY += boxHeight + 10;
+  };
 
-  // Volver al modo normal de escritura
-  doc.fillOpacity(1);
+  drawTextBox(`Código: ${codigo}`, 18, true);
 
-  // ⬇️ QR
-  doc.image(qrImage, boxX + 20, boxY + 20, { width: 100 });
+  // Bajar "Entrada para" y "Fecha"
+  posY = qrY + qrSize - 20;
+  drawTextBox(`Entrada para:`, 18, true);
+  drawTextBox(fechaActuacion, 18);
 
-  // ⬇️ Texto debajo del QR, alineado a la derecha del QR
-  const textX = boxX + 140;
-  let posY = boxY + 25;
-  const lineSpacing = 25;
+  // Campos largos, A LA IZQUIERDA, MISMO X que el QR
+  const bottomX = qrX;
+  let bottomY = qrY + qrSize + 60;
+  const bottomWidth = 500;
 
-  doc.fillColor('black').fontSize(14).font('Helvetica-Bold');
-  doc.text(`Código: ${codigo}`, textX, posY);
-  posY += lineSpacing;
+  const drawBottomBox = (texto, fontSize = 18, bold = false) => {
+    const boxHeight = lineHeight;
+    doc.fillColor('white')
+      .rect(bottomX, bottomY, bottomWidth, boxHeight)
+      .fill();
+    doc.fillColor('black')
+      .font(bold ? 'Helvetica-Bold' : 'Helvetica')
+      .fontSize(fontSize)
+      .text(texto, bottomX + boxPadding, bottomY + 10, {
+        width: bottomWidth - 2 * boxPadding,
+        align: 'left'
+      });
+    bottomY += boxHeight + 10;
+  };
 
-  doc.text(`Fecha:`, textX, posY);
-  doc.font('Helvetica').text(fechaActuacion, textX + 60, posY);
-  posY += lineSpacing;
-
-  doc.font('Helvetica-Bold').text(descripcionProducto, textX, posY, { width: boxWidth - 160 });
-  posY += lineSpacing;
-
-  doc.font('Helvetica').text(direccionEvento, textX, posY, { width: boxWidth - 160 });
+  drawBottomBox(descripcionProducto, 18, true);
+  drawBottomBox(direccionEvento, 16);
 
   doc.end();
 

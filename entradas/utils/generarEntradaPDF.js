@@ -17,17 +17,14 @@ async function generarEntradaPDF({
   const buffers = [];
   doc.on('data', buffers.push.bind(buffers));
 
-  // Imagen de fondo con proporción
+  // Fondo completo sin deformar
   const urlFondo = imagenFondo?.startsWith('http')
     ? imagenFondo
     : 'https://www.laboroteca.es/wp-content/uploads/2025/08/entradas-laboroteca-1.jpg';
 
   try {
     const response = await fetch(urlFondo);
-    if (!response.ok) throw new Error(`Error ${response.status} al descargar imagen`);
-
-    const arrayBuffer = await response.arrayBuffer();
-    const inputBuffer = Buffer.from(arrayBuffer);
+    const inputBuffer = Buffer.from(await response.arrayBuffer());
     const pngBuffer = await sharp(inputBuffer).png().toBuffer();
     const metadata = await sharp(pngBuffer).metadata();
 
@@ -42,64 +39,34 @@ async function generarEntradaPDF({
     console.warn(`⚠️ No se pudo cargar imagen de fondo para ${codigo}:`, err.message);
   }
 
-  // QR a la izquierda
+  // 📌 QR
+  const qrBuffer = await QRCode.toBuffer(`https://laboroteca.es/validar-entrada?codigo=${codigo}`);
   const qrX = 50;
   const qrY = 100;
   const qrSize = 200;
-  const qrBuffer = await QRCode.toBuffer(`https://laboroteca.es/validar-entrada?codigo=${codigo}`);
   doc.image(qrBuffer, qrX, qrY, { width: qrSize });
 
-  // "Código" arriba a la derecha del QR
-  const textX = qrX + qrSize + 20;
-  let posY = qrY;
-  const lineHeight = 40;
-  const boxPadding = 10;
-  const boxWidth = 300;
+  // 📌 Código debajo del QR
+  doc.fillColor('black')
+    .font('Helvetica-Bold')
+    .fontSize(16)
+    .text(`Código: ${codigo}`, qrX, qrY + qrSize + 10);
 
-  const drawTextBox = (texto, fontSize = 18, bold = false) => {
-    const boxHeight = lineHeight;
-    doc.fillColor('white')
-      .rect(textX, posY, boxWidth, boxHeight)
-      .fill();
-    doc.fillColor('black')
-      .font(bold ? 'Helvetica-Bold' : 'Helvetica')
-      .fontSize(fontSize)
-      .text(texto, textX + boxPadding, posY + 10, {
-        width: boxWidth - 2 * boxPadding,
-        align: 'left'
-      });
-    posY += boxHeight + 10;
-  };
+  // 📌 Textos informativos encima de la imagen, alineados a la izquierda
+  let textX = 50;
+  let textY = 360;
+  const lineSpacing = 28;
 
-  drawTextBox(`Código: ${codigo}`, 18, true);
+  doc.fontSize(16).font('Helvetica-Bold').text(`Entrada para:`, textX, textY);
+  textY += lineSpacing;
 
-  // Bajar "Entrada para" y "Fecha"
-  posY = qrY + qrSize - 20;
-  drawTextBox(`Entrada para:`, 18, true);
-  drawTextBox(fechaActuacion, 18);
+  doc.font('Helvetica').text(fechaActuacion, textX, textY);
+  textY += lineSpacing;
 
-  // Campos largos, A LA IZQUIERDA, MISMO X que el QR
-  const bottomX = qrX;
-  let bottomY = qrY + qrSize + 60;
-  const bottomWidth = 500;
+  doc.font('Helvetica-Bold').text(descripcionProducto, textX, textY);
+  textY += lineSpacing;
 
-  const drawBottomBox = (texto, fontSize = 18, bold = false) => {
-    const boxHeight = lineHeight;
-    doc.fillColor('white')
-      .rect(bottomX, bottomY, bottomWidth, boxHeight)
-      .fill();
-    doc.fillColor('black')
-      .font(bold ? 'Helvetica-Bold' : 'Helvetica')
-      .fontSize(fontSize)
-      .text(texto, bottomX + boxPadding, bottomY + 10, {
-        width: bottomWidth - 2 * boxPadding,
-        align: 'left'
-      });
-    bottomY += boxHeight + 10;
-  };
-
-  drawBottomBox(descripcionProducto, 18, true);
-  drawBottomBox(direccionEvento, 16);
+  doc.font('Helvetica').text(direccionEvento, textX, textY);
 
   doc.end();
 

@@ -91,8 +91,8 @@ async function marcarEntradaComoUsada(codigoEntrada, slugEvento) {
     console.log(`🎟️ Entrada ${codigoEntrada} marcada como usada en fila ${filaEncontrada}`);
     return { emailComprador, nombreAsistente };
   } catch (err) {
-    console.error('❌ Error al marcar entrada como usada:', err.message);
-    return { error: 'Error al actualizar la hoja.' };
+    console.error('❌ Error al marcar entrada como usada:', err);
+    return { error: `Error al actualizar la hoja: ${err.message}` };
   }
 }
 

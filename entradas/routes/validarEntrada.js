@@ -19,46 +19,60 @@ const TOKEN_VALIDACION = process.env.VALIDADOR_ENTRADAS_TOKEN || '123456';
 router.post('/validar-entrada', async (req, res) => {
   try {
     const token = req.headers['x-laboroteca-token'];
+    console.log('🔐 Token recibido:', token);
+
     if (token !== TOKEN_VALIDACION) {
+      console.warn('❌ Token no autorizado');
       return res.status(403).json({ error: 'Token no autorizado.' });
     }
 
     const { codigoEntrada, slugEvento } = req.body;
+    console.log('📨 Datos recibidos:', { codigoEntrada, slugEvento });
 
     if (!codigoEntrada || !slugEvento) {
+      console.warn('⚠️ Faltan campos obligatorios');
       return res.status(400).json({ error: 'Faltan campos obligatorios.' });
     }
 
-    const docRef = firestore.collection('entradasValidadas').doc(codigoEntrada);
+    const codigoLimpio = String(codigoEntrada).trim();
+    if (!codigoLimpio || codigoLimpio.includes('//')) {
+      console.warn('⚠️ Código de entrada inválido:', codigoLimpio);
+      return res.status(400).json({ error: 'Código de entrada inválido.' });
+    }
+
+    const docRef = firestore.collection('entradasValidadas').doc(codigoLimpio);
     const docSnap = await docRef.get();
 
     if (docSnap.exists) {
+      console.warn('⚠️ Entrada ya validada previamente en Firestore');
       return res.status(409).json({ error: 'Entrada ya validada.' });
     }
 
-    // Buscar entrada en Google Sheets y marcar como usada
-    const resultado = await marcarEntradaComoUsada(codigoEntrada, slugEvento);
+    console.log('🔍 Buscando código en hoja de Google Sheets...');
+    const resultado = await marcarEntradaComoUsada(codigoLimpio, slugEvento);
+    console.log('📋 Resultado de Sheets:', resultado);
 
     if (!resultado || resultado.error) {
+      console.warn('❌ Código no encontrado o error en Sheets:', resultado?.error);
       return res.status(404).json({ error: resultado?.error || 'Código no encontrado.' });
     }
 
     const { emailComprador, nombreAsistente } = resultado;
 
-    // Registrar validación en Firestore
     await docRef.set({
       validado: true,
       fechaValidacion: dayjs().toISOString(),
       validador: 'Ignacio',
       emailComprador,
       nombreAsistente,
-      evento: codigoEntrada.split('-')[0] || '',
+      evento: codigoLimpio.split('-')[0] || '',
       slugEvento
     });
 
+    console.log(`✅ Entrada ${codigoLimpio} validada correctamente.`);
     return res.json({ ok: true, mensaje: 'Entrada validada correctamente.' });
   } catch (err) {
-    console.error('❌ Error en /validar-entrada:', err);
+    console.error('❌ Error en /validar-entrada:', err.stack || err);
     return res.status(500).json({ error: 'Error interno al validar entrada.' });
   }
 });

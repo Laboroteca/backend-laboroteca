@@ -17,40 +17,68 @@ async function generarEntradaPDF({
   const buffers = [];
   doc.on('data', buffers.push.bind(buffers));
 
-  // ✅ Fondo arriba, con proporciones
+  // ✅ Imagen con proporción real
   const urlFondo = imagenFondo?.startsWith('http')
     ? imagenFondo
     : 'https://www.laboroteca.es/wp-content/uploads/2025/08/entradas-laboroteca-1.jpg';
 
-  let imagenHeight = 400; // Altura reservada para la imagen
+  let imagenHeight = 0;
 
   try {
     const response = await fetch(urlFondo);
     const inputBuffer = Buffer.from(await response.arrayBuffer());
-    const pngBuffer = await sharp(inputBuffer).resize({ height: imagenHeight }).png().toBuffer();
+    const metadata = await sharp(inputBuffer).metadata();
 
-    doc.image(pngBuffer, 0, 0, { width: doc.page.width, height: imagenHeight });
+    const renderWidth = doc.page.width;
+    const scale = renderWidth / metadata.width;
+    imagenHeight = metadata.height * scale;
+
+    const resizedImage = await sharp(inputBuffer)
+      .resize({ width: Math.round(renderWidth) })
+      .png()
+      .toBuffer();
+
+    doc.image(resizedImage, 0, 0, { width: renderWidth });
   } catch (err) {
     console.warn(`⚠️ No se pudo cargar imagen de fondo para ${codigo}:`, err.message);
   }
 
-  // ✅ QR DENTRO DE LA IMAGEN
+  // ✅ QR dentro de la imagen
   const qrSize = 150;
   const qrX = 50;
   const qrY = 50;
   const qrBuffer = await QRCode.toBuffer(`https://laboroteca.es/validar-entrada?codigo=${codigo}`);
 
-  // Fondo blanco detrás del QR
+  // Fondo blanco QR
   doc.fillColor('white').rect(qrX - 10, qrY - 10, qrSize + 20, qrSize + 20).fill();
   doc.image(qrBuffer, qrX, qrY, { width: qrSize });
 
-  // ✅ Código debajo del QR, también sobre fondo blanco
-  const codigoY = qrY + qrSize + 15;
-  doc.fillColor('white').rect(qrX - 10, codigoY - 5, 200, 25).fill();
-  doc.fillColor('black').fontSize(14).font('Helvetica-Bold').text(`Código: ${codigo}`, qrX, codigoY);
+  // ✅ Código con margen y subrayado ajustado al texto
+  const codigoTexto = `Código: ${codigo}`;
+  const codigoFontSize = 18;
+  const paddingX = 6;
+  const paddingY = 4;
 
-  // ✅ TEXTOS FUERA DE LA IMAGEN
-  let textY = imagenHeight + 50;
+  const textWidth = doc.widthOfString(codigoTexto, {
+    font: 'Helvetica-Bold',
+    size: codigoFontSize
+  });
+  const textHeight = doc.currentLineHeight();
+
+  const codigoX = qrX;
+  const codigoY = qrY + qrSize + 20;
+
+  doc.fillColor('white')
+    .rect(codigoX - paddingX, codigoY - paddingY, textWidth + 2 * paddingX, textHeight + 2 * paddingY)
+    .fill();
+
+  doc.fillColor('black')
+    .font('Helvetica-Bold')
+    .fontSize(codigoFontSize)
+    .text(codigoTexto, codigoX, codigoY);
+
+  // ✅ Textos debajo de la imagen
+  let textY = imagenHeight + 40;
   const textX = 50;
   const lineSpacing = 28;
 

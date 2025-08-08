@@ -10,7 +10,6 @@ const express = require('express');
 const router = express.Router();
 const admin = require('../../firebase');
 const firestore = admin.firestore();
-
 const { marcarEntradaComoUsada } = require('../utils/sheetsEntradas');
 const dayjs = require('dayjs');
 
@@ -34,7 +33,18 @@ router.post('/validar-entrada', async (req, res) => {
       return res.status(400).json({ error: 'Faltan campos obligatorios.' });
     }
 
-    const codigoLimpio = String(codigoEntrada).trim();
+    // Limpieza del código en caso de que venga como URL completa
+    let codigoLimpio = String(codigoEntrada).trim();
+    if (codigoLimpio.startsWith('http')) {
+      try {
+        const url = new URL(codigoLimpio);
+        codigoLimpio = url.searchParams.get('codigo') || codigoLimpio;
+        console.log('🔍 Código extraído de URL:', codigoLimpio);
+      } catch (err) {
+        console.warn('⚠️ No se pudo parsear la URL del código. Se usará valor original.');
+      }
+    }
+
     if (!codigoLimpio || codigoLimpio.includes('//')) {
       console.warn('⚠️ Código de entrada inválido:', codigoLimpio);
       return res.status(400).json({ error: 'Código de entrada inválido.' });

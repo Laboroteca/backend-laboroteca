@@ -51,6 +51,18 @@ async function marcarEntradaComoUsada(codigoEntrada, slugEvento) {
       throw new Error('Slug de evento no válido.');
     }
 
+    // Limpieza por si llega URL en vez de solo el código
+    let codigo = codigoEntrada.trim();
+    if (codigo.startsWith('http')) {
+      try {
+        const url = new URL(codigoEntrada);
+        codigo = url.searchParams.get('codigo') || codigoEntrada;
+        console.log('🔍 Código extraído de URL:', codigo);
+      } catch (err) {
+        console.warn('⚠️ Error al parsear código como URL. Se usará valor original.');
+      }
+    }
+
     const authClient = await auth();
     const sheets = google.sheets({ version: 'v4', auth: authClient });
 
@@ -64,8 +76,8 @@ async function marcarEntradaComoUsada(codigoEntrada, slugEvento) {
 
     for (let i = 1; i < filas.length; i++) {
       const fila = filas[i];
-      if (fila[2] && fila[2].trim() === codigoEntrada.trim()) {
-        filaEncontrada = i + 1; // las filas en A1 notation son 1-based
+      if (fila[2] && fila[2].trim() === codigo.trim()) {
+        filaEncontrada = i + 1; // A1 notation
         break;
       }
     }
@@ -75,7 +87,7 @@ async function marcarEntradaComoUsada(codigoEntrada, slugEvento) {
     }
 
     // Marcar como usada (columna D)
-    const updateRes = await sheets.spreadsheets.values.update({
+    await sheets.spreadsheets.values.update({
       spreadsheetId: sheetId,
       range: `D${filaEncontrada}`,
       valueInputOption: 'USER_ENTERED',
@@ -86,9 +98,9 @@ async function marcarEntradaComoUsada(codigoEntrada, slugEvento) {
 
     const filaOriginal = filas[filaEncontrada - 1] || [];
     const emailComprador = filaOriginal[1] || '';
-    const nombreAsistente = ''; // puedes añadirlo si lo incluyes en futuras columnas
+    const nombreAsistente = ''; // puedes completarlo si decides añadir la columna
 
-    console.log(`🎟️ Entrada ${codigoEntrada} marcada como usada en fila ${filaEncontrada}`);
+    console.log(`🎟️ Entrada ${codigo} marcada como usada en fila ${filaEncontrada}`);
     return { emailComprador, nombreAsistente };
   } catch (err) {
     console.error('❌ Error al marcar entrada como usada:', err);

@@ -23,6 +23,8 @@ const { syncMemberpressClub } = require('./services/syncMemberpressClub');
 const desactivarMembresiaClubForm = require('./routes/desactivarMembresiaClub');
 const desactivarMembresiaClub = require('./services/desactivarMembresiaClub');
 const { registrarBajaClub } = require('./services/registrarBajaClub');
+const validarEntrada = require('./entradas/routes/validarEntrada');
+
 
 const app = express();
 app.set('trust proxy', 1);
@@ -50,10 +52,11 @@ app.use(require('./routes/confirmarEliminaciondecuenta'));
 app.use('/entradas/crear', require('./entradas/routes/crearEntrada'));
 app.use('/entradas/sesion', require('./entradas/routes/create-session-entrada'));
 
+app.use('/', validarEntrada);
 
 const pagoLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 500,
+  max: 5,
   message: { error: 'Demasiados intentos. Inténtalo más tarde.' }
 });
 

@@ -16,7 +16,6 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
-
 const { eliminarUsuarioWordPress } = require('./services/eliminarUsuarioWordPress');
 const procesarCompra = require('./services/procesarCompra');
 const { activarMembresiaClub } = require('./services/activarMembresiaClub');
@@ -25,16 +24,18 @@ const desactivarMembresiaClubForm = require('./routes/desactivarMembresiaClub');
 const desactivarMembresiaClub = require('./services/desactivarMembresiaClub');
 const { registrarBajaClub } = require('./services/registrarBajaClub');
 
-const app = express(); // ✅ solo una vez
+const app = express();
 app.set('trust proxy', 1);
 
-// ✅ CORS unificado que mantiene todo funcionando (libro, club, entradas QR)
-app.use(cors({
-  origin: 'https://www.laboroteca.es', // puedes usar '*' en local si hace falta
+const corsOptions = {
+  origin: 'https://www.laboroteca.es', // o '*' en desarrollo
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-LABOROTECA-TOKEN'],
   credentials: true
-}));
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); // ✅ preflight universal
 
 
 // ⚠️ WEBHOOK: SIEMPRE EL PRIMERO Y EN RAW

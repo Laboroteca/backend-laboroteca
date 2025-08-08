@@ -7,9 +7,10 @@ const { generarEntradaPDF } = require('../utils/generarEntradaPDF');
 const { subirEntrada } = require('../utils/gcsEntradas');
 const { guardarEntradaEnSheet } = require('../utils/sheetsEntradas');
 const { enviarEmailConEntradas } = require('./enviarEmailConEntradas');
+const { registrarEntradaFirestore } = require('./registrarEntradaFirestore');
 
 /**
- * Procesa la compra de entradas: genera PDFs, guarda en Sheets y envía email con adjuntos.
+ * Procesa la compra de entradas: genera PDFs, guarda en Sheets, Firestore y envía email con adjuntos.
  * 
  * @param {Object} params
  * @param {Object} params.session - Sesión de Stripe
@@ -62,7 +63,15 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
       fecha: fechaGeneracion
     });
 
-    archivosPDF.push({ buffer: pdfBuffer }); // ✅ pdfBuffer sí está definido
+    await registrarEntradaFirestore({
+      codigoEntrada: codigo,
+      emailComprador,
+      nombreAsistente: `${asistente.nombre} ${asistente.apellidos}`.trim(),
+      slugEvento,
+      nombreEvento: nombreActuacion
+    });
+
+    archivosPDF.push({ buffer: pdfBuffer });
   }
 
   await enviarEmailConEntradas({
@@ -71,7 +80,7 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
     entradas: archivosPDF,
     descripcionProducto: nombreActuacion,
     importe: datosCliente.importe,
-    facturaAdjunta: pdfBuffer || null // 👈🏼 Se adjunta correctamente aquí
+    facturaAdjunta: pdfBuffer || null
   });
 
   console.log(`✅ Entradas generadas para ${emailComprador}: ${asistentes.length}`);

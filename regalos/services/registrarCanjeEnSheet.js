@@ -1,8 +1,8 @@
 const { google } = require('googleapis');
 const dayjs = require('dayjs');
-const auth = require('../../google/auth');
+const { auth } = require('../../entradas/google/sheetsAuth'); // ✅ Usamos el auth centralizado
 
-const SHEET_ID_CANJES = '1XTIArNAGJXBhgBAyKuRfSSsUNzDOYg0aJKkLyC0ARdo';
+const SHEET_ID_CANJES = '1XTIArNAGJXBhgBAyKuRfSSsUNzDOYg0aJKkLyC0ARdo'; // ⚠️ Asegúrate de que exista
 const SHEET_NAME_CANJES = 'Hoja 1';
 
 /**
@@ -17,7 +17,8 @@ const SHEET_NAME_CANJES = 'Hoja 1';
  * @param {string} params.libro
  */
 module.exports = async function registrarCanjeEnSheet({ nombre, apellidos, email, codigo, libro }) {
-  const sheets = google.sheets({ version: 'v4', auth });
+  const authClient = await auth();
+  const sheets = google.sheets({ version: 'v4', auth: authClient });
 
   const timestamp = dayjs().format('YYYY-MM-DD HH:mm:ss');
   const codigoLimpio = (codigo || '').trim().toUpperCase();

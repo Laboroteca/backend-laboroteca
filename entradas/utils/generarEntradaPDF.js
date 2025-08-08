@@ -106,41 +106,44 @@ async function generarEntradaPDF({
   textY += etiquetaHeight + 15;
 
   // ✅ Texto promocional
-  const promoX = 50;
-  const promoWidth = doc.page.width - 100;
-  const intro1 = 'Si quieres acceder a contenido exclusivo sobre Derechos Laborales y Seguridad Social, puedes hacerte socio del ';
-  const clubTexto = 'Club Laboroteca';
-  const intro2 = ', por una cuota de 9,99 € / mes y sin compromiso de permanencia.';
+const promoX = 50;
+const promoWidth = doc.page.width - 100;
+const intro1 = 'Si quieres acceder a contenido exclusivo sobre Derechos Laborales y Seguridad Social, puedes hacerte socio del ';
+const clubTexto = 'Club Laboroteca';
+const intro2 = ', por una cuota de 9,99 € / mes y sin compromiso de permanencia.';
 
-  doc.font('Helvetica-Bold').fontSize(12).fillColor('black')
-    .text(intro1, promoX, textY, { width: promoWidth, continued: true });
+doc.font('Helvetica-Bold').fontSize(12).fillColor('black')
+  .text(intro1, promoX, textY, { width: promoWidth, continued: true });
 
-  doc.font('Helvetica-Bold').fillColor('black').underline(doc.x, textY, doc.widthOfString(clubTexto), 12)
-    .text(clubTexto, { continued: true });
+doc.font('Helvetica-Bold').fillColor('black')
+  .text(clubTexto, {
+    underline: true,
+    continued: true
+  });
 
-  doc.text(intro2);
-  textY = doc.y + 10;
+doc.text(intro2);
+textY = doc.y + 10;
 
-  // ✅ Tabla 2x2 con emojis
-  const tablaItems = [
-    ['🎥', 'Vídeos exclusivos'],
-    ['🎙️', 'Podcast “Te lo has currado”'],
-    ['📄', 'Artículos exclusivos'],
-    ['📰', 'Noticias y sentencias novedosas']
-  ];
+// ✅ Tabla 2x2 con ✔
+const tablaItems = [
+  ['✔', 'Vídeos exclusivos'],
+  ['✔', 'Podcast “Te lo has currado”'],
+  ['✔', 'Artículos exclusivos'],
+  ['✔', 'Noticias y sentencias novedosas']
+];
 
-  const colWidth = (doc.page.width - 100) / 2;
-  const rowHeight = 24;
+const colWidth = (doc.page.width - 100) / 2;
+const rowHeight = 24;
 
-  doc.font('Helvetica');
-  for (let i = 0; i < tablaItems.length; i += 2) {
-    const rowY = textY + (i / 2) * rowHeight;
-    const [emoji1, texto1] = tablaItems[i];
-    const [emoji2, texto2] = tablaItems[i + 1];
+doc.font('Helvetica');
+for (let i = 0; i < tablaItems.length; i += 2) {
+  const rowY = textY + (i / 2) * rowHeight;
+  const [icon1, texto1] = tablaItems[i];
+  const [icon2, texto2] = tablaItems[i + 1];
 
-    doc.text(`${emoji1} ${texto1}`, promoX, rowY, { width: colWidth });
-    doc.text(`${emoji2} ${texto2}`, promoX + colWidth, rowY, { width: colWidth });
-  }
+  doc.text(`${icon1} ${texto1}`, promoX, rowY, { width: colWidth });
+  doc.text(`${icon2} ${texto2}`, promoX + colWidth, rowY, { width: colWidth });
+}
 
   // ✅ Imagen promocional
   const clubImgURL = 'https://www.laboroteca.es/wp-content/uploads/2025/08/CLUB-LABOROTECA-scaled.jpg';

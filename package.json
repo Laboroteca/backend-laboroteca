@@ -29,6 +29,7 @@
     "nodemailer": "^7.0.2",
     "pdfkit": "^0.17.1",
     "qrcode": "^1.5.4",
+    "sharp": "^0.34.3",
     "stripe": "^18.1.0"
   },
   "devDependencies": {

@@ -1,8 +1,7 @@
 const PDFDocument = require('pdfkit');
 const QRCode = require('qrcode');
 const fetch = require('node-fetch');
-const fs = require('fs/promises');
-const path = require('path');
+const sharp = require('sharp');
 
 async function generarEntradaPDF({
   nombre,
@@ -26,13 +25,18 @@ async function generarEntradaPDF({
 
   try {
     const response = await fetch(urlFondo);
-    const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    const tempPath = path.join(__dirname, `../../temp_fondo_${codigo}.jpg`);
+    if (!response.ok) throw new Error(`Error ${response.status} al descargar la imagen`);
 
-    await fs.writeFile(tempPath, buffer);
-    doc.image(tempPath, 0, 0, { width: 595.28, height: 841.89 });
-    await fs.unlink(tempPath);
+    const arrayBuffer = await response.arrayBuffer();
+    const inputBuffer = Buffer.from(arrayBuffer);
+
+    // Convertir a PNG con sharp para que PDFKit la entienda
+    const pngBuffer = await sharp(inputBuffer).png().toBuffer();
+
+    // Insertar imagen convertida en el PDF
+    doc.image(pngBuffer, 0, 0, { width: doc.page.width, height: doc.page.height });
+
+    console.log(`✅ Imagen de fondo aplicada correctamente para ${codigo}`);
   } catch (err) {
     console.warn(`⚠️ No se pudo cargar imagen de fondo para ${codigo}:`, err.message);
   }
@@ -47,7 +51,7 @@ async function generarEntradaPDF({
   let posY = 150;
   const lineSpacing = 30;
 
-  // Datos sobre fondo blanco
+  // Texto sobre fondo
   doc.fillColor(negro).fontSize(16).font('Helvetica-Bold');
   doc.text(`Código: ${codigo}`, startX, posY);
   posY += lineSpacing;

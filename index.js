@@ -48,6 +48,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(require('./routes/solicitarEliminacionCuenta'));
 app.use(require('./routes/confirmarEliminaciondecuenta'));
+app.use(require('./regalos/routes/canjear-codigo'));
 
 app.use('/entradas/crear', require('./entradas/routes/crearEntrada'));
 app.use('/entradas/sesion', require('./entradas/routes/create-session-entrada'));

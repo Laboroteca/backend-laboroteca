@@ -2,7 +2,7 @@ const admin = require('../../firebase');
 const firestore = admin.firestore();
 const dayjs = require('dayjs');
 const { google } = require('googleapis');
-const auth = require('../../google/auth');
+const { auth } = require('../../entradas/google/sheetsAuth');
 
 const marcarCodigoComoCanjeado = require('./marcarCodigoComoCanjeado');
 const activarMembresiaPorRegalo = require('./activarMembresiaPorRegalo');
@@ -31,7 +31,8 @@ module.exports = async function canjearCodigoRegalo({
   libro_elegido,
   codigoRegalo,
 }) {
-  const sheets = google.sheets({ version: 'v4', auth });
+  const authClient = await auth();
+  const sheets = google.sheets({ version: 'v4', auth: authClient });
   const codigo = (codigoRegalo || '').trim().toUpperCase();
   const timestamp = dayjs().format('YYYY-MM-DD HH:mm:ss');
   const emailNormalizado = (email || '').trim().toLowerCase();

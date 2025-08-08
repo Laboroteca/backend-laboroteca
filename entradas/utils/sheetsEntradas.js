@@ -46,10 +46,8 @@ async function guardarEntradaEnSheet({ sheetId, comprador, codigo, usado = 'NO',
  */
 async function marcarEntradaComoUsada(codigoEntrada, slugEvento) {
   try {
-    const sheetId = SHEETS_EVENTOS[slugEvento];
-    if (!sheetId) {
-      throw new Error('Slug de evento no válido.');
-    }
+    const spreadsheetId = SHEETS_EVENTOS[slugEvento];
+    if (!spreadsheetId) throw new Error('Slug de evento no válido.');
 
     // Limpieza por si llega URL en vez de solo el código
     let codigo = codigoEntrada.trim();
@@ -66,8 +64,12 @@ async function marcarEntradaComoUsada(codigoEntrada, slugEvento) {
     const authClient = await auth();
     const sheets = google.sheets({ version: 'v4', auth: authClient });
 
+    // Obtener sheetIdNum real
+    const spreadsheetData = await sheets.spreadsheets.get({ spreadsheetId });
+    const sheetIdNum = spreadsheetData.data.sheets?.[0]?.properties?.sheetId || 0;
+
     const getRes = await sheets.spreadsheets.values.get({
-      spreadsheetId: sheetId,
+      spreadsheetId,
       range: 'A:D'
     });
 
@@ -77,7 +79,7 @@ async function marcarEntradaComoUsada(codigoEntrada, slugEvento) {
     for (let i = 1; i < filas.length; i++) {
       const fila = filas[i];
       if (fila[2] && fila[2].trim() === codigo.trim()) {
-        filaEncontrada = i + 1; // A1 notation
+        filaEncontrada = i + 1; // para A1 notation
         break;
       }
     }
@@ -86,13 +88,40 @@ async function marcarEntradaComoUsada(codigoEntrada, slugEvento) {
       return { error: 'Código no encontrado en la hoja.' };
     }
 
-    // Marcar como usada (columna D)
+    // 1. Marcar "SÍ" en columna D
     await sheets.spreadsheets.values.update({
-      spreadsheetId: sheetId,
+      spreadsheetId,
       range: `D${filaEncontrada}`,
       valueInputOption: 'USER_ENTERED',
       requestBody: {
         values: [['SÍ']]
+      }
+    });
+
+    // 2. Aplicar estilo visual a celda D
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [
+          {
+            repeatCell: {
+              range: {
+                sheetId: sheetIdNum,
+                startRowIndex: filaEncontrada - 1,
+                endRowIndex: filaEncontrada,
+                startColumnIndex: 3,
+                endColumnIndex: 4
+              },
+              cell: {
+                userEnteredFormat: {
+                  backgroundColor: { red: 0.2, green: 0.66, blue: 0.325 },
+                  textFormat: { foregroundColor: { red: 1, green: 1, blue: 1 }, bold: true }
+                }
+              },
+              fields: 'userEnteredFormat(backgroundColor,textFormat)'
+            }
+          }
+        ]
       }
     });
 

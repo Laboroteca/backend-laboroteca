@@ -105,31 +105,30 @@ async function generarEntradaPDF({
 
   textY += etiquetaHeight + 15;
 
-  // ✅ Texto promocional
+// ✅ Texto promocional con interlineado mayor
 const promoX = 50;
 const promoWidth = doc.page.width - 100;
+const leading = 18;
+
 const intro1 = 'Si quieres acceder a contenido exclusivo sobre Derechos Laborales y Seguridad Social, puedes hacerte socio del ';
 const clubTexto = 'Club Laboroteca';
 const intro2 = ', por una cuota de 9,99 € / mes y sin compromiso de permanencia.';
 
 doc.font('Helvetica-Bold').fontSize(12).fillColor('black')
-  .text(intro1, promoX, textY, { width: promoWidth, continued: true });
+  .text(intro1, promoX, textY, { width: promoWidth, continued: true, lineGap: leading });
 
 doc.font('Helvetica-Bold').fillColor('black')
-  .text(clubTexto, {
-    underline: true,
-    continued: true
-  });
+  .text(clubTexto, { continued: true, lineGap: leading });
 
-doc.text(intro2);
+doc.text(intro2, { lineGap: leading });
 textY = doc.y + 10;
 
-// ✅ Tabla 2x2 con ✔
+// ✅ Tabla 2x2 con punto normal (•)
 const tablaItems = [
-  ['✔', 'Vídeos exclusivos'],
-  ['✔', 'Podcast “Te lo has currado”'],
-  ['✔', 'Artículos exclusivos'],
-  ['✔', 'Noticias y sentencias novedosas']
+  ['•', 'Vídeos exclusivos'],
+  ['•', 'Podcast “Te lo has currado”'],
+  ['•', 'Artículos exclusivos'],
+  ['•', 'Noticias y sentencias novedosas']
 ];
 
 const colWidth = (doc.page.width - 100) / 2;
@@ -144,6 +143,7 @@ for (let i = 0; i < tablaItems.length; i += 2) {
   doc.text(`${icon1} ${texto1}`, promoX, rowY, { width: colWidth });
   doc.text(`${icon2} ${texto2}`, promoX + colWidth, rowY, { width: colWidth });
 }
+
 
   // ✅ Imagen promocional
   const clubImgURL = 'https://www.laboroteca.es/wp-content/uploads/2025/08/CLUB-LABOROTECA-scaled.jpg';

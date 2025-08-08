@@ -142,19 +142,21 @@ async function generarEntradaPDF({
     textY += 20;
   });
 
-  // ✅ IMAGEN DEL CLUB
-  try {
-    const clubImgURL = 'https://www.laboroteca.es/wp-content/uploads/2025/08/CLUB-LABOROTECA-scaled.jpg';
-    const imgRes = await fetch(clubImgURL);
-    const imgBuffer = Buffer.from(await imgRes.arrayBuffer());
+  // ✅ IMAGEN DEL CLUB (correctamente dentro del async)
+  const clubImgURL = 'https://www.laboroteca.es/wp-content/uploads/2025/08/CLUB-LABOROTECA-scaled.jpg';
 
-    const imgWidth = doc.page.width - 100; // margen lateral
+  try {
+    const clubResponse = await fetch(clubImgURL);
+    if (!clubResponse.ok) throw new Error(`Error ${clubResponse.status}`);
+    const clubBuffer = Buffer.from(await clubResponse.arrayBuffer());
+
     const imgX = 50;
     const imgY = textY + 20;
+    const imgWidth = doc.page.width - 100;
 
-    doc.image(imgBuffer, imgX, imgY, { width: imgWidth });
+    doc.image(clubBuffer, imgX, imgY, { width: imgWidth });
   } catch (err) {
-    console.warn('⚠️ No se pudo cargar imagen CLUB LABOROTECA:', err.message);
+    console.warn('⚠️ No se pudo cargar la imagen del Club Laboroteca:', err.message);
   }
 
 

@@ -50,17 +50,17 @@ async function generarEntradaPDF({
   const qrPadding = 10;
   const qrBuffer = await QRCode.toBuffer(`https://laboroteca.es/validar-entrada?codigo=${codigo}`);
 
-  // Fondo blanco justo detrás del QR con menos margen
+  // Fondo blanco justo detrás del QR
   doc.fillColor('white')
     .rect(qrX - qrPadding, qrY - qrPadding, qrSize + 2 * qrPadding, qrSize + 2 * qrPadding)
     .fill();
 
   doc.image(qrBuffer, qrX, qrY, { width: qrSize });
 
-  // ✅ Código más separado, con subrayado alineado exacto al fondo del QR
+  // ✅ Código debajo del QR, con subrayado alineado
   const codigoFontSize = 16;
   const codigoTexto = `Código: ${codigo}`;
-  const codigoY = qrY + qrSize + 30; // antes 20 → ahora 30 para más separación
+  const codigoY = qrY + qrSize + 30;
 
   doc.fillColor('black')
     .font('Helvetica-Bold')
@@ -69,7 +69,6 @@ async function generarEntradaPDF({
   const textWidth = doc.widthOfString(codigoTexto);
   const textHeight = doc.currentLineHeight();
 
-  // Subrayado exacto al ancho del QR + padding
   const underlineWidth = qrSize + 2 * qrPadding;
   const underlineHeight = textHeight + 8;
 
@@ -89,7 +88,6 @@ async function generarEntradaPDF({
     .font('Helvetica-Bold')
     .fontSize(16)
     .text('Entrada para:', textX, textY);
-
   textY += lineSpacing;
 
   doc.font('Helvetica')
@@ -102,13 +100,6 @@ async function generarEntradaPDF({
 
   doc.font('Helvetica')
     .text(direccionEvento, textX, textY);
-
-  doc.end();
-
-  return new Promise(resolve => {
-    doc.on('end', () => resolve(Buffer.concat(buffers)));
-  });
-}
 
   // ✅ SEPARADOR HORIZONTAL
   textY += 40;
@@ -142,7 +133,7 @@ async function generarEntradaPDF({
     textY += 20;
   });
 
-  // ✅ IMAGEN DEL CLUB (correctamente dentro del async)
+  // ✅ IMAGEN PUBLICITARIA DEL CLUB
   const clubImgURL = 'https://www.laboroteca.es/wp-content/uploads/2025/08/CLUB-LABOROTECA-scaled.jpg';
 
   try {
@@ -159,5 +150,11 @@ async function generarEntradaPDF({
     console.warn('⚠️ No se pudo cargar la imagen del Club Laboroteca:', err.message);
   }
 
+  doc.end();
+
+  return new Promise(resolve => {
+    doc.on('end', () => resolve(Buffer.concat(buffers)));
+  });
+}
 
 module.exports = { generarEntradaPDF };

@@ -17,7 +17,7 @@ async function generarEntradaPDF({
   const buffers = [];
   doc.on('data', buffers.push.bind(buffers));
 
-  // ✅ Imagen con proporción real
+  // ✅ Imagen de fondo con proporción
   const urlFondo = imagenFondo?.startsWith('http')
     ? imagenFondo
     : 'https://www.laboroteca.es/wp-content/uploads/2025/08/entradas-laboroteca-1.jpg';
@@ -43,55 +43,65 @@ async function generarEntradaPDF({
     console.warn(`⚠️ No se pudo cargar imagen de fondo para ${codigo}:`, err.message);
   }
 
-  // ✅ QR dentro de la imagen
+  // ✅ QR
   const qrSize = 150;
   const qrX = 50;
   const qrY = 50;
+  const qrPadding = 10;
   const qrBuffer = await QRCode.toBuffer(`https://laboroteca.es/validar-entrada?codigo=${codigo}`);
 
-  // Fondo blanco QR
-  doc.fillColor('white').rect(qrX - 10, qrY - 10, qrSize + 20, qrSize + 20).fill();
+  // Fondo blanco justo detrás del QR con menos margen
+  doc.fillColor('white')
+    .rect(qrX - qrPadding, qrY - qrPadding, qrSize + 2 * qrPadding, qrSize + 2 * qrPadding)
+    .fill();
+
   doc.image(qrBuffer, qrX, qrY, { width: qrSize });
 
-  // ✅ Código con margen y subrayado ajustado al texto
-  const codigoTexto = `Código: ${codigo}`;
+  // ✅ Código más separado, con subrayado alineado exacto al fondo del QR
   const codigoFontSize = 18;
-  const paddingX = 6;
-  const paddingY = 4;
-
-  const textWidth = doc.widthOfString(codigoTexto, {
-    font: 'Helvetica-Bold',
-    size: codigoFontSize
-  });
-  const textHeight = doc.currentLineHeight();
-
-  const codigoX = qrX;
-  const codigoY = qrY + qrSize + 20;
-
-  doc.fillColor('white')
-    .rect(codigoX - paddingX, codigoY - paddingY, textWidth + 2 * paddingX, textHeight + 2 * paddingY)
-    .fill();
+  const codigoTexto = `Código: ${codigo}`;
+  const codigoY = qrY + qrSize + 30; // antes 20 → ahora 30 para más separación
 
   doc.fillColor('black')
     .font('Helvetica-Bold')
-    .fontSize(codigoFontSize)
-    .text(codigoTexto, codigoX, codigoY);
+    .fontSize(codigoFontSize);
 
-  // ✅ Textos debajo de la imagen
+  const textWidth = doc.widthOfString(codigoTexto);
+  const textHeight = doc.currentLineHeight();
+
+  // Subrayado exacto al ancho del QR + padding
+  const underlineWidth = qrSize + 2 * qrPadding;
+  const underlineHeight = textHeight + 8;
+
+  doc.fillColor('white')
+    .rect(qrX - qrPadding, codigoY - 5, underlineWidth, underlineHeight)
+    .fill();
+
+  doc.fillColor('black')
+    .text(codigoTexto, qrX, codigoY);
+
+  // ✅ Textos informativos debajo de la imagen
   let textY = imagenHeight + 40;
   const textX = 50;
   const lineSpacing = 28;
 
-  doc.fillColor('black').font('Helvetica-Bold').fontSize(16).text('Entrada para:', textX, textY);
+  doc.fillColor('black')
+    .font('Helvetica-Bold')
+    .fontSize(16)
+    .text('Entrada para:', textX, textY);
+
   textY += lineSpacing;
 
-  doc.font('Helvetica').text(fechaActuacion, textX, textY);
+  doc.font('Helvetica')
+    .text(fechaActuacion, textX, textY);
   textY += lineSpacing;
 
-  doc.font('Helvetica-Bold').text(descripcionProducto, textX, textY);
+  doc.font('Helvetica-Bold')
+    .text(descripcionProducto, textX, textY);
   textY += lineSpacing;
 
-  doc.font('Helvetica').text(direccionEvento, textX, textY);
+  doc.font('Helvetica')
+    .text(direccionEvento, textX, textY);
 
   doc.end();
 

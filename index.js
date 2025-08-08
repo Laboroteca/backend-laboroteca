@@ -63,9 +63,6 @@ const pagoLimiter = rateLimit({
 // ✅ Usar la función correcta desde utils
 const { normalizarProducto } = require('./utils/productos');
 
-const canjearCodigoRegalo = require('./regalos/routes/canjear-codigo');
-app.use('/', canjearCodigoRegalo);
-
 async function verificarEmailEnWordPress(email) {
   console.log('🔓 Verificación desactivada. Email:', email);
   return true;

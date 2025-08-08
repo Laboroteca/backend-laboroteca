@@ -17,47 +17,44 @@ async function generarEntradaPDF({
   const buffers = [];
   doc.on('data', buffers.push.bind(buffers));
 
-  // Fondo completo sin deformar
+  // ✅ Fondo arriba, con proporciones
   const urlFondo = imagenFondo?.startsWith('http')
     ? imagenFondo
     : 'https://www.laboroteca.es/wp-content/uploads/2025/08/entradas-laboroteca-1.jpg';
 
+  let imagenHeight = 400; // Altura reservada para la imagen
+
   try {
     const response = await fetch(urlFondo);
     const inputBuffer = Buffer.from(await response.arrayBuffer());
-    const pngBuffer = await sharp(inputBuffer).png().toBuffer();
-    const metadata = await sharp(pngBuffer).metadata();
+    const pngBuffer = await sharp(inputBuffer).resize({ height: imagenHeight }).png().toBuffer();
 
-    const scale = Math.min(doc.page.width / metadata.width, doc.page.height / metadata.height);
-    const renderWidth = metadata.width * scale;
-    const renderHeight = metadata.height * scale;
-    const x = (doc.page.width - renderWidth) / 2;
-    const y = (doc.page.height - renderHeight) / 2;
-
-    doc.image(pngBuffer, x, y, { width: renderWidth, height: renderHeight });
+    doc.image(pngBuffer, 0, 0, { width: doc.page.width, height: imagenHeight });
   } catch (err) {
     console.warn(`⚠️ No se pudo cargar imagen de fondo para ${codigo}:`, err.message);
   }
 
-  // 📌 QR
-  const qrBuffer = await QRCode.toBuffer(`https://laboroteca.es/validar-entrada?codigo=${codigo}`);
+  // ✅ QR DENTRO DE LA IMAGEN
+  const qrSize = 150;
   const qrX = 50;
-  const qrY = 100;
-  const qrSize = 200;
+  const qrY = 50;
+  const qrBuffer = await QRCode.toBuffer(`https://laboroteca.es/validar-entrada?codigo=${codigo}`);
+
+  // Fondo blanco detrás del QR
+  doc.fillColor('white').rect(qrX - 10, qrY - 10, qrSize + 20, qrSize + 20).fill();
   doc.image(qrBuffer, qrX, qrY, { width: qrSize });
 
-  // 📌 Código debajo del QR
-  doc.fillColor('black')
-    .font('Helvetica-Bold')
-    .fontSize(16)
-    .text(`Código: ${codigo}`, qrX, qrY + qrSize + 10);
+  // ✅ Código debajo del QR, también sobre fondo blanco
+  const codigoY = qrY + qrSize + 15;
+  doc.fillColor('white').rect(qrX - 10, codigoY - 5, 200, 25).fill();
+  doc.fillColor('black').fontSize(14).font('Helvetica-Bold').text(`Código: ${codigo}`, qrX, codigoY);
 
-  // 📌 Textos informativos encima de la imagen, alineados a la izquierda
-  let textX = 50;
-  let textY = 360;
+  // ✅ TEXTOS FUERA DE LA IMAGEN
+  let textY = imagenHeight + 50;
+  const textX = 50;
   const lineSpacing = 28;
 
-  doc.fontSize(16).font('Helvetica-Bold').text(`Entrada para:`, textX, textY);
+  doc.fillColor('black').font('Helvetica-Bold').fontSize(16).text('Entrada para:', textX, textY);
   textY += lineSpacing;
 
   doc.font('Helvetica').text(fechaActuacion, textX, textY);

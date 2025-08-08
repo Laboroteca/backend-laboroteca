@@ -105,23 +105,24 @@ async function generarEntradaPDF({
 
   textY += etiquetaHeight + 15;
 
-// ✅ Texto promocional con interlineado mayor
+// ✅ Texto promocional con interlineado 1.2
 const promoX = 50;
 const promoWidth = doc.page.width - 100;
-const leading = 18;
+const lineGap = 4; // Interlineado más normal, similar a 1.2 en Word
 
 const intro1 = 'Si quieres acceder a contenido exclusivo sobre Derechos Laborales y Seguridad Social, puedes hacerte socio del ';
 const clubTexto = 'Club Laboroteca';
-const intro2 = ', por una cuota de 9,99 € / mes y sin compromiso de permanencia.';
+const intro2 = ', por una cuota de 9,99 € / mes y sin compromiso de permanencia.';
 
 doc.font('Helvetica-Bold').fontSize(12).fillColor('black')
-  .text(intro1, promoX, textY, { width: promoWidth, continued: true, lineGap: leading });
+  .text(intro1, promoX, textY, { width: promoWidth, continued: true, lineGap });
 
 doc.font('Helvetica-Bold').fillColor('black')
-  .text(clubTexto, { continued: true, lineGap: leading });
+  .text(clubTexto, { continued: true, lineGap });
 
-doc.text(intro2, { lineGap: leading });
+doc.text(intro2, { lineGap });
 textY = doc.y + 10;
+
 
 // ✅ Tabla 2x2 con punto normal (•)
 const tablaItems = [

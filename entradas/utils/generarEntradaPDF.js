@@ -58,7 +58,7 @@ async function generarEntradaPDF({
   doc.image(qrBuffer, qrX, qrY, { width: qrSize });
 
   // ✅ Código más separado, con subrayado alineado exacto al fondo del QR
-  const codigoFontSize = 18;
+  const codigoFontSize = 16;
   const codigoTexto = `Código: ${codigo}`;
   const codigoY = qrY + qrSize + 30; // antes 20 → ahora 30 para más separación
 
@@ -109,5 +109,53 @@ async function generarEntradaPDF({
     doc.on('end', () => resolve(Buffer.concat(buffers)));
   });
 }
+
+  // ✅ SEPARADOR HORIZONTAL
+  textY += 40;
+  doc.moveTo(50, textY).lineTo(doc.page.width - 50, textY).lineWidth(1).strokeColor('#888').stroke();
+  textY += 30;
+
+  // ✅ TEXTOS DE PUBLICIDAD
+  doc.fillColor('black')
+    .fontSize(14)
+    .font('Helvetica-Bold')
+    .text('SIN COMPROMISO DE PERMANENCIA', 50, textY);
+  textY += 24;
+
+  doc.fontSize(14).text('9,99 EUROS AL MES', 50, textY);
+  textY += 24;
+
+  doc.text('ACCESO A CONTENIDO EXCLUSIVO:', 50, textY);
+  textY += 24;
+
+  const bulletItems = [
+    'VÍDEOS EXCLUSIVOS',
+    'PODCAST “TE LO HAS CURRADO”',
+    'ARTÍCULOS EXCLUSIVOS',
+    'NOTICIAS',
+    'SENTENCIAS'
+  ];
+
+  doc.font('Helvetica');
+  bulletItems.forEach(item => {
+    doc.text(`• ${item}`, 65, textY);
+    textY += 20;
+  });
+
+  // ✅ IMAGEN DEL CLUB
+  try {
+    const clubImgURL = 'https://www.laboroteca.es/wp-content/uploads/2025/08/CLUB-LABOROTECA-scaled.jpg';
+    const imgRes = await fetch(clubImgURL);
+    const imgBuffer = Buffer.from(await imgRes.arrayBuffer());
+
+    const imgWidth = doc.page.width - 100; // margen lateral
+    const imgX = 50;
+    const imgY = textY + 20;
+
+    doc.image(imgBuffer, imgX, imgY, { width: imgWidth });
+  } catch (err) {
+    console.warn('⚠️ No se pudo cargar imagen CLUB LABOROTECA:', err.message);
+  }
+
 
 module.exports = { generarEntradaPDF };

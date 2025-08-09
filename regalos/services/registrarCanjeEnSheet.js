@@ -1,3 +1,6 @@
+// 📂 Ruta: /regalos/services/registrarCanjeEnSheet.js
+// 
+
 const { google } = require('googleapis');
 const dayjs = require('dayjs');
 const { auth } = require('../../entradas/google/sheetsAuth'); // ✅ Usamos el auth centralizado

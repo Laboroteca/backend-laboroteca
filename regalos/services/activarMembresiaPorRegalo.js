@@ -1,3 +1,6 @@
+// 📂 Ruta: /regalos/services/activarMembresiaPorRegalo.js
+// 
+
 const { activarMembresia } = require('./memberpress');
 
 /**

@@ -1,3 +1,6 @@
+// 📂 Ruta: /regalos/services/canjear-codigo-regalo.js
+// 
+
 const admin = require('../../firebase');
 const firestore = admin.firestore();
 const dayjs = require('dayjs');
@@ -22,18 +25,18 @@ const SHEET_NAME_CONTROL = 'Hoja 1';
  * @param {string} params.apellidos
  * @param {string} params.email
  * @param {string} params.libro_elegido
- * @param {string} params.codigoRegalo
+ * @param {string} params.codigo_regalo
  */
 module.exports = async function canjearCodigoRegalo({
   nombre,
   apellidos,
   email,
   libro_elegido,
-  codigoRegalo,
+  codigo_regalo,
 }) {
   const authClient = await auth();
   const sheets = google.sheets({ version: 'v4', auth: authClient });
-  const codigo = (codigoRegalo || '').trim().toUpperCase();
+  const codigo = (codigo_regalo || '').trim().toUpperCase();
   const timestamp = dayjs().format('YYYY-MM-DD HH:mm:ss');
   const emailNormalizado = (email || '').trim().toLowerCase();
 

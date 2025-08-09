@@ -1,3 +1,6 @@
+// 📂 Ruta: /regalos/services/memberpress.js
+// 
+
 const axios = require('axios');
 
 const SITE_URL = process.env.WP_BASE_URL || 'https://www.laboroteca.es';

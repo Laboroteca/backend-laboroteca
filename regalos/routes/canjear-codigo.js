@@ -1,11 +1,28 @@
-// 📂 Ruta: /regalos/routes/canjear-codigo.js
-// 
-
 // 📂 regalos/routes/canjear-codigo.js
 const express = require('express');
 const router = express.Router();
 
 const canjearCodigoRegalo = require('../services/canjear-codigo-regalo');
+
+// 🔎 Mapea mensajes de error a códigos HTTP y textos limpios para el frontend
+function mapError(errMsg = '') {
+  const msg = String(errMsg);
+
+  if (msg.includes('ya ha sido utilizado')) {
+    return { status: 409, error: 'Código ya usado anteriormente.' };
+  }
+  if (msg.includes('no es válido') || msg.includes('Requested entity was not found')) {
+    return { status: 400, error: 'Código inválido.' };
+  }
+  if (msg.includes('no corresponde con tu email')) {
+    return { status: 403, error: 'Este código no corresponde con tu email.' };
+  }
+  if (msg.includes('No se reconoce el libro seleccionado')) {
+    return { status: 400, error: 'Libro seleccionado no reconocido.' };
+  }
+
+  return { status: 500, error: 'Error interno. Inténtalo de nuevo.' };
+}
 
 // 📌 Endpoint para canjear un código regalo
 router.post('/canjear-codigo-regalo', async (req, res) => {
@@ -18,7 +35,7 @@ router.post('/canjear-codigo-regalo', async (req, res) => {
       email = '',
       libro_elegido = '',
       codigo_regalo = '',
-      codigoRegalo = '' // fallback por si el campo viene en camelCase
+      codigoRegalo = '' // fallback por si llega camelCase
     } = req.body || {};
 
     const codigo = (codigo_regalo || codigoRegalo || '').trim();
@@ -35,22 +52,19 @@ router.post('/canjear-codigo-regalo', async (req, res) => {
       apellidos,
       email,
       libro_elegido,
-      codigo_regalo: codigo, // ✅ el servicio espera snake_case
+      codigo_regalo: codigo,
     });
 
-    return res.json({
+    return res.status(200).json({
       ok: true,
       mensaje: 'Libro activado correctamente',
-      resultado
+      resultado,
     });
   } catch (err) {
+    const { status, error } = mapError(err?.message || err);
     console.error('❌ Error en /canjear-codigo-regalo:', err?.message || err);
-    return res.status(400).json({
-      ok: false,
-      error: err.message || 'Error desconocido'
-    });
+    return res.status(status).json({ ok: false, error });
   }
 });
 
-// ✅ Exportamos el router para que pueda ser usado en app.use()
 module.exports = router;

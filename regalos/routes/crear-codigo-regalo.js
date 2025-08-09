@@ -1,12 +1,13 @@
 // 📂 Ruta: /regalos/routes/crear-codigo-regalo.js
 // 
 
+// 📂 regalos/routes/crear-codigo-regalo.js
 const express = require('express');
 const admin = require('../../firebase');
 const firestore = admin.firestore();
 
 const { google } = require('googleapis');
-const { auth } = require('../../entradas/google/sheetsAuth'); // usa el mismo auth
+const { auth } = require('../../entradas/google/sheetsAuth'); // ✅ Usa el auth centralizado
 
 const router = express.Router();
 
@@ -15,6 +16,7 @@ const SHEET_ID_CONTROL = '1DFZuhJtuQ0y8EHXOkUUifR_mCVfGyxgCHXRvBoiwfo';
 const SHEET_NAME_CONTROL = 'Hoja 1';
 
 /**
+ * 📌 POST /crear-codigo-regalo
  * Crea un código REG- único y lo asocia a un email.
  * Body: { nombre, email, codigo }
  */
@@ -24,25 +26,34 @@ router.post('/crear-codigo-regalo', async (req, res) => {
     const emailRaw  = (req.body?.email  || '').trim().toLowerCase();
     const codigoRaw = (req.body?.codigo || '').trim().toUpperCase();
 
-    // Validaciones
+    // 🔍 Validaciones
     if (!nombreRaw || !emailRaw || !codigoRaw) {
-      return res.status(400).json({ ok: false, error: 'Faltan campos obligatorios: nombre, email y codigo.' });
+      return res.status(400).json({
+        ok: false,
+        error: 'Faltan campos obligatorios: nombre, email y codigo.'
+      });
     }
     if (!/^[^@]+@[^@]+\.[^@]+$/.test(emailRaw)) {
       return res.status(400).json({ ok: false, error: 'Email inválido.' });
     }
     if (!/^REG-[A-Z0-9-]+$/.test(codigoRaw)) {
-      return res.status(400).json({ ok: false, error: 'El código debe empezar por REG- y solo contener letras, números o guiones.' });
+      return res.status(400).json({
+        ok: false,
+        error: 'El código debe empezar por REG- y solo contener letras, números o guiones.'
+      });
     }
 
-    // Idempotencia: rechaza si ya existe
+    // ⛔ Idempotencia: rechaza si ya existe
     const docRef = firestore.collection('codigosRegalo').doc(codigoRaw);
     const snap = await docRef.get();
     if (snap.exists) {
-      return res.status(409).json({ ok: false, error: 'Este código ya ha sido registrado previamente.' });
+      return res.status(409).json({
+        ok: false,
+        error: 'Este código ya ha sido registrado previamente.'
+      });
     }
 
-    // Guarda en Firestore
+    // 💾 Guarda en Firestore
     await docRef.set({
       nombre: nombreRaw,
       email: emailRaw,
@@ -51,7 +62,7 @@ router.post('/crear-codigo-regalo', async (req, res) => {
       usado: false,
     });
 
-    // 👉 Registrar en Google Sheets (control de REG-)
+    // 📝 Registrar en Google Sheets (control de REG-)
     try {
       const authClient = await auth();
       const sheets = google.sheets({ version: 'v4', auth: authClient });
@@ -67,7 +78,7 @@ router.post('/crear-codigo-regalo', async (req, res) => {
       });
     } catch (e) {
       console.warn('⚠️ No se pudo registrar en Sheets (control REG-):', e.message || e);
-      // no rompemos la creación por fallo de Sheets
+      // No interrumpimos la creación por fallo de Sheets
     }
 
     console.log(`🎁 Código REGALO creado: ${codigoRaw} para ${emailRaw}`);
@@ -75,8 +86,12 @@ router.post('/crear-codigo-regalo', async (req, res) => {
 
   } catch (err) {
     console.error('❌ Error al crear código regalo:', err?.message || err);
-    return res.status(500).json({ ok: false, error: 'Error interno del servidor.' });
+    return res.status(500).json({
+      ok: false,
+      error: 'Error interno del servidor.'
+    });
   }
 });
 
+// ✅ Exportamos el router para app.use()
 module.exports = router;

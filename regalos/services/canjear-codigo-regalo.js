@@ -1,5 +1,3 @@
-// 📂 Ruta: /regalos/services/canjear-codigo-regalo.js
-
 const admin = require('../../firebase');
 const firestore = admin.firestore();
 const dayjs = require('dayjs');
@@ -10,11 +8,23 @@ const marcarCodigoComoCanjeado = require('./marcarCodigoComoCanjeado');
 const activarMembresiaPorRegalo = require('./activarMembresiaPorRegalo');
 const registrarCanjeEnSheet = require('./registrarCanjeEnSheet');
 
-const SHEET_ID_REGALOS = '1MjxXebR3oQIyu0bYeRWo83xj1sBFnDcx53HvRRBiGE'; // Libros GRATIS
+const SHEET_ID_REGALOS  = '1MjxXebR3oQIyu0bYeRWo83xj1sBFnDcx53HvRRBiGE'; // Libros GRATIS
 const SHEET_NAME_REGALOS = 'Hoja 1';
-
-const SHEET_ID_CONTROL = '1DFZuhJtuQ0y8EHXOkUUifR_mCVfGyxgCHXRvBoiwfo'; // Códigos REG- activos
+const SHEET_ID_CONTROL  = '1DFZuhJtuQ0y8EHXOkUUifR_mCVfGyxgCHXRvBoiwfo'; // Códigos REG- activos
 const SHEET_NAME_CONTROL = 'Hoja 1';
+
+// Pequeño helper de reintentos con backoff
+async function withRetries(fn, { tries = 5, baseMs = 120 } = {}) {
+  let lastErr;
+  for (let i = 1; i <= tries; i++) {
+    try { return await fn(); } catch (e) {
+      lastErr = e;
+      const wait = baseMs * Math.pow(2, i - 1);
+      await new Promise(r => setTimeout(r, wait));
+    }
+  }
+  throw lastErr;
+}
 
 module.exports = async function canjearCodigoRegalo({
   nombre,
@@ -39,17 +49,16 @@ module.exports = async function canjearCodigoRegalo({
 
   console.log(`🧾 canjearCodigoRegalo → email=${emailNormalizado} libro="${libroNormalizado}" codigo=${codigo} motivo=${motivo}`);
 
-  // 0) Evitar canje duplicado
-  const docRefCanje = firestore.collection('regalos_canjeados').doc(codigo);
-  const docCanje = await docRefCanje.get();
-  if (docCanje.exists) {
+  // ⛔️ Si ya está canjeado, cortamos (idempotencia)
+  const canjeRef = firestore.collection('regalos_canjeados').doc(codigo);
+  const ya = await canjeRef.get();
+  if (ya.exists) {
     console.warn(`⛔ Código ya canjeado previamente: ${codigo}`);
     throw new Error('Este código ya ha sido utilizado.');
   }
 
   // 1) Validación de origen
   if (esRegalo) {
-    // ✅ REG- → validar contra hoja de control
     let sheets;
     try {
       const authClient = await auth();
@@ -76,13 +85,11 @@ module.exports = async function canjearCodigoRegalo({
         throw new Error('Este código regalo no corresponde con tu email.');
       }
     } catch (e) {
-      // Si falla el GET o la hoja no existe, tratamos como inválido
-      if (e?.message) console.warn('⚠️ Error validando REG- en hoja de control:', e.message);
-      throw new Error('Requested entity was not found'); // mapea a "Código inválido"
+      console.warn('⚠️ Error validando REG- en hoja de control:', e?.message || e);
+      throw new Error('Requested entity was not found'); // "Código inválido"
     }
 
   } else if (esEntrada) {
-    // ✅ PRE- → validar SOLO si está en Firestore: entradasValidadas/{codigo} con validado=true
     const docEntrada = await firestore.collection('entradasValidadas').doc(codigo).get();
     if (!docEntrada.exists) {
       console.warn(`⛔ PRE no está validada (no existe en entradasValidadas): ${codigo}`);
@@ -103,66 +110,80 @@ module.exports = async function canjearCodigoRegalo({
     throw new Error('El código introducido no es válido.');
   }
 
-  // 2) Registrar canje en Firestore (canje efectivo)
-  await docRefCanje.set({
-    nombre,
-    apellidos,
-    email: emailNormalizado,
-    libro: libroNormalizado,
-    motivo, // REGALO | ENTRADA
-    fecha: timestamp
-  });
+  // 2) ACTIVAR MEMBRESÍA EN MEMBERPRESS (BLOQUEANTE)
+  // Si falla, NO se marca el código como usado.
+  console.log('🔐 Activando membresía en MemberPress…');
+  await activarMembresiaPorRegalo(emailNormalizado, libroNormalizado);
+  console.log('✅ Membresía activada en MemberPress');
 
-  // 3) Registrar en hoja "Libros GRATIS" (NO bloqueante)
-  try {
-    const authClient = await auth();
-    const sheets = google.sheets({ version: 'v4', auth: authClient });
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: SHEET_ID_REGALOS,
-      range: `${SHEET_NAME_REGALOS}!A2:G`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: {
-        values: [[
-          nombre,
-          apellidos,
-          emailNormalizado,
-          timestamp,
-          libroNormalizado,
-          motivo,
-          codigo
-        ]]
-      }
-    });
-  } catch (e) {
-    console.warn('⚠️ No se pudo registrar en "Libros GRATIS":', e?.message || e);
-  }
-
-  // 4) Registrar en hoja de canjes general (NO bloqueante)
-  try {
-    await registrarCanjeEnSheet({
+  // 3) Registrar canje (BLOQUEANTE con reintentos)
+  // Usamos create() para evitar sobrescribir si por carrera ya existe.
+  console.log('📝 Registrando canje en Firestore…');
+  await withRetries(async () => {
+    await canjeRef.create({
       nombre,
       apellidos,
       email: emailNormalizado,
-      codigo,
-      libro: libroNormalizado
+      libro: libroNormalizado,
+      motivo, // REGALO | ENTRADA
+      fecha: timestamp
     });
-  } catch (e) {
-    console.warn('⚠️ No se pudo registrar en hoja de canjes general:', e?.message || e);
-  }
+  }, { tries: 5, baseMs: 150 });
+  console.log('✅ Canje registrado en Firestore');
 
-  // 5) Solo marcar en hoja de control cuando sea REG- (NO bloqueante)
-  if (esRegalo) {
+  // 4) Registros auxiliares (NO bloqueantes)
+  // 4.1) Libros GRATIS
+  (async () => {
     try {
-      await marcarCodigoComoCanjeado(codigo);
+      const authClient = await auth();
+      const sheets = google.sheets({ version: 'v4', auth: authClient });
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: SHEET_ID_REGALOS,
+        range: `${SHEET_NAME_REGALOS}!A2:G`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: {
+          values: [[
+            nombre,
+            apellidos,
+            emailNormalizado,
+            timestamp,
+            libroNormalizado,
+            motivo,
+            codigo
+          ]]
+        }
+      });
     } catch (e) {
-      console.warn('⚠️ No se pudo marcar en hoja de control REG-:', e?.message || e);
+      console.warn('⚠️ No se pudo registrar en "Libros GRATIS":', e?.message || e);
     }
-  }
+  })();
 
-  // 6) Activar membresía correspondiente (tanto REG como PRE validadas)
-  await activarMembresiaPorRegalo(emailNormalizado, libroNormalizado);
+  // 4.2) Canjes general
+  (async () => {
+    try {
+      await registrarCanjeEnSheet({
+        nombre,
+        apellidos,
+        email: emailNormalizado,
+        codigo,
+        libro: libroNormalizado
+      });
+    } catch (e) {
+      console.warn('⚠️ No se pudo registrar en hoja de canjes general:', e?.message || e);
+    }
+  })();
+
+  // 4.3) Marcar visual en hoja de control (solo REG-)
+  if (esRegalo) {
+    (async () => {
+      try {
+        await marcarCodigoComoCanjeado(codigo);
+      } catch (e) {
+        console.warn('⚠️ No se pudo marcar en hoja de control REG-:', e?.message || e);
+      }
+    })();
+  }
 
   console.log(`✅ Canje completado: ${codigo} → ${emailNormalizado} (${motivo})`);
   return { ok: true };
 };
-

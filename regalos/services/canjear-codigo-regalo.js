@@ -33,14 +33,11 @@ module.exports = async function canjearCodigoRegalo({
     throw new Error('Faltan datos obligatorios.');
   }
 
-  const esRegalo = codigo.startsWith('REG-');
+  const esRegalo  = codigo.startsWith('REG-');
   const esEntrada = codigo.startsWith('PRE-');
-  const motivo = esRegalo ? 'REGALO' : esEntrada ? 'ENTRADA' : 'OTRO';
+  const motivo    = esRegalo ? 'REGALO' : esEntrada ? 'ENTRADA' : 'OTRO';
 
   console.log(`🧾 canjearCodigoRegalo → email=${emailNormalizado} libro="${libroNormalizado}" codigo=${codigo} motivo=${motivo}`);
-
-  const authClient = await auth();
-  const sheets = google.sheets({ version: 'v4', auth: authClient });
 
   // 0) Evitar canje duplicado
   const docRefCanje = firestore.collection('regalos_canjeados').doc(codigo);
@@ -53,21 +50,37 @@ module.exports = async function canjearCodigoRegalo({
   // 1) Validación de origen
   if (esRegalo) {
     // ✅ REG- → validar contra hoja de control
-    const controlRes = await sheets.spreadsheets.values.get({
-      spreadsheetId: SHEET_ID_CONTROL,
-      range: `${SHEET_NAME_CONTROL}!A2:C`
-    });
-    const filas = controlRes.data.values || [];
-    const fila = filas.find(f => String(f[2] || '').trim().toUpperCase() === codigo);
-    if (!fila) {
-      console.warn(`⛔ REG no encontrado en hoja de control: ${codigo}`);
-      throw new Error('El código introducido no es válido.');
+    let sheets;
+    try {
+      const authClient = await auth();
+      sheets = google.sheets({ version: 'v4', auth: authClient });
+    } catch (e) {
+      console.warn('⚠️ No se pudo inicializar Google Sheets para validar REG-:', e?.message || e);
+      throw new Error('Requested entity was not found'); // mapea a "Código inválido"
     }
-    const emailAsignado = String(fila[1] || '').trim().toLowerCase();
-    if (emailAsignado && emailAsignado !== emailNormalizado) {
-      console.warn(`⛔ REG email mismatch: hoja=${emailAsignado} vs req=${emailNormalizado}`);
-      throw new Error('Este código regalo no corresponde con tu email.');
+
+    try {
+      const controlRes = await sheets.spreadsheets.values.get({
+        spreadsheetId: SHEET_ID_CONTROL,
+        range: `${SHEET_NAME_CONTROL}!A2:C`
+      });
+      const filas = controlRes.data.values || [];
+      const fila = filas.find(f => String(f[2] || '').trim().toUpperCase() === codigo);
+      if (!fila) {
+        console.warn(`⛔ REG no encontrado en hoja de control: ${codigo}`);
+        throw new Error('El código introducido no es válido.');
+      }
+      const emailAsignado = String(fila[1] || '').trim().toLowerCase();
+      if (emailAsignado && emailAsignado !== emailNormalizado) {
+        console.warn(`⛔ REG email mismatch: hoja=${emailAsignado} vs req=${emailNormalizado}`);
+        throw new Error('Este código regalo no corresponde con tu email.');
+      }
+    } catch (e) {
+      // Si falla el GET o la hoja no existe, tratamos como inválido
+      if (e?.message) console.warn('⚠️ Error validando REG- en hoja de control:', e.message);
+      throw new Error('Requested entity was not found'); // mapea a "Código inválido"
     }
+
   } else if (esEntrada) {
     // ✅ PRE- → validar SOLO si está en Firestore: entradasValidadas/{codigo} con validado=true
     const docEntrada = await firestore.collection('entradasValidadas').doc(codigo).get();
@@ -100,45 +113,56 @@ module.exports = async function canjearCodigoRegalo({
     fecha: timestamp
   });
 
-  // 3) Registrar en hoja "Libros GRATIS"
-  await sheets.spreadsheets.values.append({
-    spreadsheetId: SHEET_ID_REGALOS,
-    range: `${SHEET_NAME_REGALOS}!A2:G`,
-    valueInputOption: 'USER_ENTERED',
-    requestBody: {
-      values: [[
-        nombre,
-        apellidos,
-        emailNormalizado,
-        timestamp,
-        libroNormalizado,
-        motivo,
-        codigo
-      ]]
-    }
-  });
+  // 3) Registrar en hoja "Libros GRATIS" (NO bloqueante)
+  try {
+    const authClient = await auth();
+    const sheets = google.sheets({ version: 'v4', auth: authClient });
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SHEET_ID_REGALOS,
+      range: `${SHEET_NAME_REGALOS}!A2:G`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: {
+        values: [[
+          nombre,
+          apellidos,
+          emailNormalizado,
+          timestamp,
+          libroNormalizado,
+          motivo,
+          codigo
+        ]]
+      }
+    });
+  } catch (e) {
+    console.warn('⚠️ No se pudo registrar en "Libros GRATIS":', e?.message || e);
+  }
 
-  // 4) Registrar en hoja de canjes general
-  await registrarCanjeEnSheet({
-    nombre,
-    apellidos,
-    email: emailNormalizado,
-    codigo,
-    libro: libroNormalizado
-  });
+  // 4) Registrar en hoja de canjes general (NO bloqueante)
+  try {
+    await registrarCanjeEnSheet({
+      nombre,
+      apellidos,
+      email: emailNormalizado,
+      codigo,
+      libro: libroNormalizado
+    });
+  } catch (e) {
+    console.warn('⚠️ No se pudo registrar en hoja de canjes general:', e?.message || e);
+  }
 
-  // 5) Solo marcar en hoja de control cuando sea REG-
+  // 5) Solo marcar en hoja de control cuando sea REG- (NO bloqueante)
   if (esRegalo) {
     try {
       await marcarCodigoComoCanjeado(codigo);
     } catch (e) {
-      console.warn('⚠️ No se pudo marcar en hoja de control REG-:', e.message || e);
+      console.warn('⚠️ No se pudo marcar en hoja de control REG-:', e?.message || e);
     }
   }
 
-  // 6) Activar membresía correspondiente (tanto REG como PRE validados)
+  // 6) Activar membresía correspondiente (tanto REG como PRE validadas)
   await activarMembresiaPorRegalo(emailNormalizado, libroNormalizado);
 
   console.log(`✅ Canje completado: ${codigo} → ${emailNormalizado} (${motivo})`);
   return { ok: true };
 };
+

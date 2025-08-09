@@ -29,15 +29,47 @@ const validarEntrada = require('./entradas/routes/validarEntrada');
 const app = express();
 app.set('trust proxy', 1);
 
+app.use((req, _res, next) => {
+  if (req.headers.origin) console.log('🌐 Origin:', req.headers.origin);
+  next();
+});
+
+
+const allowProd = [
+  'https://laboroteca.es',
+  'https://www.laboroteca.es'
+];
+const allowDev = [
+  'http://localhost',
+  'http://localhost:3000',
+  'http://127.0.0.1',
+  'http://127.0.0.1:3000'
+];
+const extra = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+
+const ORIGINS = [
+  ...allowProd,
+  ...(process.env.NODE_ENV === 'production' ? [] : allowDev),
+  ...extra
+];
+
 const corsOptions = {
-  origin: 'https://www.laboroteca.es', // o '*' en desarrollo
+  origin(origin, cb) {
+    if (!origin || ORIGINS.includes(origin)) return cb(null, true);
+    console.warn('⛔ CORS rechazado para:', origin);
+    return cb(new Error('Not allowed by CORS'));
+  },
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-LABOROTECA-TOKEN'],
-  credentials: true
+  credentials: false // pon true solo si usas cookies/sesión
 };
 
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions)); // ✅ preflight universal
+app.options('*', cors(corsOptions));
+
 
 
 // ⚠️ WEBHOOK: SIEMPRE EL PRIMERO Y EN RAW
@@ -374,7 +406,7 @@ process.on('unhandledRejection', err => {
   console.error('💥 unhandledRejection:', err.message);
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8000;
 app.listen(PORT, () => {
   console.log(`✅ Backend funcionando en http://localhost:${PORT}`);
 });

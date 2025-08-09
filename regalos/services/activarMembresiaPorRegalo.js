@@ -1,4 +1,4 @@
-const { activarMembresia } = require('../../services/memberpress');
+const { activarMembresiaEnMemberPress } = require('../../services/memberpress');
 
 /**
  * Activa la membresía adecuada según el libro canjeado.

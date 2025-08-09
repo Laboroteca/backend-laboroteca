@@ -10,29 +10,20 @@ const marcarCodigoComoCanjeado = require('./marcarCodigoComoCanjeado');
 const activarMembresiaPorRegalo = require('./activarMembresiaPorRegalo');
 const registrarCanjeEnSheet = require('./registrarCanjeEnSheet');
 
-const SHEET_ID_REGALOS = '1MjxXebR3oQIyu0bYeRWo83xj1sBFnDcx53HvRRBiGE'; // 📄 Libros GRATIS
+const SHEET_ID_REGALOS = '1MjxXebR3oQIyu0bYeRWo83xj1sBFnDcx53HvRRBiGE'; // Libros GRATIS
 const SHEET_NAME_REGALOS = 'Hoja 1';
 
-const SHEET_ID_CONTROL = '1DFZuhJtuQ0y8EHXOkUUifR_mCVfGyxgCHXRvBoiwfo'; // 📄 Códigos REG- activos
+const SHEET_ID_CONTROL = '1DFZuhJtuQ0y8EHXOkUUifR_mCVfGyxgCHXRvBoiwfo'; // Códigos REG- activos
 const SHEET_NAME_CONTROL = 'Hoja 1';
 
-/**
- * Canjea un código regalo si es válido y no ha sido utilizado.
- * @param {Object} params
- * @param {string} params.nombre
- * @param {string} params.apellidos
- * @param {string} params.email
- * @param {string} params.libro_elegido
- * @param {string} params.codigo_regalo
- */
 module.exports = async function canjearCodigoRegalo({
   nombre,
   apellidos,
   email,
   libro_elegido,
-  codigo_regalo,
+  codigo_regalo
 }) {
-  // 🔹 Normalizar datos
+  // 🔹 Normaliza
   const codigo = String(codigo_regalo || '').trim().toUpperCase();
   const emailNormalizado = String(email || '').trim().toLowerCase();
   const libroNormalizado = String(libro_elegido || '').trim();
@@ -46,46 +37,70 @@ module.exports = async function canjearCodigoRegalo({
   const esEntrada = codigo.startsWith('PRE-');
   const motivo = esRegalo ? 'REGALO' : esEntrada ? 'ENTRADA' : 'OTRO';
 
+  console.log(`🧾 canjearCodigoRegalo → email=${emailNormalizado} libro="${libroNormalizado}" codigo=${codigo} motivo=${motivo}`);
+
   const authClient = await auth();
   const sheets = google.sheets({ version: 'v4', auth: authClient });
 
-  // 1️⃣ Verificar si ya fue usado
-  const docRef = firestore.collection('regalos_canjeados').doc(codigo);
-  const doc = await docRef.get();
-  if (doc.exists) {
+  // 0) Evitar canje duplicado
+  const docRefCanje = firestore.collection('regalos_canjeados').doc(codigo);
+  const docCanje = await docRefCanje.get();
+  if (docCanje.exists) {
+    console.warn(`⛔ Código ya canjeado previamente: ${codigo}`);
     throw new Error('Este código ya ha sido utilizado.');
   }
 
-  // 2️⃣ Validar contra hoja de control
-  const controlRes = await sheets.spreadsheets.values.get({
-    spreadsheetId: SHEET_ID_CONTROL,
-    range: `${SHEET_NAME_CONTROL}!A2:C`,
-  });
-
-  const filas = controlRes.data.values || [];
-  const fila = filas.find(f => String(f[2] || '').trim().toUpperCase() === codigo);
-
-  if (!fila) {
+  // 1) Validación de origen
+  if (esRegalo) {
+    // ✅ REG- → validar contra hoja de control
+    const controlRes = await sheets.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID_CONTROL,
+      range: `${SHEET_NAME_CONTROL}!A2:C`
+    });
+    const filas = controlRes.data.values || [];
+    const fila = filas.find(f => String(f[2] || '').trim().toUpperCase() === codigo);
+    if (!fila) {
+      console.warn(`⛔ REG no encontrado en hoja de control: ${codigo}`);
+      throw new Error('El código introducido no es válido.');
+    }
+    const emailAsignado = String(fila[1] || '').trim().toLowerCase();
+    if (emailAsignado && emailAsignado !== emailNormalizado) {
+      console.warn(`⛔ REG email mismatch: hoja=${emailAsignado} vs req=${emailNormalizado}`);
+      throw new Error('Este código regalo no corresponde con tu email.');
+    }
+  } else if (esEntrada) {
+    // ✅ PRE- → validar SOLO si está en Firestore: entradasValidadas/{codigo} con validado=true
+    const docEntrada = await firestore.collection('entradasValidadas').doc(codigo).get();
+    if (!docEntrada.exists) {
+      console.warn(`⛔ PRE no está validada (no existe en entradasValidadas): ${codigo}`);
+      throw new Error('Esta entrada no está validada y no puede canjearse.');
+    }
+    const ent = docEntrada.data() || {};
+    if (ent.validado !== true) {
+      console.warn(`⛔ PRE encontrada pero no validada: ${codigo}`);
+      throw new Error('Esta entrada no está validada y no puede canjearse.');
+    }
+    const emailComprador = String(ent.emailComprador || '').trim().toLowerCase();
+    if (emailComprador && emailComprador !== emailNormalizado) {
+      console.warn(`⛔ PRE email mismatch: entrada=${emailComprador} vs req=${emailNormalizado}`);
+      throw new Error('Esta entrada validada no corresponde con tu email.');
+    }
+  } else {
+    console.warn(`⛔ Prefijo desconocido en código: ${codigo}`);
     throw new Error('El código introducido no es válido.');
   }
 
-  // Validar que el email asignado coincide (solo para regalos)
-  const emailAsignado = String(fila[1] || '').trim().toLowerCase();
-  if (esRegalo && emailAsignado && emailAsignado !== emailNormalizado) {
-    throw new Error('Este código regalo no corresponde con tu email.');
-  }
-
-  // 3️⃣ Guardar canje en Firebase
-  await docRef.set({
+  // 2) Registrar canje en Firestore (canje efectivo)
+  await docRefCanje.set({
     nombre,
     apellidos,
     email: emailNormalizado,
     libro: libroNormalizado,
-    motivo,
-    fecha: timestamp,
+    motivo, // REGALO | ENTRADA
+    fecha: timestamp
   });
 
-  // 4️⃣ Guardar en hoja "Libros GRATIS"
+  // 3) Registrar en hoja "Libros GRATIS"
   await sheets.spreadsheets.values.append({
     spreadsheetId: SHEET_ID_REGALOS,
     range: `${SHEET_NAME_REGALOS}!A2:G`,
@@ -98,27 +113,32 @@ module.exports = async function canjearCodigoRegalo({
         timestamp,
         libroNormalizado,
         motivo,
-        codigo,
-      ]],
-    },
+        codigo
+      ]]
+    }
   });
 
-  // 5️⃣ Registrar también en hoja de canjes general
+  // 4) Registrar en hoja de canjes general
   await registrarCanjeEnSheet({
     nombre,
     apellidos,
     email: emailNormalizado,
     codigo,
-    libro: libroNormalizado,
-    origen: motivo,
+    libro: libroNormalizado
   });
 
-  // 6️⃣ Marcar como canjeado (color rojo en hoja control)
-  await marcarCodigoComoCanjeado(codigo);
+  // 5) Solo marcar en hoja de control cuando sea REG-
+  if (esRegalo) {
+    try {
+      await marcarCodigoComoCanjeado(codigo);
+    } catch (e) {
+      console.warn('⚠️ No se pudo marcar en hoja de control REG-:', e.message || e);
+    }
+  }
 
-  // 7️⃣ Activar la membresía correspondiente
+  // 6) Activar membresía correspondiente (tanto REG como PRE validados)
   await activarMembresiaPorRegalo(emailNormalizado, libroNormalizado);
 
-  console.log(`✅ Código ${codigo} canjeado correctamente para ${emailNormalizado}`);
+  console.log(`✅ Canje completado: ${codigo} → ${emailNormalizado} (${motivo})`);
   return { ok: true };
 };

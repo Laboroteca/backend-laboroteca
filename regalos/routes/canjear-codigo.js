@@ -5,20 +5,34 @@ const router = express.Router();
 const canjearCodigoRegalo = require('../services/canjear-codigo-regalo');
 
 /**
- * 🔎 Traduce mensajes de error del servicio a códigos HTTP y mensajes para el frontend
+ * 🔎 Traduce mensajes de error del servicio a códigos HTTP y textos para el frontend
  */
 function mapError(errMsg = '') {
   const msg = String(errMsg || '').toLowerCase();
+
+  // Casos comunes
   if (msg.includes('ya ha sido utilizado')) return { status: 409, error: 'Código ya usado anteriormente.' };
-  if (msg.includes('no es válido') || msg.includes('requested entity was not found')) return { status: 400, error: 'Código inválido.' };
-  if (msg.includes('no corresponde con tu email')) return { status: 403, error: 'Este código no corresponde con tu email.' };
   if (msg.includes('no se reconoce el libro seleccionado')) return { status: 400, error: 'Libro seleccionado no reconocido.' };
+  if (msg.includes('no corresponde con tu email')) return { status: 403, error: 'Este código no corresponde con tu email.' };
+
+  // Casos de ENTRADAS (PRE-)
+  if (msg.includes('entrada no está validada')) return { status: 400, error: 'Esta entrada no está validada y no puede canjearse.' };
+  if (msg.includes('entrada validada no corresponde')) return { status: 403, error: 'Esta entrada validada no corresponde con tu email.' };
+
+  // Genérico inválido / prefijos raros / not found
+  if (msg.includes('no es válido') || msg.includes('requested entity was not found') || msg.includes('prefijo desconocido')) {
+    return { status: 400, error: 'Código inválido.' };
+  }
+
   return { status: 500, error: 'Error interno. Inténtalo de nuevo.' };
 }
 
-// 📌 Endpoint para canjear un código regalo
+// 📌 Endpoint para canjear un código (REG- o PRE- validada)
 router.post('/canjear-codigo-regalo', async (req, res) => {
   try {
+    // Log de entrada (sin volcar datos sensibles)
+    console.log('📥 /canjear-codigo-regalo BODY keys:', Object.keys(req.body || {}));
+
     const {
       nombre: _nombre = '',
       apellidos: _apellidos = '',
@@ -46,28 +60,26 @@ router.post('/canjear-codigo-regalo', async (req, res) => {
       });
     }
 
-    // Regla ligera para filtrar códigos incompletos
     if (codigo.length < 3) {
       return res.status(400).json({ ok: false, error: 'Código inválido.' });
     }
 
-    // 📜 Log limpio
-    console.log(`📥 Canje recibido: ${email} → "${libro_elegido}" (cod:${codigo})${membershipId ? ` [membershipId:${membershipId}]` : ''}`);
+    console.log(`🔧 Canje recibido → email=${email} libro="${libro_elegido}" codigo=${codigo}${membershipId ? ` membershipId=${membershipId}` : ''}`);
 
-    // 🛠️ Montamos payload para el servicio
+    // Payload al servicio
     const payloadServicio = {
       nombre,
       apellidos,
       email,
       libro_elegido,
-      codigo_regalo: codigo
+      codigo_regalo: codigo,
+      ...(membershipId ? { membershipId } : {})
     };
-    if (membershipId) payloadServicio.membershipId = membershipId;
 
     // 🚀 Llamada al servicio
     const resultado = await canjearCodigoRegalo(payloadServicio);
 
-    // ⛔ Servicio devuelve error aunque no lance excepción
+    // ⛔ Servicio devolvió error “suave”
     if (!resultado || resultado.ok === false) {
       const errMsg = (resultado && (resultado.error || resultado.motivo || resultado.message)) || 'no es válido';
       const { status, error } = mapError(errMsg);
@@ -75,7 +87,8 @@ router.post('/canjear-codigo-regalo', async (req, res) => {
       return res.status(status).json({ ok: false, error });
     }
 
-    // ✅ Canje OK
+    // ✅ OK
+    console.log(`✅ Canje OK → ${codigo} (${email})`);
     return res.status(200).json({
       ok: true,
       mensaje: 'Libro activado correctamente',

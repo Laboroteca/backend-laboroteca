@@ -1,23 +1,33 @@
-// 📂 Ruta: /regalos/services/memberpress.js
+// 📂 /regalos/services/memberpress.js
 const axios = require('axios');
 
-// 🔧 URL base (prioriza MP_SITE_URL, luego WP_BASE_URL y por último dominio fijo)
-const SITE_URL =
-  (process.env.MP_SITE_URL || process.env.WP_BASE_URL || 'https://www.laboroteca.es')
-    .replace(/\/+$/, '');
+// ============================
+// 🔍 CONFIGURACIÓN BASE
+// ============================
+const SITE_URL = (process.env.MP_SITE_URL || process.env.WP_BASE_URL || 'https://www.laboroteca.es')
+  .replace(/\/+$/, '');
+const MP_KEY = process.env.MEMBERPRESS_KEY || '';
+const MP_USER = process.env.MP_ADMIN_USER || '';
+const MP_PASS = process.env.MP_ADMIN_PASS || '';
 
-// 🔐 Credenciales
-const MP_KEY  = process.env.MEMBERPRESS_KEY || ''; // Developer Tools → REST API
-const MP_USER = process.env.MP_ADMIN_USER || '';   // Fallback opcional
-const MP_PASS = process.env.MP_ADMIN_PASS || '';   // Fallback opcional
+// 🚨 Log inicial para depuración
+console.log("🛠 MemberPress config:");
+console.log("   📍 SITE_URL =", SITE_URL);
+console.log("   🔑 MEMBERPRESS_KEY =", MP_KEY ? `${MP_KEY} (OK)` : "(VACÍO)");
+console.log("   👤 MP_ADMIN_USER =", MP_USER || "(no definido)");
+console.log("   👤 MP_ADMIN_PASS =", MP_PASS ? "(definido)" : "(no definido)");
 
-// Cliente axios apuntando a la REST de MemberPress
+// ============================
+// 🔗 CLIENTE AXIOS
+// ============================
 const mp = axios.create({
   baseURL: `${SITE_URL}/wp-json/mp/v1`,
   timeout: 15000,
 });
 
-// 📌 Cabeceras comunes: API Key y (opcional) Basic Auth como respaldo
+// ============================
+// 📝 CABECERAS
+// ============================
 function buildHeaders() {
   const headers = { Accept: 'application/json' };
 
@@ -33,16 +43,18 @@ function buildHeaders() {
   return headers;
 }
 
-// 📌 Utilidad para parsear respuestas de miembros
+// ============================
+// 🔍 OBTENER PRIMER MIEMBRO
+// ============================
 function pickFirstMember(respData) {
   if (Array.isArray(respData)) return respData[0] || null;
   if (respData && Array.isArray(respData.data)) return respData.data[0] || null;
   return null;
 }
 
-/**
- * 🔍 Obtiene el miembro por email en MemberPress
- */
+// ============================
+// 🔍 BUSCAR MIEMBRO POR EMAIL
+// ============================
 async function getMemberByEmail(email) {
   console.log(`🔎 Buscando miembro por email en MemberPress: ${email}`);
   const headers = buildHeaders();
@@ -51,11 +63,13 @@ async function getMemberByEmail(email) {
   try {
     const { data } = await mp.get('/members', { headers, params });
     const member = pickFirstMember(data);
+
     if (member) {
       console.log(`✅ Usuario encontrado: ID=${member.id}, Email=${member.email || 'N/A'}`);
     } else {
       console.warn(`⚠️ Usuario no encontrado para email: ${email}`);
     }
+
     return member;
   } catch (err) {
     console.error(`❌ Error buscando miembro (${email}):`, err.message);
@@ -67,9 +81,9 @@ async function getMemberByEmail(email) {
   }
 }
 
-/**
- * 🟢 Activa una membresía creando una Transaction manual (0 €, complete, manual)
- */
+// ============================
+// 🟢 ACTIVAR MEMBRESÍA
+// ============================
 async function activarMembresiaEnMemberPress(email, membershipId) {
   if (!email) throw new Error('Falta email');
   if (!membershipId) throw new Error('Falta membershipId');

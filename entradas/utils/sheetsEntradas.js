@@ -16,8 +16,15 @@ const COLOR_VERDE = { red: 0.20, green: 0.66, blue: 0.33 };
 const COLOR_ROJO  = { red: 0.90, green: 0.13, blue: 0.13 };
 const TEXTO_BLANCO_BOLD = { foregroundColor: { red: 1, green: 1, blue: 1 }, bold: true };
 
-function fechaESHoy() {
-  return new Date().toLocaleDateString('es-ES', { timeZone: 'Europe/Madrid' });
+/** Fecha y hora actual en Madrid como: 14/08/2025 - 10:13h */
+function fechaCompraES(d = new Date()) {
+  const fecha = new Intl.DateTimeFormat('es-ES', {
+    day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Europe/Madrid'
+  }).format(d);
+  const hora = new Intl.DateTimeFormat('es-ES', {
+    hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Europe/Madrid'
+  }).format(d);
+  return `${fecha} - ${hora}h`;
 }
 
 /** Devuelve sheets client y sheetIdNum de la primera pestaña */
@@ -33,6 +40,7 @@ async function getSheetsAndSheetId(spreadsheetId) {
 async function setCellValueAndFormat({ sheets, spreadsheetId, sheetIdNum, row1, col0, value, bgColor }) {
   const colLetter = String.fromCharCode('A'.charCodeAt(0) + col0);
 
+  // Valor
   await sheets.spreadsheets.values.update({
     spreadsheetId,
     range: `${colLetter}${row1}`,
@@ -40,6 +48,7 @@ async function setCellValueAndFormat({ sheets, spreadsheetId, sheetIdNum, row1, 
     requestBody: { values: [[value]] }
   });
 
+  // Formato
   await sheets.spreadsheets.batchUpdate({
     spreadsheetId,
     requestBody: {
@@ -81,10 +90,11 @@ async function findRowByCode({ sheets, spreadsheetId, codigo }) {
 
 /**
  * Guarda una entrada en la hoja del evento correspondiente.
+ * A = "14/08/2025 - 10:13h", B = comprador, C = código, D/E = "NO" (verde)
  */
 async function guardarEntradaEnSheet({ sheetId, comprador, codigo, fecha = null }) {
   try {
-    const fechaVenta = fecha || fechaESHoy();
+    const fechaVenta = fecha ? fechaCompraES(new Date(fecha)) : fechaCompraES();
     const fila = [fechaVenta, comprador, codigo, 'NO', 'NO'];
 
     const { sheets, sheetIdNum } = await getSheetsAndSheetId(sheetId);
@@ -97,6 +107,7 @@ async function guardarEntradaEnSheet({ sheetId, comprador, codigo, fecha = null 
       requestBody: { values: [fila] }
     });
 
+    // Intentar deducir la fila insertada
     let row1 = -1;
     const updatedRange = appendRes.data?.updates?.updatedRange || '';
     const match = updatedRange.match(/![A-Z]+(\d+):[A-Z]+(\d+)/);
@@ -118,9 +129,9 @@ async function guardarEntradaEnSheet({ sheetId, comprador, codigo, fecha = null 
 }
 
 /**
- * Marca una entrada como VALIDADA (columna D) → "SÍ" rojo
- * y añade fecha de validación en columna E → fondo verde.
- * Además devuelve email y nombre del asistente desde la fila encontrada.
+ * VALIDAR ENTRADA (día del evento)
+ * - Solo D = "SÍ" (rojo). ❌ NO tocar E.
+ * - Devuelve email (B) y nombre (A) por si se quiere registrar en Firestore.
  */
 async function marcarEntradaComoUsada(codigoEntrada, slugEvento) {
   try {
@@ -140,7 +151,6 @@ async function marcarEntradaComoUsada(codigoEntrada, slugEvento) {
 
     const { sheets, sheetIdNum } = await getSheetsAndSheetId(spreadsheetId);
 
-    // Obtenemos todas las filas para buscar y luego leer datos
     const getRes = await sheets.spreadsheets.values.get({
       spreadsheetId,
       range: 'A:E'
@@ -151,7 +161,7 @@ async function marcarEntradaComoUsada(codigoEntrada, slugEvento) {
     let filaEncontrada = null;
     for (let i = 1; i < filas.length; i++) {
       if (filas[i][2] && String(filas[i][2]).trim() === codigo) {
-        row1 = i + 1; // índice 1-based
+        row1 = i + 1;
         filaEncontrada = filas[i];
         break;
       }
@@ -161,34 +171,19 @@ async function marcarEntradaComoUsada(codigoEntrada, slugEvento) {
       return { error: 'Código no encontrado en la hoja.' };
     }
 
-    const fechaValidacion = fechaESHoy();
+    // D (index 3) → "SÍ" rojo (NO tocar E)
+    await setCellValueAndFormat({
+      sheets,
+      spreadsheetId,
+      sheetIdNum,
+      row1,
+      col0: 3,
+      value: 'SÍ',
+      bgColor: COLOR_ROJO
+    });
 
-    await Promise.all([
-      // Columna D (index 3): "SÍ" en rojo
-      setCellValueAndFormat({
-        sheets,
-        spreadsheetId,
-        sheetIdNum,
-        row1,
-        col0: 3,
-        value: 'SÍ',
-        bgColor: COLOR_ROJO
-      }),
-      // Columna E (index 4): fecha validación en verde
-      setCellValueAndFormat({
-        sheets,
-        spreadsheetId,
-        sheetIdNum,
-        row1,
-        col0: 4,
-        value: fechaValidacion,
-        bgColor: COLOR_VERDE
-      })
-    ]);
+    console.log(`🎟️ Entrada ${codigo} VALIDADA en fila ${row1}`);
 
-    console.log(`🎟️ Entrada ${codigo} VALIDADA en fila ${row1} con fecha ${fechaValidacion}`);
-
-    // EXTRA: capturamos datos de las columnas
     const nombreAsistente = filaEncontrada[0] || ''; // Columna A
     const emailComprador  = filaEncontrada[1] || ''; // Columna B
 
@@ -199,9 +194,52 @@ async function marcarEntradaComoUsada(codigoEntrada, slugEvento) {
   }
 }
 
+/**
+ * CANJEAR POR LIBRO (cuando entregas el libro):
+ * - E = "SÍ" (rojo). D no se toca aquí.
+ */
+async function marcarEntradaComoCanjeadaPorLibro(codigoEntrada, slugEvento) {
+  try {
+    const spreadsheetId = SHEETS_EVENTOS[slugEvento];
+    if (!spreadsheetId) throw new Error('Slug de evento no válido.');
+
+    let codigo = String(codigoEntrada || '').trim();
+    if (codigo.startsWith('http')) {
+      try {
+        const url = new URL(codigoEntrada);
+        codigo = url.searchParams.get('codigo') || codigoEntrada;
+      } catch {}
+    }
+
+    const { sheets, sheetIdNum } = await getSheetsAndSheetId(spreadsheetId);
+
+    const row1 = await findRowByCode({ sheets, spreadsheetId, codigo });
+    if (row1 === -1) {
+      return { error: 'Código no encontrado en la hoja.' };
+    }
+
+    // E (index 4) → "SÍ" rojo
+    await setCellValueAndFormat({
+      sheets,
+      spreadsheetId,
+      sheetIdNum,
+      row1,
+      col0: 4,
+      value: 'SÍ',
+      bgColor: COLOR_ROJO
+    });
+
+    console.log(`📕 Entrada ${codigo} CANJEADA POR LIBRO en fila ${row1}`);
+    return { ok: true };
+  } catch (err) {
+    console.error('❌ Error al marcar canje por libro:', err);
+    return { error: `Error al actualizar la hoja: ${err.message}` };
+  }
+}
 
 module.exports = {
   guardarEntradaEnSheet,
-  marcarEntradaComoUsada,
+  marcarEntradaComoUsada,            // D = SÍ (rojo)
+  marcarEntradaComoCanjeadaPorLibro, // E = SÍ (rojo)
   SHEETS_EVENTOS
 };

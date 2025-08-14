@@ -90,7 +90,8 @@ async function ensureCondFormats(sheets, spreadsheetId, sheetTitle) {
 
 /**
  * 📌 POST /crear-codigo-regalo
- * Body: { nombre, email, codigo }  (p.ej. codigo = "REG-ABCDE")
+ * Body: { nombre, email, codigo }
+ * Headers recomendados: { 'x-user-email': 'correo@quienloentrega.com' }
  */
 router.post('/crear-codigo-regalo', async (req, res) => {
   try {
@@ -98,6 +99,13 @@ router.post('/crear-codigo-regalo', async (req, res) => {
     const nombre = String(req.body?.nombre || '').trim();
     const email  = String(req.body?.email  || '').trim().toLowerCase();
     const codigo = String(req.body?.codigo || '').trim().toUpperCase();
+
+    // 📌 Email del usuario que GENERA el código (otorgante)
+    const otorganteEmail =
+      String(req.body?.otorgante_email ||
+             req.headers['x-user-email'] ||
+             req.headers['x-wp-user-email'] ||
+             '').trim().toLowerCase();
 
     // 📋 Validaciones
     if (!nombre || !email || !codigo) {
@@ -131,6 +139,7 @@ router.post('/crear-codigo-regalo', async (req, res) => {
       nombre,
       email,
       codigo,
+      otorgante_email: otorganteEmail || null,
       creado: new Date().toISOString(),
       usado: false
     });
@@ -152,8 +161,8 @@ router.post('/crear-codigo-regalo', async (req, res) => {
           range,
           valueInputOption: 'USER_ENTERED',
           requestBody: {
-            // A: Nombre | B: Email | C: Código | D: Ignacio/Rebeca | E: Usado ("NO")
-            values: [[ nombre, email, codigo, '', 'NO' ]]
+            // A: Nombre | B: Email destinatario | C: Código | D: Email otorgante | E: Usado ("NO")
+            values: [[ nombre, email, codigo, otorganteEmail || '', 'NO' ]]
           }
         })
       );
@@ -167,8 +176,8 @@ router.post('/crear-codigo-regalo', async (req, res) => {
       // No bloqueamos la creación del código por un fallo de Sheets
     }
 
-    console.log(`🎁 Código REGALO creado → ${codigo} para ${email}`);
-    return res.status(201).json({ ok: true, codigo });
+    console.log(`🎁 Código REGALO creado → ${codigo} para ${email} | Otorgante: ${otorganteEmail || 'desconocido'}`);
+    return res.status(201).json({ ok: true, codigo, otorgante_email: otorganteEmail || null });
   } catch (err) {
     console.error('❌ Error en /crear-codigo-regalo:', err?.message || err);
     return res.status(500).json({ ok: false, error: 'Error interno del servidor.' });

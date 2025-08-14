@@ -1,4 +1,4 @@
-// /entradas/services/enviarEmailConEntradas.js
+// 📂 /entradas/services/enviarEmailConEntradas.js
 const { enviarEmailPersonalizado } = require('../../services/email');
 
 // --- Pie RGPD (mismo separador y estilos que usas en el resto) ---
@@ -44,6 +44,7 @@ async function enviarEmailConEntradas({
 
   const subject = `🎟️ Tus entradas para ${descripcionProducto}`;
 
+  // ✅ HTML con enlace en texto plano
   const htmlPrincipal = `
     <p>Hola ${nombre},</p>
     <p>Gracias por tu compra. Te enviamos tus entradas para el siguiente evento:</p>
@@ -51,14 +52,15 @@ async function enviarEmailConEntradas({
     <p>Importe total: <strong>${importe.toFixed(2)} €</strong></p>
     <p>Cada entrada incluye un código QR único que se validará el día del evento. Puedes llevarlas en el móvil o impresas.</p>
     <p>
-      Una vez validada tu entrada en el evento, el código de la misma podrá canjearse por un libro digital gratuito desde 
-      <a href="https://www.laboroteca.es/canjear-codigo-regalo/" target="_blank">esta página</a>.<br/>
+      Una vez validada tu entrada en el evento, el código de la misma podrá canjearse por un libro digital gratuito desde:<br/>
+      https://www.laboroteca.es/canjear-codigo-regalo/<br/>
       Si no asistes y tu entrada no es validada, no podrás realizar el canje.<br/>
       Solo se validará una entrada por cada asistente.
     </p>
     <p>Un saludo,<br><strong>Ignacio Solsona</strong><br>Laboroteca</p>
   `;
 
+  // ✅ Texto plano con enlace en texto simple
   const textPrincipal = `Hola ${nombre},
 
 Gracias por tu compra. Te enviamos tus entradas para:
@@ -78,18 +80,18 @@ Un saludo,
 Ignacio Solsona
 Laboroteca`;
 
-  // ➕ Añadimos el pie RGPD con separador (HTML + Texto)
-  const html = `${htmlPrincipal}\n${PIE_HTML}`;
-  const text = `${textPrincipal}\n\n${PIE_TEXT}`;
+  // ➕ Añadimos el pie RGPD solo si no está ya presente
+  const html = htmlPrincipal.includes(PIE_HTML) ? htmlPrincipal : `${htmlPrincipal}\n${PIE_HTML}`;
+  const text = textPrincipal.includes(PIE_TEXT) ? textPrincipal : `${textPrincipal}\n\n${PIE_TEXT}`;
 
-  // Adjuntar entradas
+  // 📎 Adjuntar entradas
   const attachments = entradas.map((entrada, i) => ({
     filename: `ENTRADA ${i + 1}.pdf`,
     fileblob: entrada.buffer.toString('base64'),
     mimetype: 'application/pdf'
   }));
 
-  // Adjuntar factura si hay
+  // 📎 Adjuntar factura si hay
   if (facturaAdjunta && Buffer.isBuffer(facturaAdjunta)) {
     attachments.push({
       filename: 'Factura Laboroteca.pdf',
@@ -98,7 +100,7 @@ Laboroteca`;
     });
   }
 
-  // Enviar email (enviarEmailPersonalizado ya gestiona SMTP2GO y adjuntos)
+  // 📤 Enviar email
   await enviarEmailPersonalizado({
     to: email,
     subject,

@@ -12,7 +12,12 @@ const SHEET_NAME_CONTROL =
 // 🎨 Colores intensos (mismos que el otro sheet)
 const COLOR_VERDE = { red: 0.20, green: 0.66, blue: 0.33 }; // NO
 const COLOR_ROJO  = { red: 0.90, green: 0.13, blue: 0.13 }; // SÍ
-const TEXTO_BLANCO_BOLD = { foregroundColor: { red: 1, green: 1, blue: 1 }, bold: true };
+const TEXTO_BLANCO_BOLD = { 
+  foregroundColor: { red: 1, green: 1, blue: 1 }, 
+  bold: true, 
+  fontSize: 10 // mismo tamaño para todos
+};
+
 
 module.exports = async function marcarCodigoComoCanjeado(codigo) {
   const cod = String(codigo || '').trim().toUpperCase();

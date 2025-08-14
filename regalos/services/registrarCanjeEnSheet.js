@@ -4,7 +4,8 @@ const { google } = require('googleapis');
 const dayjs = require('dayjs');
 const { auth } = require('../../entradas/google/sheetsAuth'); // ✅ Auth centralizado
 
-const SHEET_ID_CANJES = '1XTIArNAGJXBhgBAyKuRfSSsUNzDOYg0aJKkLyC0ARdo'; // ⚠️ Confirma que existe
+// 📊 ID y nombre de hoja según captura
+const SHEET_ID_CANJES = '1MjxXebR3oQlyu0bYeRW083Xzj1sBFnDc53HvRRBiGE';
 const SHEET_NAME_CANJES = 'Hoja 1';
 
 /**
@@ -25,7 +26,6 @@ module.exports = async function registrarCanjeEnSheet({
   codigo,
   libro
 }) {
-  // 🧹 Normalización
   const ts     = dayjs().format('YYYY-MM-DD HH:mm:ss');
   const cod    = String(codigo || '').trim().toUpperCase();
   const mail   = String(email || '').trim().toLowerCase();
@@ -33,7 +33,6 @@ module.exports = async function registrarCanjeEnSheet({
   const ape    = String(apellidos || '').trim();
   const libroN = String(libro || '').trim();
 
-  // 🔎 Validación mínima
   if (!cod || !mail) {
     throw new Error('Faltan datos para registrar el canje (codigo/email).');
   }
@@ -46,20 +45,19 @@ module.exports = async function registrarCanjeEnSheet({
     const authClient = await auth();
     const sheets = google.sheets({ version: 'v4', auth: authClient });
 
+    console.log(`📤 Registrando en Google Sheet: ID=${SHEET_ID_CANJES}, Hoja="${SHEET_NAME_CANJES}"`);
+
     await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID_CANJES,
       range: `${SHEET_NAME_CANJES}!A2:G`,
       valueInputOption: 'USER_ENTERED',
       requestBody: {
-        // A: Fecha | B: Nombre | C: Apellidos | D: Email | E: Libro | F: Código | G: Origen
         values: [[ ts, nom, ape, mail, libroN, cod, origen ]]
       }
     });
 
-    console.log(`📄 Canje registrado: ${cod} (${origen}) → ${mail}`);
+    console.log(`📄 Canje registrado en hoja: ${cod} (${origen}) → ${mail}`);
   } catch (err) {
-    console.error('❌ Error registrando canje en Sheet:', err?.message || err);
-    // No relanzamos para no romper el flujo principal de canje:
-    // si prefieres que sea bloqueante, cambia por: throw err;
+    console.error(`❌ Error registrando canje en Sheet "${SHEET_NAME_CANJES}" (ID ${SHEET_ID_CANJES}):`, err?.message || err);
   }
 };

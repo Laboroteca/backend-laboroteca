@@ -5,7 +5,7 @@ const dayjs = require('dayjs');
 const { auth } = require('../../entradas/google/sheetsAuth'); // ✅ Auth centralizado
 
 // 📊 ID y nombre de hoja según captura
-const SHEET_ID_CANJES = '1MjxXebR3oQlyu0bYeRW083Xzj1sBFnDc53HvRRBiGE';
+const SHEET_ID_CANJES = '1MjxXebR3oQIyu0bYeRWo83Xzj1sBFnDcx53HvRRBiGE';
 const SHEET_NAME_CANJES = 'Hoja 1';
 
 /**

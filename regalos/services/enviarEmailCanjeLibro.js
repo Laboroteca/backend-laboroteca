@@ -10,6 +10,24 @@
 
 const SMTP2GO_ENDPOINT = 'https://api.smtp2go.com/v3/email/send';
 
+// --- Pie RGPD unificado (mismo separador y estilos) ---
+const PIE_HTML = `
+  <hr style="margin-top: 40px; margin-bottom: 10px;" />
+  <div style="font-size: 12px; color: #777; line-height: 1.5;">
+    En cumplimiento del Reglamento (UE) 2016/679, le informamos que su dirección de correo electrónico forma parte de la base de datos de Ignacio Solsona Fernández-Pedrera, DNI 20481042W, con domicilio en calle Enmedio nº 22, piso 3, puerta E, Castellón de la Plana, CP 12001.<br /><br />
+    Su dirección se utiliza con la finalidad de prestarle servicios jurídicos. Usted tiene derecho a retirar su consentimiento en cualquier momento.<br /><br />
+    Puede ejercer sus derechos de acceso, rectificación, supresión, portabilidad, limitación y oposición contactando con: <a href="mailto:laboroteca@gmail.com">laboroteca@gmail.com</a>. También puede presentar una reclamación ante la autoridad de control competente.
+  </div>
+`.trim();
+
+const PIE_TEXT = `
+------------------------------------------------------------
+En cumplimiento del Reglamento (UE) 2016/679 (RGPD), su email forma parte de la base de datos de Ignacio Solsona Fernández-Pedrera, DNI 20481042W, con domicilio en calle Enmedio nº 22, piso 3, puerta E, Castellón de la Plana, CP 12001.
+
+Puede ejercer sus derechos en: laboroteca@gmail.com
+También puede reclamar ante la autoridad de control si lo considera necesario.
+`.trim();
+
 function construirHTML({ nombreMostrar, libroElegido }) {
   const miCuentaURL = 'https://www.laboroteca.es/mi-cuenta/';
   const clubURL = 'https://www.laboroteca.es/club-laboroteca/';
@@ -80,8 +98,10 @@ async function enviarEmailCanjeLibro({ toEmail, nombre = '', apellidos = '', lib
 
   const nombreMostrar = [nombre, apellidos].filter(Boolean).join(' ').trim();
   const subject = `✅ Código canjeado: ${libroElegido}`;
-  const html_body = construirHTML({ nombreMostrar, libroElegido });
-  const text_body = construirTextoPlano({ nombreMostrar, libroElegido });
+
+  // Cuerpos + pie RGPD (HTML y texto)
+  const html_body = construirHTML({ nombreMostrar, libroElegido }) + '\n' + PIE_HTML;
+  const text_body = construirTextoPlano({ nombreMostrar, libroElegido }) + '\n\n' + PIE_TEXT;
 
   const payload = {
     api_key: apiKey,

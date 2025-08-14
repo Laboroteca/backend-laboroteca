@@ -90,21 +90,108 @@ module.exports = async function canjearCodigoRegalo({
       throw new Error('Requested entity was not found');
     }
 
-  } else if (esEntrada) {
-    const docEntrada = await firestore.collection('entradasValidadas').doc(codigo).get();
-    if (!docEntrada.exists) {
-      console.warn(`⛔ PRE no está validada (no existe en entradasValidadas): ${codigo}`);
-      throw new Error('Esta entrada no está validada y no puede canjearse.');
-    }
-    const ent = docEntrada.data() || {};
-    if (ent.validado !== true) {
-      console.warn(`⛔ PRE encontrada pero no validada: ${codigo}`);
-      throw new Error('Esta entrada no está validada y no puede canjearse.');
-    }
-  } else {
-    console.warn(`⛔ Prefijo desconocido en código: ${codigo}`);
-    throw new Error('El código introducido no es válido.');
+    } else if (esEntrada) {
+  // ✅ 1) Comprobación en Firestore: la entrada debe estar validada previamente
+  const docEntrada = await firestore.collection('entradasValidadas').doc(codigo).get();
+  if (!docEntrada.exists) {
+    console.warn(`⛔ PRE no está validada (no existe en entradasValidadas): ${codigo}`);
+    throw new Error('Esta entrada no está validada y no puede canjearse.');
   }
+  const ent = docEntrada.data() || {};
+  if (ent.validado !== true) {
+    console.warn(`⛔ PRE encontrada pero no validada: ${codigo}`);
+    throw new Error('Esta entrada no está validada y no puede canjearse.');
+  }
+
+  // ✅ 2) Marcar en Google Sheets del evento: Columna E = "SÍ" + fondo rojo
+  try {
+    const authClient = await auth();
+    const sheets = google.sheets({ version: 'v4', auth: authClient });
+
+    // IDs reales de las 5 hojas de eventos
+    const SHEETS_EVENTOS = {
+      'evento-1': '1W-0N5kBYxNk_DoSNWDBK7AwkM66mcQIpDHQnPooDW6s',
+      'evento-2': '1PbhRFdm1b1bR0g5wz5nz0ZWAcgsbkakJVEh0dz34lCM',
+      'evento-3': '1EVcNTwE4nRNp4J_rZjiMGmojNO2F5TLZiwKY0AREmZE',
+      'evento-4': '1IUZ2_bQXxEVC_RLxNAzPBql9huu34cpE7_MF4Mg6eTM',
+      'evento-5': '1LGLEsQ_mGj-Hmkj1vjrRQpmSvIADZ1eMaTJoh3QBmQc'
+    };
+
+    // Si Firestore guardó el slug del evento, usamos esa hoja; si no, probamos en las 5
+    const slugDeFS = ent.slugEvento && SHEETS_EVENTOS[ent.slugEvento] ? ent.slugEvento : null;
+    const idsARevisar = slugDeFS
+      ? [SHEETS_EVENTOS[slugDeFS]]
+      : Object.values(SHEETS_EVENTOS);
+
+    let actualizado = false;
+
+    for (const spreadsheetId of idsARevisar) {
+      try {
+        // Sheet/tab ID (primera pestaña)
+        const meta = await sheets.spreadsheets.get({ spreadsheetId });
+        const sheetIdNum = meta.data.sheets?.[0]?.properties?.sheetId ?? 0;
+
+        // Buscar el código en la columna C (rango A:E)
+        const read = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'A:E' });
+        const filas = read.data.values || [];
+
+        let fila1 = -1;
+        for (let i = 1; i < filas.length; i++) {
+          const c = String(filas[i]?.[2] || '').trim().toUpperCase();
+          if (c === codigo.toUpperCase()) { fila1 = i + 1; break; } // 1-based
+        }
+        if (fila1 === -1) continue;
+
+        // Escribir "SÍ" en E{fila}
+        await sheets.spreadsheets.values.update({
+          spreadsheetId,
+          range: `E${fila1}`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: { values: [['SÍ']] }
+        });
+
+        // Estilo: fondo rojo + texto blanco negrita en E{fila}
+        await sheets.spreadsheets.batchUpdate({
+          spreadsheetId,
+          requestBody: {
+            requests: [{
+              repeatCell: {
+                range: {
+                  sheetId: sheetIdNum,
+                  startRowIndex: fila1 - 1,
+                  endRowIndex: fila1,
+                  startColumnIndex: 4, // E (0-based)
+                  endColumnIndex: 5
+                },
+                cell: {
+                  userEnteredFormat: {
+                    backgroundColor: { red: 0.90, green: 0.13, blue: 0.13 },
+                    textFormat: { foregroundColor: { red: 1, green: 1, blue: 1 }, bold: true }
+                  }
+                },
+                fields: 'userEnteredFormat(backgroundColor,textFormat)'
+              }
+            }]
+          }
+        });
+
+        console.log(`📕 PRE ${codigo} canjeado → E="SÍ" (rojo) en hoja ${spreadsheetId}, fila ${fila1}`);
+        actualizado = true;
+        break;
+      } catch (e) {
+        console.warn(`⚠️ No se pudo actualizar hoja ${spreadsheetId}:`, e?.message || e);
+      }
+    }
+
+    if (!actualizado) {
+      console.warn(`⚠️ PRE ${codigo} no se encontró en ninguna hoja de eventos para marcar E="SÍ".`);
+    }
+  } catch (e) {
+    console.warn('⚠️ Error al intentar marcar PRE en Sheets:', e?.message || e);
+    // No lanzamos: el canje continúa aunque falle el marcado visual
+  }
+}
+
 
   // 2) Bloquear código en Firestore antes de MemberPress
   console.log('🔒 Bloqueando código en Firestore antes de activar…');

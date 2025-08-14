@@ -1,3 +1,4 @@
+// 📄 regalos/services/sheetsEntradas.js
 const { google } = require('googleapis');
 const { auth } = require('../google/sheetsAuth');
 
@@ -10,31 +11,106 @@ const SHEETS_EVENTOS = {
   'evento-5': '1LGLEsQ_mGj-Hmkj1vjrRQpmSvIADZ1eMaTJoh3QBmQc'
 };
 
+// 🎨 Colores (RGB 0–1)
+const COLOR_VERDE = { red: 0.20, green: 0.66, blue: 0.33 };
+const COLOR_ROJO  = { red: 0.90, green: 0.13, blue: 0.13 };
+const TEXTO_BLANCO_BOLD = { foregroundColor: { red: 1, green: 1, blue: 1 }, bold: true };
+
+function fechaESHoy() {
+  return new Date().toLocaleDateString('es-ES', { timeZone: 'Europe/Madrid' });
+}
+
+/** Devuelve sheets client y sheetIdNum de la primera pestaña */
+async function getSheetsAndSheetId(spreadsheetId) {
+  const authClient = await auth();
+  const sheets = google.sheets({ version: 'v4', auth: authClient });
+  const spreadsheetData = await sheets.spreadsheets.get({ spreadsheetId });
+  const sheetIdNum = spreadsheetData.data.sheets?.[0]?.properties?.sheetId || 0;
+  return { sheets, sheetIdNum };
+}
+
+/** Aplica valor y formato a una celda (fila 1-based, col 0-based) */
+async function setCellValueAndFormat({ sheets, spreadsheetId, sheetIdNum, row1, col0, value, bgColor }) {
+  const colLetter = String.fromCharCode('A'.charCodeAt(0) + col0);
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `${colLetter}${row1}`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: [[value]] }
+  });
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [{
+        repeatCell: {
+          range: {
+            sheetId: sheetIdNum,
+            startRowIndex: row1 - 1,
+            endRowIndex: row1,
+            startColumnIndex: col0,
+            endColumnIndex: col0 + 1
+          },
+          cell: {
+            userEnteredFormat: {
+              backgroundColor: bgColor,
+              textFormat: TEXTO_BLANCO_BOLD
+            }
+          },
+          fields: 'userEnteredFormat(backgroundColor,textFormat)'
+        }
+      }]
+    }
+  });
+}
+
+/** Busca la fila (1-based) por código en la columna C */
+async function findRowByCode({ sheets, spreadsheetId, codigo }) {
+  const getRes = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: 'A:E'
+  });
+  const filas = getRes.data.values || [];
+  for (let i = 1; i < filas.length; i++) {
+    const fila = filas[i];
+    if (fila[2] && String(fila[2]).trim() === String(codigo).trim()) return i + 1;
+  }
+  return -1;
+}
+
 /**
  * Guarda una entrada en la hoja del evento correspondiente.
  */
-async function guardarEntradaEnSheet({ sheetId, comprador, codigo, usado = 'NO', fecha = null }) {
+async function guardarEntradaEnSheet({ sheetId, comprador, codigo, fecha = null }) {
   try {
-    const fechaVenta = fecha || new Date().toISOString();
-    const fila = [fechaVenta, comprador, codigo, usado];
+    const fechaVenta = fecha || fechaESHoy();
+    const fila = [fechaVenta, comprador, codigo, 'NO', 'NO'];
 
-    console.log('📤 Datos que se van a guardar en el sheet:', fila);
+    const { sheets, sheetIdNum } = await getSheetsAndSheetId(sheetId);
 
-    const authClient = await auth();
-    const sheets = google.sheets({ version: 'v4', auth: authClient });
-
-    const result = await sheets.spreadsheets.values.append({
+    const appendRes = await sheets.spreadsheets.values.append({
       spreadsheetId: sheetId,
-      range: 'A:D',
+      range: 'A:E',
       valueInputOption: 'USER_ENTERED',
       insertDataOption: 'INSERT_ROWS',
-      requestBody: {
-        values: [fila]
-      }
+      requestBody: { values: [fila] }
     });
 
-    console.log('✅ Resultado append:', result.statusText || result.status);
-    console.log(`✅ Entrada registrada correctamente en la hoja (${sheetId}):`, codigo);
+    let row1 = -1;
+    const updatedRange = appendRes.data?.updates?.updatedRange || '';
+    const match = updatedRange.match(/![A-Z]+(\d+):[A-Z]+(\d+)/);
+    if (match) row1 = parseInt(match[1], 10);
+    if (row1 <= 0) row1 = await findRowByCode({ sheets, spreadsheetId: sheetId, codigo });
+
+    if (row1 > 0) {
+      await Promise.all([
+        setCellValueAndFormat({ sheets, spreadsheetId: sheetId, sheetIdNum, row1, col0: 3, value: 'NO', bgColor: COLOR_VERDE }),
+        setCellValueAndFormat({ sheets, spreadsheetId: sheetId, sheetIdNum, row1, col0: 4, value: 'NO', bgColor: COLOR_VERDE })
+      ]);
+    }
+
+    console.log(`✅ Entrada registrada en hoja (${sheetId}) → fila ${row1} código ${codigo}`);
   } catch (err) {
     console.error(`❌ Error al guardar entrada en hoja (${sheetId}):`, err.message);
     throw err;
@@ -42,102 +118,90 @@ async function guardarEntradaEnSheet({ sheetId, comprador, codigo, usado = 'NO',
 }
 
 /**
- * Marca una entrada como USADA en la hoja de Google Sheets y devuelve datos útiles.
+ * Marca una entrada como VALIDADA (columna D) → "SÍ" rojo
+ * y añade fecha de validación en columna E → fondo verde.
+ * Además devuelve email y nombre del asistente desde la fila encontrada.
  */
 async function marcarEntradaComoUsada(codigoEntrada, slugEvento) {
   try {
     const spreadsheetId = SHEETS_EVENTOS[slugEvento];
     if (!spreadsheetId) throw new Error('Slug de evento no válido.');
 
-    // Limpieza por si llega URL en vez de solo el código
-    let codigo = codigoEntrada.trim();
+    let codigo = String(codigoEntrada || '').trim();
     if (codigo.startsWith('http')) {
       try {
         const url = new URL(codigoEntrada);
         codigo = url.searchParams.get('codigo') || codigoEntrada;
         console.log('🔍 Código extraído de URL:', codigo);
-      } catch (err) {
-        console.warn('⚠️ Error al parsear código como URL. Se usará valor original.');
+      } catch {
+        console.warn('⚠️ No se pudo parsear la URL, se usa el valor original.');
       }
     }
 
-    const authClient = await auth();
-    const sheets = google.sheets({ version: 'v4', auth: authClient });
+    const { sheets, sheetIdNum } = await getSheetsAndSheetId(spreadsheetId);
 
-    // Obtener sheetIdNum real
-    const spreadsheetData = await sheets.spreadsheets.get({ spreadsheetId });
-    const sheetIdNum = spreadsheetData.data.sheets?.[0]?.properties?.sheetId || 0;
-
+    // Obtenemos todas las filas para buscar y luego leer datos
     const getRes = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: 'A:D'
+      range: 'A:E'
     });
-
     const filas = getRes.data.values || [];
-    let filaEncontrada = -1;
 
+    let row1 = -1;
+    let filaEncontrada = null;
     for (let i = 1; i < filas.length; i++) {
-      const fila = filas[i];
-      if (fila[2] && fila[2].trim() === codigo.trim()) {
-        filaEncontrada = i + 1; // para A1 notation
+      if (filas[i][2] && String(filas[i][2]).trim() === codigo) {
+        row1 = i + 1; // índice 1-based
+        filaEncontrada = filas[i];
         break;
       }
     }
 
-    if (filaEncontrada === -1) {
+    if (row1 === -1 || !filaEncontrada) {
       return { error: 'Código no encontrado en la hoja.' };
     }
 
-    // 1. Marcar "SÍ" en columna D
-    await sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range: `D${filaEncontrada}`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: {
-        values: [['SÍ']]
-      }
-    });
+    const fechaValidacion = fechaESHoy();
 
-    // 2. Aplicar estilo visual a celda D
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId,
-      requestBody: {
-        requests: [
-          {
-            repeatCell: {
-              range: {
-                sheetId: sheetIdNum,
-                startRowIndex: filaEncontrada - 1,
-                endRowIndex: filaEncontrada,
-                startColumnIndex: 3,
-                endColumnIndex: 4
-              },
-              cell: {
-                userEnteredFormat: {
-                  backgroundColor: { red: 0.2, green: 0.66, blue: 0.325 },
-                  textFormat: { foregroundColor: { red: 1, green: 1, blue: 1 }, bold: true }
-                }
-              },
-              fields: 'userEnteredFormat(backgroundColor,textFormat)'
-            }
-          }
-        ]
-      }
-    });
+    await Promise.all([
+      // Columna D (index 3): "SÍ" en rojo
+      setCellValueAndFormat({
+        sheets,
+        spreadsheetId,
+        sheetIdNum,
+        row1,
+        col0: 3,
+        value: 'SÍ',
+        bgColor: COLOR_ROJO
+      }),
+      // Columna E (index 4): fecha validación en verde
+      setCellValueAndFormat({
+        sheets,
+        spreadsheetId,
+        sheetIdNum,
+        row1,
+        col0: 4,
+        value: fechaValidacion,
+        bgColor: COLOR_VERDE
+      })
+    ]);
 
-    const filaOriginal = filas[filaEncontrada - 1] || [];
-    const emailComprador = filaOriginal[1] || '';
-    const nombreAsistente = ''; // puedes completarlo si decides añadir la columna
+    console.log(`🎟️ Entrada ${codigo} VALIDADA en fila ${row1} con fecha ${fechaValidacion}`);
 
-    console.log(`🎟️ Entrada ${codigo} marcada como usada en fila ${filaEncontrada}`);
-    return { emailComprador, nombreAsistente };
+    // EXTRA: capturamos datos de las columnas
+    const nombreAsistente = filaEncontrada[0] || ''; // Columna A
+    const emailComprador  = filaEncontrada[1] || ''; // Columna B
+
+    return { ok: true, emailComprador, nombreAsistente };
   } catch (err) {
     console.error('❌ Error al marcar entrada como usada:', err);
     return { error: `Error al actualizar la hoja: ${err.message}` };
   }
 }
 
+
 module.exports = {
   guardarEntradaEnSheet,
-  marcarEntradaComoUsada
+  marcarEntradaComoUsada,
+  SHEETS_EVENTOS
 };

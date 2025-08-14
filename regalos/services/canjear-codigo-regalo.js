@@ -9,10 +9,10 @@ const marcarCodigoComoCanjeado = require('./marcarCodigoComoCanjeado');
 const registrarCanjeEnSheet = require('./registrarCanjeEnSheet');
 const { activarMembresiaEnMemberPress } = require('./memberpress'); // ✅ Nuevo servicio API oficial
 
-const SHEET_ID_REGALOS  = '1MjxXebR3oQIyu0bYeRWo83xj1sBFnDcx53HvRRBiGE'; // Libros GRATIS
+const SHEET_ID_REGALOS   = '1MjxXebR3oQIyu0bYeRWo83xj1sBFnDcx53HvRRBiGE'; // Libros GRATIS (registro de canjes)
 const SHEET_NAME_REGALOS = 'Hoja 1';
-const SHEET_ID_CONTROL  = '1DFZuhJtuQ0y8EHXOkUUifR_mCVfGyxgCHXRvBoiwfo'; // Códigos REG- activos
-const SHEET_NAME_CONTROL = 'Hoja 1';
+const SHEET_ID_CONTROL   = '1DFZuhJtuQ0y8EHXOkUUifR_mCVfGyxgCHXRvBoiwfo'; // Códigos REG- activos (control)
+const SHEET_NAME_CONTROL = 'CODIGOS REGALO';
 
 // Helper reintentos
 async function withRetries(fn, { tries = 5, baseMs = 120 } = {}) {

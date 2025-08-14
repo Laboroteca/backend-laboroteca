@@ -24,6 +24,7 @@ const desactivarMembresiaClubForm = require('./routes/desactivarMembresiaClub');
 const desactivarMembresiaClub = require('./services/desactivarMembresiaClub');
 const { registrarBajaClub } = require('./services/registrarBajaClub');
 const validarEntrada = require('./entradas/routes/validarEntrada');
+const crearCodigoRegalo = require('./regalos/routes/crear-codigo-regalo');
 
 
 const app = express();

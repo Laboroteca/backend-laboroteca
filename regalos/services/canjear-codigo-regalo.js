@@ -7,7 +7,7 @@ const { auth } = require('../../entradas/google/sheetsAuth');
 
 const marcarCodigoComoCanjeado = require('./marcarCodigoComoCanjeado');
 const registrarCanjeEnSheet = require('./registrarCanjeEnSheet');
-const { activarMembresiaDirecta } = require('../../utils/memberpress/activarMembresiaDirecta');
+const { activarMembresiaDirecta } = require('./activarMembresiaDirecta');
 
 const SHEET_ID_REGALOS  = '1MjxXebR3oQIyu0bYeRWo83xj1sBFnDcx53HvRRBiGE'; // Libros GRATIS
 const SHEET_NAME_REGALOS = 'Hoja 1';

@@ -11,7 +11,7 @@ const { activarMembresiaEnMemberPress } = require('./memberpress'); // ✅ Nuevo
 
 const SHEET_ID_REGALOS   = '1MjxXebR3oQIyu0bYeRWo83xj1sBFnDcx53HvRRBiGE'; // Libros GRATIS (registro de canjes)
 const SHEET_NAME_REGALOS = 'Hoja 1';
-const SHEET_ID_CONTROL   = '1DFZuhJtuQ0y8EHXOkUUifR_mCVfGyxgCHXRvBoiwfo'; // Códigos REG- activos (control)
+const SHEET_ID_CONTROL   = '1DFZuhJtuQ0y8EHXOkUUifR_mCVfGyxgkCHXRvBoiwfo'; // Códigos REG- activos (control)
 const SHEET_NAME_CONTROL = 'CODIGOS REGALO';
 
 // Helper reintentos

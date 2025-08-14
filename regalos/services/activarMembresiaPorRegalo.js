@@ -22,7 +22,7 @@ module.exports = async function activarMembresiaPorRegalo(email, libro) {
   if (titulo.includes('de cara a la jubilación')) {
     membershipId = 7994; // Libro: De cara a la Jubilación
   } else if (titulo.includes('adelanta tu jubilación')) {
-    membershipId = 12009; // Libro: Adelanta tu Jubilación (nuevo ID)
+    membershipId = 11006; // Libro: Adelanta tu Jubilación (nuevo ID)
   } else if (
     titulo.includes('jubilación anticipada') ||
     titulo.includes('jubilación parcial')

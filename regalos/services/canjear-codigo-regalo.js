@@ -156,7 +156,7 @@ module.exports = async function canjearCodigoRegalo({
     if (tituloLower.includes('de cara a la jubilación')) {
       membershipId = 7994;
     } else if (tituloLower.includes('adelanta tu jubilación')) {
-      membershipId = 12009;
+      membershipId = 11006;
     } else if (
       tituloLower.includes('jubilación anticipada') ||
       tituloLower.includes('jubilación parcial')

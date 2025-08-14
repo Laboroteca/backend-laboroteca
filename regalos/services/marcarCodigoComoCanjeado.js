@@ -4,23 +4,16 @@ const { auth } = require('../../entradas/google/sheetsAuth');
 
 const SHEET_ID_CONTROL =
   process.env.SHEET_ID_CONTROL ||
-  '1DFZuhJtuQ0y8EHXOkUUifR_mCVfGyxgkCHXRvBoiwfo'; // Hoja de control de REG-
+  '1DFZuhJtuQ0y8EHXOkUUifR_mCVfGyxgkCHXRvBoiwfo';
 
 const SHEET_NAME_CONTROL =
-  process.env.SHEET_NAME_CONTROL || 'CODIGOS REGALO'; // Nombre de pestaña
+  process.env.SHEET_NAME_CONTROL || 'CODIGOS REGALO';
 
-// 🎨 Colores unificados (RGB 0–1) y texto
-const COLOR_VERDE = { red: 0.20, green: 0.66, blue: 0.33 }; // "NO"
-const COLOR_ROJO  = { red: 0.90, green: 0.13, blue: 0.13 }; // "SÍ"
+// 🎨 Colores intensos (mismos que el otro sheet)
+const COLOR_VERDE = { red: 0.20, green: 0.66, blue: 0.33 }; // NO
+const COLOR_ROJO  = { red: 0.90, green: 0.13, blue: 0.13 }; // SÍ
 const TEXTO_BLANCO_BOLD = { foregroundColor: { red: 1, green: 1, blue: 1 }, bold: true };
 
-/**
- * Marca un REG- como canjeado en la hoja de control:
- * - Localiza el código en la columna C (case-insensitive)
- * - Escribe "SÍ" en la columna E de esa fila
- * - Aplica formato directo (rojo + texto blanco negrita) en E{fila}
- * - (Opcional) repone reglas condicionales en la columna E para NO/SÍ con colores unificados
- */
 module.exports = async function marcarCodigoComoCanjeado(codigo) {
   const cod = String(codigo || '').trim().toUpperCase();
   if (!cod) {
@@ -31,7 +24,6 @@ module.exports = async function marcarCodigoComoCanjeado(codigo) {
   const authClient = await auth();
   const sheets = google.sheets({ version: 'v4', auth: authClient });
 
-  // Helper: obtener sheetId por título (no asumimos índice 0)
   async function getSheetIdByTitle(spreadsheetId, title) {
     const meta = await sheets.spreadsheets.get({ spreadsheetId });
     const sh = (meta.data.sheets || []).find(s => s.properties.title === title);
@@ -39,12 +31,11 @@ module.exports = async function marcarCodigoComoCanjeado(codigo) {
   }
 
   try {
-    // 1) Localizar fila del código leyendo la columna C completa
+    // 1) Buscar fila por columna C (case-insensitive)
     const read = await sheets.spreadsheets.values.get({
       spreadsheetId: SHEET_ID_CONTROL,
-      range: `'${SHEET_NAME_CONTROL}'!C:C`, // Columna C = códigos
+      range: `'${SHEET_NAME_CONTROL}'!C:C`,
     });
-
     const rows = read.data.values || [];
     const idx = rows.findIndex(r => (r[0] || '').toString().trim().toUpperCase() === cod);
     if (idx < 0) {
@@ -53,7 +44,7 @@ module.exports = async function marcarCodigoComoCanjeado(codigo) {
     }
     const rowNumber = idx + 1; // 1-based
 
-    // 2) Escribir "SÍ" en columna E de esa fila (usado)
+    // 2) Escribir "SÍ" en E{fila}
     await sheets.spreadsheets.values.update({
       spreadsheetId: SHEET_ID_CONTROL,
       range: `'${SHEET_NAME_CONTROL}'!E${rowNumber}`,
@@ -61,7 +52,7 @@ module.exports = async function marcarCodigoComoCanjeado(codigo) {
       requestBody: { values: [['SÍ']] },
     });
 
-    // 3) Formato directo en E{fila}: rojo + texto blanco negrita (unificado)
+    // 3) Pintar E{fila} en rojo + texto blanco negrita (formato directo)
     const sheetId = await getSheetIdByTitle(SHEET_ID_CONTROL, SHEET_NAME_CONTROL);
     if (sheetId !== null) {
       await sheets.spreadsheets.batchUpdate({
@@ -88,10 +79,9 @@ module.exports = async function marcarCodigoComoCanjeado(codigo) {
         }
       });
 
-      // 4) (Opcional) Reponer reglas condicionales en toda la columna E con colores unificados
-      //    Eliminamos reglas existentes de forma defensiva (si no hay, no rompe)
+      // 4) Reglas condicionales en E completa con mismos colores (SÍ/sí/SI y NO/no)
+      //    Borrado defensivo de reglas existentes
       try {
-        // Intento de borrar varias reglas desde el índice 0 (si existen)
         await sheets.spreadsheets.batchUpdate({
           spreadsheetId: SHEET_ID_CONTROL,
           requestBody: {
@@ -102,18 +92,57 @@ module.exports = async function marcarCodigoComoCanjeado(codigo) {
             ]
           }
         });
-      } catch { /* sin drama si no hay reglas */ }
+      } catch {}
 
-      // Añadir reglas: NO → verde, SÍ → rojo (ambas con texto blanco y negrita)
       await sheets.spreadsheets.batchUpdate({
         spreadsheetId: SHEET_ID_CONTROL,
         requestBody: {
           requests: [
+            // SÍ (mayúsculas con acento)
             {
               addConditionalFormatRule: {
                 index: 0,
                 rule: {
-                  ranges: [{ sheetId, startColumnIndex: 4, endColumnIndex: 5 }], // E completa
+                  ranges: [{ sheetId, startColumnIndex: 4, endColumnIndex: 5 }],
+                  booleanRule: {
+                    condition: { type: 'TEXT_EQ', values: [{ userEnteredValue: 'SÍ' }] },
+                    format: { backgroundColor: COLOR_ROJO, textFormat: TEXTO_BLANCO_BOLD }
+                  }
+                }
+              }
+            },
+            // sí (minúsculas con acento)
+            {
+              addConditionalFormatRule: {
+                index: 0,
+                rule: {
+                  ranges: [{ sheetId, startColumnIndex: 4, endColumnIndex: 5 }],
+                  booleanRule: {
+                    condition: { type: 'TEXT_EQ', values: [{ userEnteredValue: 'sí' }] },
+                    format: { backgroundColor: COLOR_ROJO, textFormat: TEXTO_BLANCO_BOLD }
+                  }
+                }
+              }
+            },
+            // SI (sin acento)
+            {
+              addConditionalFormatRule: {
+                index: 0,
+                rule: {
+                  ranges: [{ sheetId, startColumnIndex: 4, endColumnIndex: 5 }],
+                  booleanRule: {
+                    condition: { type: 'TEXT_EQ', values: [{ userEnteredValue: 'SI' }] },
+                    format: { backgroundColor: COLOR_ROJO, textFormat: TEXTO_BLANCO_BOLD }
+                  }
+                }
+              }
+            },
+            // NO (mayúsculas)
+            {
+              addConditionalFormatRule: {
+                index: 0,
+                rule: {
+                  ranges: [{ sheetId, startColumnIndex: 4, endColumnIndex: 5 }],
                   booleanRule: {
                     condition: { type: 'TEXT_EQ', values: [{ userEnteredValue: 'NO' }] },
                     format: { backgroundColor: COLOR_VERDE, textFormat: TEXTO_BLANCO_BOLD }
@@ -121,14 +150,15 @@ module.exports = async function marcarCodigoComoCanjeado(codigo) {
                 }
               }
             },
+            // no (minúsculas)
             {
               addConditionalFormatRule: {
                 index: 0,
                 rule: {
-                  ranges: [{ sheetId, startColumnIndex: 4, endColumnIndex: 5 }], // E completa
+                  ranges: [{ sheetId, startColumnIndex: 4, endColumnIndex: 5 }],
                   booleanRule: {
-                    condition: { type: 'TEXT_EQ', values: [{ userEnteredValue: 'SÍ' }] },
-                    format: { backgroundColor: COLOR_ROJO, textFormat: TEXTO_BLANCO_BOLD }
+                    condition: { type: 'TEXT_EQ', values: [{ userEnteredValue: 'no' }] },
+                    format: { backgroundColor: COLOR_VERDE, textFormat: TEXTO_BLANCO_BOLD }
                   }
                 }
               }
@@ -138,7 +168,7 @@ module.exports = async function marcarCodigoComoCanjeado(codigo) {
       });
     }
 
-    console.log(`✅ REG ${cod} marcado como canjeado (E${rowNumber} = "SÍ" con formato unificado)`);
+    console.log(`✅ REG ${cod} marcado como canjeado (E${rowNumber} = "SÍ" con colores unificados)`);
   } catch (err) {
     console.error(`❌ Error al marcar ${cod} como canjeado:`, err?.message || err);
     throw err;

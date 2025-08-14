@@ -8,18 +8,20 @@ const { auth } = require('../../entradas/google/sheetsAuth');
 
 const router = express.Router();
 
+// 🎨 Colores unificados (RGB 0–1) y texto
+const COLOR_VERDE = { red: 0.20, green: 0.66, blue: 0.33 }; // "NO"
+const COLOR_ROJO  = { red: 0.90, green: 0.13, blue: 0.13 }; // "SÍ"
+const TEXTO_BLANCO_BOLD = { foregroundColor: { red: 1, green: 1, blue: 1 }, bold: true };
+
 /**
  * 🗒️ Hoja de control de CÓDIGOS REGALO (previos al canje)
- * 👉 Puedes sobreescribir por env:
- *    SHEET_ID_CONTROL, SHEET_NAME_CONTROL
  */
 const SHEET_ID_CONTROL =
   process.env.SHEET_ID_CONTROL ||
   '1DFZuhJtuQ0y8EHXOkUUifR_mCVfGyxgkCHXRvBoiwfo';
 
 const SHEET_NAME_CONTROL =
-  process.env.SHEET_NAME_CONTROL ||
-  'CODIGOS REGALO'; // ⚠️ Debe coincidir EXACTO con el nombre de la pestaña
+  process.env.SHEET_NAME_CONTROL || 'CODIGOS REGALO';
 
 // Helper: reintentos exponenciales
 async function withRetries(fn, { tries = 4, baseMs = 150 } = {}) {
@@ -48,39 +50,53 @@ async function ensureSheetExists(sheets, spreadsheetId, title) {
   }
 }
 
-// 🎨 Reglas de formato condicional para la columna "Usado" (E)
+// 🎨 Reglas condicionales unificadas para la columna E
 async function ensureCondFormats(sheets, spreadsheetId, sheetTitle) {
   const meta = await sheets.spreadsheets.get({ spreadsheetId });
   const sheet = (meta.data.sheets || []).find(s => s.properties.title === sheetTitle);
   if (!sheet) return;
   const sheetId = sheet.properties.sheetId;
 
+  // Borrar reglas previas (si hay)
+  try {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [
+          { deleteConditionalFormatRule: { index: 0, sheetId } },
+          { deleteConditionalFormatRule: { index: 0, sheetId } }
+        ]
+      }
+    });
+  } catch { /* si no hay reglas, no pasa nada */ }
+
+  // Añadir "NO" → verde, "SÍ" → rojo
   await sheets.spreadsheets.batchUpdate({
     spreadsheetId,
     requestBody: {
       requests: [
         {
           addConditionalFormatRule: {
+            index: 0,
             rule: {
-              ranges: [{ sheetId, startColumnIndex: 4, endColumnIndex: 5 }], // E
+              ranges: [{ sheetId, startColumnIndex: 4, endColumnIndex: 5 }],
               booleanRule: {
                 condition: { type: 'TEXT_EQ', values: [{ userEnteredValue: 'NO' }] },
-                format: { backgroundColor: { red: 0.8, green: 0.95, blue: 0.8 } }
+                format: { backgroundColor: COLOR_VERDE, textFormat: TEXTO_BLANCO_BOLD }
               }
-            },
-            index: 0
+            }
           }
         },
         {
           addConditionalFormatRule: {
+            index: 0,
             rule: {
-              ranges: [{ sheetId, startColumnIndex: 4, endColumnIndex: 5 }], // E
+              ranges: [{ sheetId, startColumnIndex: 4, endColumnIndex: 5 }],
               booleanRule: {
                 condition: { type: 'TEXT_EQ', values: [{ userEnteredValue: 'SÍ' }] },
-                format: { backgroundColor: { red: 0.95, green: 0.8, blue: 0.8 } }
+                format: { backgroundColor: COLOR_ROJO, textFormat: TEXTO_BLANCO_BOLD }
               }
-            },
-            index: 0
+            }
           }
         }
       ]
@@ -90,51 +106,35 @@ async function ensureCondFormats(sheets, spreadsheetId, sheetTitle) {
 
 /**
  * 📌 POST /crear-codigo-regalo
- * Body: { nombre, email, codigo }
- * Headers recomendados: { 'x-user-email': 'correo@quienloentrega.com' }
  */
 router.post('/crear-codigo-regalo', async (req, res) => {
   try {
-    // 🧹 Normalización
     const nombre = String(req.body?.nombre || '').trim();
     const email  = String(req.body?.email  || '').trim().toLowerCase();
     const codigo = String(req.body?.codigo || '').trim().toUpperCase();
 
-    // 📌 Email del usuario que GENERA el código (otorgante)
     const otorganteEmail =
       String(req.body?.otorgante_email ||
              req.headers['x-user-email'] ||
              req.headers['x-wp-user-email'] ||
              '').trim().toLowerCase();
 
-    // 📋 Validaciones
     if (!nombre || !email || !codigo) {
-      return res.status(400).json({
-        ok: false,
-        error: 'Faltan campos obligatorios: nombre, email y código.'
-      });
+      return res.status(400).json({ ok: false, error: 'Faltan campos obligatorios: nombre, email y código.' });
     }
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
       return res.status(400).json({ ok: false, error: 'Email inválido.' });
     }
     if (!/^REG-[A-Z0-9]{5}$/.test(codigo)) {
-      return res.status(400).json({
-        ok: false,
-        error: 'Formato de código inválido. Debe ser REG-XXXXX (5 letras/números).'
-      });
+      return res.status(400).json({ ok: false, error: 'Formato inválido: REG-XXXXX' });
     }
 
-    // 🔒 Idempotencia: evitar sobrescribir un código ya registrado
     const docRef = firestore.collection('codigosRegalo').doc(codigo);
     const snap = await docRef.get();
     if (snap.exists) {
-      return res.status(409).json({
-        ok: false,
-        error: 'Este código ya ha sido registrado previamente.'
-      });
+      return res.status(409).json({ ok: false, error: 'Este código ya ha sido registrado previamente.' });
     }
 
-    // 💾 Guardar en Firestore
     await docRef.set({
       nombre,
       email,
@@ -144,7 +144,6 @@ router.post('/crear-codigo-regalo', async (req, res) => {
       usado: false
     });
 
-    // 📝 Registrar en Google Sheets (con reintentos, y hoja/rango seguros)
     try {
       const authClient = await auth();
       const sheets = google.sheets({ version: 'v4', auth: authClient });
@@ -152,8 +151,8 @@ router.post('/crear-codigo-regalo', async (req, res) => {
       await ensureSheetExists(sheets, SHEET_ID_CONTROL, SHEET_NAME_CONTROL);
       await ensureCondFormats(sheets, SHEET_ID_CONTROL, SHEET_NAME_CONTROL);
 
-      const range = `'${SHEET_NAME_CONTROL}'!A2:E`; // comillas por el espacio
-      console.log(`🧾 Sheets → append en "${range}" (ID: ${SHEET_ID_CONTROL})`);
+      const range = `'${SHEET_NAME_CONTROL}'!A2:E`;
+      console.log(`🧾 Sheets → append en "${range}"`);
 
       const result = await withRetries(() =>
         sheets.spreadsheets.values.append({
@@ -161,19 +160,16 @@ router.post('/crear-codigo-regalo', async (req, res) => {
           range,
           valueInputOption: 'USER_ENTERED',
           requestBody: {
-            // A: Nombre | B: Email destinatario | C: Código | D: Email otorgante | E: Usado ("NO")
             values: [[ nombre, email, codigo, otorganteEmail || '', 'NO' ]]
           }
         })
       );
 
-      const updates = result?.data?.updates || {};
-      if (!updates.updatedRows && !updates.updatedCells) {
-        console.warn('⚠️ Sheets no reporta filas/celdas actualizadas:', updates);
+      if (!result?.data?.updates?.updatedRows) {
+        console.warn('⚠️ Sheets no reporta filas/celdas actualizadas');
       }
     } catch (sheetErr) {
-      console.warn('⚠️ No se pudo registrar en Sheets (control REG-):', sheetErr?.message || sheetErr);
-      // No bloqueamos la creación del código por un fallo de Sheets
+      console.warn('⚠️ No se pudo registrar en Sheets:', sheetErr?.message || sheetErr);
     }
 
     console.log(`🎁 Código REGALO creado → ${codigo} para ${email} | Otorgante: ${otorganteEmail || 'desconocido'}`);

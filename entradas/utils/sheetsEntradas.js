@@ -83,7 +83,7 @@ async function findRowByCode({ sheets, spreadsheetId, codigo }) {
   const filas = getRes.data.values || [];
   for (let i = 1; i < filas.length; i++) {
     const fila = filas[i];
-    if (fila[2] && String(fila[2]).trim() === String(codigo).trim()) return i + 1;
+    if (fila[2] && String(fila[2]).trim().toUpperCase() === String(codigo).trim().toUpperCase()) return i + 1;
   }
   return -1;
 }
@@ -110,16 +110,46 @@ async function guardarEntradaEnSheet({ sheetId, comprador, codigo, fecha = null 
     // Intentar deducir la fila insertada
     let row1 = -1;
     const updatedRange = appendRes.data?.updates?.updatedRange || '';
-    const match = updatedRange.match(/![A-Z]+(\d+):[A-Z]+(\d+)/);
-    if (match) row1 = parseInt(match[1], 10);
+    // Ejemplos posibles: 'Hoja 1'!A10:E10  |  Hoja1!A10:E10  |  A10:E10
+    const m = updatedRange.match(/!?[A-Za-zÀ-ÿ0-9 '._-]*!?([A-Z]+)(\d+):[A-Z]+(\d+)/);
+    if (m) row1 = parseInt(m[2], 10);
     if (row1 <= 0) row1 = await findRowByCode({ sheets, spreadsheetId: sheetId, codigo });
 
     if (row1 > 0) {
-      await Promise.all([
-        setCellValueAndFormat({ sheets, spreadsheetId: sheetId, sheetIdNum, row1, col0: 3, value: 'NO', bgColor: COLOR_VERDE }),
-        setCellValueAndFormat({ sheets, spreadsheetId: sheetId, sheetIdNum, row1, col0: 4, value: 'NO', bgColor: COLOR_VERDE })
-      ]);
+  // Reafirmamos el valor “NO” por si el append no lo dejó
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: sheetId,
+    range: `D${row1}:E${row1}`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: [['NO', 'NO']] }
+  });
+
+  // Y aplicamos formato a D y E en una sola llamada
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId: sheetId,
+    requestBody: {
+      requests: [{
+        repeatCell: {
+          range: {
+            sheetId: sheetIdNum,
+            startRowIndex: row1 - 1,
+            endRowIndex: row1,
+            startColumnIndex: 3, // D
+            endColumnIndex: 5    // hasta E (exclusivo)
+          },
+          cell: {
+            userEnteredFormat: {
+              backgroundColor: COLOR_VERDE,
+              textFormat: TEXTO_BLANCO_BOLD
+            }
+          },
+          fields: 'userEnteredFormat(backgroundColor,textFormat)'
+        }
+      }]
     }
+  });
+}
+
 
     console.log(`✅ Entrada registrada en hoja (${sheetId}) → fila ${row1} código ${codigo}`);
   } catch (err) {

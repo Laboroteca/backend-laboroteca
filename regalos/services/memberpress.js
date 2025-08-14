@@ -7,15 +7,10 @@ const axios = require('axios');
 const SITE_URL = (process.env.MP_SITE_URL || process.env.WP_BASE_URL || 'https://www.laboroteca.es')
   .replace(/\/+$/, '');
 const MP_KEY = process.env.MEMBERPRESS_KEY || '';
-const MP_USER = process.env.MP_ADMIN_USER || '';
-const MP_PASS = process.env.MP_ADMIN_PASS || '';
 
-// 🚨 Log inicial para depuración
 console.log("🛠 MemberPress config:");
 console.log("   📍 SITE_URL =", SITE_URL);
 console.log("   🔑 MEMBERPRESS_KEY =", MP_KEY ? `${MP_KEY} (OK)` : "(VACÍO)");
-console.log("   👤 MP_ADMIN_USER =", MP_USER || "(no definido)");
-console.log("   👤 MP_ADMIN_PASS =", MP_PASS ? "(definido)" : "(no definido)");
 
 // ============================
 // 🔗 CLIENTE AXIOS
@@ -26,21 +21,14 @@ const mp = axios.create({
 });
 
 // ============================
-// 📝 CABECERAS
+// 📝 CABECERAS SOLO CON API KEY
 // ============================
 function buildHeaders() {
-  const headers = { Accept: 'application/json' };
-
-  if (MP_KEY) {
-    headers['MEMBERPRESS-API-KEY'] = MP_KEY;
-  }
-
-  if (MP_USER && MP_PASS) {
-    const basic = Buffer.from(`${MP_USER}:${MP_PASS}`).toString('base64');
-    headers['Authorization'] = `Basic ${basic}`;
-  }
-
-  return headers;
+  if (!MP_KEY) throw new Error('Falta MEMBERPRESS_KEY en variables de entorno');
+  return {
+    Accept: 'application/json',
+    'MEMBERPRESS-API-KEY': MP_KEY
+  };
 }
 
 // ============================
@@ -63,13 +51,11 @@ async function getMemberByEmail(email) {
   try {
     const { data } = await mp.get('/members', { headers, params });
     const member = pickFirstMember(data);
-
     if (member) {
       console.log(`✅ Usuario encontrado: ID=${member.id}, Email=${member.email || 'N/A'}`);
     } else {
       console.warn(`⚠️ Usuario no encontrado para email: ${email}`);
     }
-
     return member;
   } catch (err) {
     console.error(`❌ Error buscando miembro (${email}):`, err.message);
@@ -88,17 +74,11 @@ async function activarMembresiaEnMemberPress(email, membershipId) {
   if (!email) throw new Error('Falta email');
   if (!membershipId) throw new Error('Falta membershipId');
 
-  if (!MP_KEY && !(MP_USER && MP_PASS)) {
-    throw new Error('Faltan credenciales: define MEMBERPRESS_KEY o (MP_ADMIN_USER + MP_ADMIN_PASS)');
-  }
-
-  // 1️⃣ Buscar miembro
   const member = await getMemberByEmail(email);
   if (!member || !member.id) {
     throw new Error(`Usuario no encontrado en MemberPress por email: ${email}`);
   }
 
-  // 2️⃣ Crear Transaction manual
   const headers = {
     ...buildHeaders(),
     'Content-Type': 'application/x-www-form-urlencoded',
@@ -136,3 +116,4 @@ module.exports = {
   activarMembresiaEnMemberPress,
   activarMembresia: activarMembresiaEnMemberPress,
 };
+

@@ -72,7 +72,7 @@ module.exports = async function canjearCodigoRegalo({
     try {
       const controlRes = await sheets.spreadsheets.values.get({
         spreadsheetId: SHEET_ID_CONTROL,
-        range: `${SHEET_NAME_CONTROL}!A2:C`
+        range: `'${SHEET_NAME_CONTROL}'!A2:E`
       });
       const filas = controlRes.data.values || [];
       const fila = filas.find(f => String(f[2] || '').trim().toUpperCase() === codigo);
@@ -127,7 +127,7 @@ module.exports = async function canjearCodigoRegalo({
     const sheets = google.sheets({ version: 'v4', auth: authClient });
     await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID_REGALOS,
-      range: `${SHEET_NAME_REGALOS}!A2:G`,
+      range: `'${SHEET_NAME_REGALOS}'!A2:G`,
       valueInputOption: 'USER_ENTERED',
       requestBody: {
         values: [[

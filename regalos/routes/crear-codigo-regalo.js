@@ -36,6 +36,58 @@ async function withRetries(fn, { tries = 4, baseMs = 150 } = {}) {
   throw lastErr;
 }
 
+// 🧩 Asegura que exista la pestaña indicada
+async function ensureSheetExists(sheets, spreadsheetId, title) {
+  const meta = await sheets.spreadsheets.get({ spreadsheetId });
+  const titles = (meta.data.sheets || []).map(s => s.properties.title);
+  if (!titles.includes(title)) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: { requests: [{ addSheet: { properties: { title } } }] }
+    });
+  }
+}
+
+// 🎨 Reglas de formato condicional para la columna "Usado" (E)
+async function ensureCondFormats(sheets, spreadsheetId, sheetTitle) {
+  const meta = await sheets.spreadsheets.get({ spreadsheetId });
+  const sheet = (meta.data.sheets || []).find(s => s.properties.title === sheetTitle);
+  if (!sheet) return;
+  const sheetId = sheet.properties.sheetId;
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [
+        {
+          addConditionalFormatRule: {
+            rule: {
+              ranges: [{ sheetId, startColumnIndex: 4, endColumnIndex: 5 }], // E
+              booleanRule: {
+                condition: { type: 'TEXT_EQ', values: [{ userEnteredValue: 'NO' }] },
+                format: { backgroundColor: { red: 0.8, green: 0.95, blue: 0.8 } }
+              }
+            },
+            index: 0
+          }
+        },
+        {
+          addConditionalFormatRule: {
+            rule: {
+              ranges: [{ sheetId, startColumnIndex: 4, endColumnIndex: 5 }], // E
+              booleanRule: {
+                condition: { type: 'TEXT_EQ', values: [{ userEnteredValue: 'SÍ' }] },
+                format: { backgroundColor: { red: 0.95, green: 0.8, blue: 0.8 } }
+              }
+            },
+            index: 0
+          }
+        }
+      ]
+    }
+  });
+}
+
 /**
  * 📌 POST /crear-codigo-regalo
  * Body: { nombre, email, codigo }  (p.ej. codigo = "REG-ABCDE")
@@ -57,7 +109,6 @@ router.post('/crear-codigo-regalo', async (req, res) => {
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
       return res.status(400).json({ ok: false, error: 'Email inválido.' });
     }
-    // mismo formato que el formulario: 5 alfanuméricos tras REG-
     if (!/^REG-[A-Z0-9]{5}$/.test(codigo)) {
       return res.status(400).json({
         ok: false,
@@ -84,12 +135,15 @@ router.post('/crear-codigo-regalo', async (req, res) => {
       usado: false
     });
 
-    // 📝 Registrar en Google Sheets (mejor con reintentos)
+    // 📝 Registrar en Google Sheets (con reintentos, y hoja/rango seguros)
     try {
       const authClient = await auth();
       const sheets = google.sheets({ version: 'v4', auth: authClient });
 
-      const range = `${SHEET_NAME_CONTROL}!A2:D`;
+      await ensureSheetExists(sheets, SHEET_ID_CONTROL, SHEET_NAME_CONTROL);
+      await ensureCondFormats(sheets, SHEET_ID_CONTROL, SHEET_NAME_CONTROL);
+
+      const range = `'${SHEET_NAME_CONTROL}'!A2:E`; // comillas por el espacio
       console.log(`🧾 Sheets → append en "${range}" (ID: ${SHEET_ID_CONTROL})`);
 
       const result = await withRetries(() =>
@@ -98,8 +152,8 @@ router.post('/crear-codigo-regalo', async (req, res) => {
           range,
           valueInputOption: 'USER_ENTERED',
           requestBody: {
-            // A: Nombre | B: Email | C: Código | D: Ignacio/Rebeca (vacío)
-            values: [[ nombre, email, codigo, '' ]]
+            // A: Nombre | B: Email | C: Código | D: Ignacio/Rebeca | E: Usado ("NO")
+            values: [[ nombre, email, codigo, '', 'NO' ]]
           }
         })
       );
@@ -109,10 +163,7 @@ router.post('/crear-codigo-regalo', async (req, res) => {
         console.warn('⚠️ Sheets no reporta filas/celdas actualizadas:', updates);
       }
     } catch (sheetErr) {
-      console.warn(
-        '⚠️ No se pudo registrar en Sheets (control REG-):',
-        sheetErr?.message || sheetErr
-      );
+      console.warn('⚠️ No se pudo registrar en Sheets (control REG-):', sheetErr?.message || sheetErr);
       // No bloqueamos la creación del código por un fallo de Sheets
     }
 

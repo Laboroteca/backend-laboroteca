@@ -3,72 +3,97 @@
 const { google } = require('googleapis');
 const { auth } = require('../../entradas/google/sheetsAuth');
 
-const SHEET_ID_CONTROL = '1DFZuhJtuQ0y8EHXOkUUifR_mCVfGyxgCHXRvBoiwfo'; // 📄 Códigos REG- activos
-const SHEET_NAME_CONTROL = 'Hoja 1';
+const SHEET_ID_CONTROL =
+  process.env.SHEET_ID_CONTROL ||
+  '1DFZuhJtuQ0y8EHXOkUUifR_mCVfGyxgkCHXRvBoiwfo'; // Códigos REG- activos
+
+const SHEET_NAME_CONTROL =
+  process.env.SHEET_NAME_CONTROL || 'CODIGOS REGALO'; // pestaña con espacio
 
 /**
- * Marca visualmente un código como canjeado en Google Sheets.
- * Aplica fondo rojo y texto en negrita a la celda del código.
- * 
- * @param {string} codigo - Código regalo ya validado (ej: REG-XXX)
+ * Marca un REG- como canjeado en la hoja de control:
+ * - Localiza el código en la columna C
+ * - Escribe "SÍ" en la columna E de esa fila
+ * - (Opcional) aplica formato condicional si no existe
  */
 module.exports = async function marcarCodigoComoCanjeado(codigo) {
-  if (!codigo) {
-    console.warn('⚠️ No se recibió un código para marcar como canjeado.');
+  const cod = String(codigo || '').trim().toUpperCase();
+  if (!cod) {
+    console.warn('⚠️ marcarCodigoComoCanjeado: código vacío.');
     return;
   }
 
-  const codigoNormalizado = String(codigo).trim().toUpperCase();
   const authClient = await auth();
   const sheets = google.sheets({ version: 'v4', auth: authClient });
 
+  // --- helper: obtener sheetId por título (sin asumir 0) ---
+  async function getSheetIdByTitle(spreadsheetId, title) {
+    const meta = await sheets.spreadsheets.get({ spreadsheetId });
+    const sh = (meta.data.sheets || []).find(s => s.properties.title === title);
+    return sh ? sh.properties.sheetId : null;
+  }
+
   try {
-    // 1️⃣ Buscar el código en la hoja
-    const lectura = await sheets.spreadsheets.values.get({
+    // 1) Localizar fila del código leyendo la columna C completa
+    const read = await sheets.spreadsheets.values.get({
       spreadsheetId: SHEET_ID_CONTROL,
-      range: `${SHEET_NAME_CONTROL}!C2:C`, // Columna C = códigos
+      range: `'${SHEET_NAME_CONTROL}'!C:C`, // Columna C = códigos
     });
-
-    const filas = lectura.data.values || [];
-    const indexFila = filas.findIndex(f => String(f[0] || '').trim().toUpperCase() === codigoNormalizado);
-
-    if (indexFila === -1) {
-      console.warn(`⚠️ No se encontró el código ${codigoNormalizado} en la hoja de control`);
+    const rows = read.data.values || [];
+    const idx = rows.findIndex(r => (r[0] || '').toString().trim().toUpperCase() === cod);
+    if (idx < 0) {
+      console.warn(`⚠️ Código no encontrado en control: ${cod}`);
       return;
     }
+    const rowNumber = idx + 1; // 1-based
 
-    // 2️⃣ Calcular la fila y rango de la celda
-    const fila = indexFila + 2; // +2 porque empezamos en C2
-    const sheetId = 0; // ⚠️ Si tu hoja no es la primera, cambia este valor
-
-    // 3️⃣ Aplicar formato (fondo rojo claro + negrita)
-    await sheets.spreadsheets.batchUpdate({
+    // 2) Escribir "SÍ" en columna E de esa fila (Usado)
+    await sheets.spreadsheets.values.update({
       spreadsheetId: SHEET_ID_CONTROL,
-      requestBody: {
-        requests: [{
-          repeatCell: {
-            range: {
-              sheetId,
-              startRowIndex: fila - 1,
-              endRowIndex: fila,
-              startColumnIndex: 2, // columna C = índice 2
-              endColumnIndex: 3,
-            },
-            cell: {
-              userEnteredFormat: {
-                backgroundColor: { red: 1, green: 0.8, blue: 0.8 },
-                textFormat: { bold: true },
-              },
-            },
-            fields: 'userEnteredFormat(backgroundColor,textFormat)',
-          },
-        }],
-      },
+      range: `'${SHEET_NAME_CONTROL}'!E${rowNumber}`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: [['SÍ']] },
     });
 
-    console.log(`🟥 Código ${codigoNormalizado} marcado como canjeado en la hoja de control`);
+    // 3) Asegurar formato condicional en columna E (NO=verde, SÍ=rojo)
+    const sheetId = await getSheetIdByTitle(SHEET_ID_CONTROL, SHEET_NAME_CONTROL);
+    if (sheetId !== null) {
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: SHEET_ID_CONTROL,
+        requestBody: {
+          requests: [
+            {
+              addConditionalFormatRule: {
+                rule: {
+                  ranges: [{ sheetId, startColumnIndex: 4, endColumnIndex: 5 }], // E
+                  booleanRule: {
+                    condition: { type: 'TEXT_EQ', values: [{ userEnteredValue: 'NO' }] },
+                    format: { backgroundColor: { red: 0.8, green: 0.95, blue: 0.8 } } // verde suave
+                  }
+                },
+                index: 0
+              }
+            },
+            {
+              addConditionalFormatRule: {
+                rule: {
+                  ranges: [{ sheetId, startColumnIndex: 4, endColumnIndex: 5 }], // E
+                  booleanRule: {
+                    condition: { type: 'TEXT_EQ', values: [{ userEnteredValue: 'SÍ' }] },
+                    format: { backgroundColor: { red: 0.95, green: 0.8, blue: 0.8 } } // rojo suave
+                  }
+                },
+                index: 0
+              }
+            }
+          ]
+        }
+      });
+    }
+
+    console.log(`✅ REG ${cod} marcado como canjeado (columna E = "SÍ")`);
   } catch (err) {
-    console.error(`❌ Error al marcar el código ${codigoNormalizado} como canjeado:`, err.message || err);
+    console.error(`❌ Error al marcar ${cod} como canjeado:`, err?.message || err);
     throw err;
   }
 };

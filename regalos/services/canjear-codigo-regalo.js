@@ -7,7 +7,7 @@ const { auth } = require('../../entradas/google/sheetsAuth');
 
 const marcarCodigoComoCanjeado = require('./marcarCodigoComoCanjeado');
 const registrarCanjeEnSheet = require('./registrarCanjeEnSheet');
-const activarMembresiaDirecta = require('./activarMembresiaDirecta');
+const { activarMembresiaEnMemberPress } = require('./memberpress'); // ✅ Nuevo servicio API oficial
 
 const SHEET_ID_REGALOS  = '1MjxXebR3oQIyu0bYeRWo83xj1sBFnDcx53HvRRBiGE'; // Libros GRATIS
 const SHEET_NAME_REGALOS = 'Hoja 1';
@@ -146,34 +146,33 @@ module.exports = async function canjearCodigoRegalo({
     console.warn('⚠️ No se pudo registrar en "Libros GRATIS":', e?.message || e);
   }
 
-  // 4) Activar membresía directamente en MemberPress (sin Stripe)
-    try {
-      console.log('🔐 Activando membresía directa en MemberPress…');
+  // 4) Activar membresía directamente en MemberPress (API oficial)
+  try {
+    console.log('🔐 Activando membresía directa en MemberPress…');
 
-      let membershipId = null;
-      const tituloLower = libroNormalizado.toLowerCase();
+    let membershipId = null;
+    const tituloLower = libroNormalizado.toLowerCase();
 
-      if (tituloLower.includes('de cara a la jubilación')) {
-        membershipId = 7994;
-      } else if (tituloLower.includes('adelanta tu jubilación')) {
-        membershipId = 12009;
-      } else if (
-        tituloLower.includes('jubilación anticipada') ||
-        tituloLower.includes('jubilación parcial')
-      ) {
-        membershipId = 11006;
-      } else {
-        throw new Error(`No se reconoce el libro para activar membresía: ${libroNormalizado}`);
-      }
-
-      await activarMembresiaDirecta(emailNormalizado, membershipId);
-      console.log('✅ Membresía activada correctamente');
-      await canjeRef.update({ activado: true });
-
-    } catch (err) {
-      console.error('❌ Error activando membresía directa:', err?.message || err);
+    if (tituloLower.includes('de cara a la jubilación')) {
+      membershipId = 7994;
+    } else if (tituloLower.includes('adelanta tu jubilación')) {
+      membershipId = 12009;
+    } else if (
+      tituloLower.includes('jubilación anticipada') ||
+      tituloLower.includes('jubilación parcial')
+    ) {
+      membershipId = 11006;
+    } else {
+      throw new Error(`No se reconoce el libro para activar membresía: ${libroNormalizado}`);
     }
 
+    await activarMembresiaEnMemberPress(emailNormalizado, membershipId);
+    console.log('✅ Membresía activada correctamente');
+    await canjeRef.update({ activado: true });
+
+  } catch (err) {
+    console.error('❌ Error activando membresía directa:', err?.message || err);
+  }
 
   // 5) Registros auxiliares (no bloqueantes)
   (async () => {

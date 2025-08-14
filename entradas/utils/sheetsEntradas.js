@@ -1,4 +1,4 @@
-// 📄 regalos/services/sheetsEntradas.js
+// 📄 entradas/services/sheetsEntradas.js
 const { google } = require('googleapis');
 const { auth } = require('../google/sheetsAuth');
 

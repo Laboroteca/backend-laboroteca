@@ -38,7 +38,7 @@ async function enviarEmailConEntradas({
         Una vez validada tu entrada en el evento, el código de la misma podrá canjearse por un libro digital gratuito desde 
         <a href="https://www.laboroteca.es/canjear-codigo-regalo/" target="_blank">esta página</a>.  
         Si no asistes y tu entrada no es validada, no podrás realizar el canje.  
-        Solo se validará una entrada por asistente.
+        Solo se validará una entrada por cada asistente.
       </p>
       <p>Un saludo,<br><strong>Ignacio Solsona</strong><br>Laboroteca</p>
     `;
@@ -56,7 +56,7 @@ async function enviarEmailConEntradas({
     Una vez validada tu entrada en el evento, el código de la misma podrá canjearse por un libro digital gratuito desde:
     https://www.laboroteca.es/canjear-codigo-regalo/
     Si no asistes y tu entrada no es validada, no podrás realizar el canje.
-    Solo se validará una entrada por asistente.
+    Solo se validará una entrada por cada asistente.
 
     Un saludo,
     Ignacio Solsona

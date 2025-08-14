@@ -8,6 +8,7 @@ const { auth } = require('../../entradas/google/sheetsAuth');
 const marcarCodigoComoCanjeado = require('./marcarCodigoComoCanjeado');
 const registrarCanjeEnSheet = require('./registrarCanjeEnSheet');
 const { activarMembresiaEnMemberPress } = require('./memberpress'); // ✅ Nuevo servicio API oficial
+const { enviarEmailCanjeLibro } = require('./enviarEmailCanjeLibro');
 
 const SHEET_ID_REGALOS   = '1MjxXebR3oQIyu0bYeRWo83xj1sBFnDcx53HvRRBiGE'; // Libros GRATIS (registro de canjes)
 const SHEET_NAME_REGALOS = 'Hoja 1';
@@ -276,16 +277,32 @@ module.exports = async function canjearCodigoRegalo({
     }
   })();
 
-  if (esRegalo) {
-    (async () => {
-      try {
-        await marcarCodigoComoCanjeado(codigo);
-      } catch (e) {
-        console.warn('⚠️ No se pudo marcar en hoja de control REG-:', e?.message || e);
-      }
-    })();
-  }
+if (esRegalo) {
+  (async () => {
+    try {
+      await marcarCodigoComoCanjeado(codigo);
+    } catch (e) {
+      console.warn('⚠️ No se pudo marcar en hoja de control REG-:', e?.message || e);
+    }
+  })();
+}
 
-  console.log(`✅ Canje completado: ${codigo} → ${emailNormalizado} (${motivo})`);
-  return { ok: true };
+// 📧 Enviar email de confirmación de canje (no bloquea el canje si falla)
+try {
+  const rEmail = await enviarEmailCanjeLibro({
+    toEmail: emailNormalizado,
+    nombre,
+    apellidos,
+    libroElegido: libroNormalizado
+    // opcionalmente podrías pasar sessionId si aquí lo tuvieras disponible
+  });
+  if (!rEmail.ok) {
+    console.warn('⚠️ Canje OK pero falló el envío del email:', rEmail.error);
+  }
+} catch (e) {
+  console.warn('⚠️ Canje OK pero excepción enviando email:', e?.message || e);
+}
+
+console.log(`✅ Canje completado: ${codigo} → ${emailNormalizado} (${motivo})`);
+return { ok: true };
 };

@@ -19,14 +19,13 @@ async function crearFacturaEnFacturaCity(datosCliente) {
     console.log('🌐 API URL utilizada:', API_BASE);
     console.log('🧾 Datos del cliente recibidos para facturar:', JSON.stringify(datosCliente, null, 2));
 
-    const precioTotalConIVA = parseFloat(datosCliente.importe);
-    if (!precioTotalConIVA || isNaN(precioTotalConIVA)) {
+    // ⛔ NUNCA dividir entre 1,21. Trabajamos con PVP CON IVA.
+    const totalConIVA = Number.parseFloat(String(datosCliente.importe).replace(',', '.'));
+    if (!totalConIVA || Number.isNaN(totalConIVA)) {
       throw new Error(`❌ El importe recibido no es válido: "${datosCliente.importe}"`);
     }
 
-    const precioBase = (precioTotalConIVA / 1.21).toFixed(2);
-    console.log('💶 Precio base sin IVA:', precioBase, '→ Total con IVA:', precioTotalConIVA.toFixed(2));
-
+    // Cliente
     const cliente = {
       nombre: `${datosCliente.nombre} ${datosCliente.apellidos}`,
       razonsocial: `${datosCliente.nombre} ${datosCliente.apellidos}`,
@@ -43,17 +42,14 @@ async function crearFacturaEnFacturaCity(datosCliente) {
     };
 
     const clienteResp = await axios.post(`${API_BASE}/clientes`, qs.stringify(cliente), {
-      headers: {
-        Token: FACTURACITY_API_KEY,
-        'Content-Type': 'application/x-www-form-urlencoded'
-      }
+      headers: { Token: FACTURACITY_API_KEY, 'Content-Type': 'application/x-www-form-urlencoded' }
     });
 
     const codcliente = clienteResp.data?.data?.codcliente;
     if (!codcliente) throw new Error('❌ No se pudo obtener codcliente');
     console.log(`✅ Cliente creado: ${codcliente}`);
 
-    // 🏠 Añadir dirección
+    // 🏠 Dirección fiscal (opcional)
     try {
       const direccionFiscal = {
         codcliente,
@@ -67,51 +63,43 @@ async function crearFacturaEnFacturaCity(datosCliente) {
         apellidos: datosCliente.apellidos,
         email: datosCliente.email
       };
-
       await axios.post(`${API_BASE}/direccionescliente`, qs.stringify(direccionFiscal), {
-        headers: {
-          Token: FACTURACITY_API_KEY,
-          'Content-Type': 'application/x-www-form-urlencoded'
-        }
+        headers: { Token: FACTURACITY_API_KEY, 'Content-Type': 'application/x-www-form-urlencoded' }
       });
-
       console.log('🏠 Dirección fiscal registrada correctamente');
     } catch (err) {
       console.warn('⚠️ No se pudo añadir dirección fiscal:', err.message);
     }
 
-    // ✅ Ajuste clave: referencia según producto
+    // Referencia/Descripción
     const descripcion = datosCliente.descripcionProducto || datosCliente.descripcion || datosCliente.producto;
-    let referencia = 'OTRO001'; // Valor por defecto
+    let referencia = 'OTRO001';
+    if (datosCliente.nombreProducto === 'el-club-laboroteca') referencia = 'CLUB001';
+    else if ((datosCliente.tipoProducto || '').toLowerCase() === 'libro') referencia = 'LIBRO001';
+    else if ((datosCliente.tipoProducto || '').toLowerCase() === 'curso') referencia = 'CURSO001';
+    else if ((datosCliente.tipoProducto || '').toLowerCase() === 'guia')  referencia = 'GUIA001';
 
-    if (datosCliente.nombreProducto === 'el-club-laboroteca') {
-      referencia = 'CLUB001';
-    } else if (datosCliente.tipoProducto === 'libro') {
-      referencia = 'LIBRO001';
-    } else if (datosCliente.tipoProducto === 'curso') {
-      referencia = 'CURSO001';
-    } else if (datosCliente.tipoProducto === 'guia') {
-      referencia = 'GUIA001';
-    }
+    // Cantidad y precio unitario CON IVA
+    const esEntrada = (datosCliente.tipoProducto || '').toLowerCase() === 'entrada';
+    const cantidad = esEntrada ? parseInt(datosCliente.totalAsistentes || '1', 10) : 1;
 
-const cantidad = (datosCliente.tipoProducto || '').toLowerCase() === 'entrada'
-  ? parseInt(datosCliente.totalAsistentes || '1', 10)
-  : 1;
+    // Precio unitario con IVA con 2 decimales exactos
+    const pvpUnitarioConIVA = (totalConIVA / cantidad);
+    const pvpunitario = pvpUnitarioConIVA.toFixed(2); // ← 22.90
 
-const pvpunitario = (cantidad > 1)
-  ? (precioBase / cantidad).toFixed(5)
-  : precioBase;
+    // 🔑 Línea con precio que INCLUYE IVA: evita recalcular 21 %
+    const lineas = [
+      {
+        referencia,
+        descripcion,
+        cantidad,
+        pvpunitario,     // PVP CON IVA (2 decimales)
+        codimpuesto: 'IVA21',
+        incluyeiva: 1    // ⚠️ CLAVE: indica que pvpunitario ya lleva IVA
+      }
+    ];
 
-const lineas = [
-  {
-    referencia,
-    descripcion,
-    cantidad,
-    pvpunitario,
-    codimpuesto: 'IVA21'
-  }
-];
-
+    // Cabecera factura
     const factura = {
       codcliente,
       lineas: JSON.stringify(lineas),
@@ -124,13 +112,11 @@ const lineas = [
       ciudad: datosCliente.ciudad || '',
       provincia: datosCliente.provincia || '',
       codpostal: datosCliente.cp || ''
+      // No enviamos bases ni totales para que NO recalculen nada distinto
     };
 
     const facturaResp = await axios.post(`${API_BASE}/crearFacturaCliente`, qs.stringify(factura), {
-      headers: {
-        Token: FACTURACITY_API_KEY,
-        'Content-Type': 'application/x-www-form-urlencoded'
-      }
+      headers: { Token: FACTURACITY_API_KEY, 'Content-Type': 'application/x-www-form-urlencoded' }
     });
 
     console.log('📩 Respuesta completa de crearFacturaCliente:', JSON.stringify(facturaResp.data, null, 2));
@@ -161,6 +147,4 @@ const lineas = [
   }
 }
 
-module.exports = {
-  crearFacturaEnFacturaCity
-};
+module.exports = { crearFacturaEnFacturaCity };

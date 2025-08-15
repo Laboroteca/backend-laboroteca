@@ -127,7 +127,7 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
   const tipoProducto = datos.tipoProducto || '';
   const nombreProducto = datos.nombreProducto || '';
   const descripcionProducto = datos.descripcionProducto || '';
-  const precio = parseFloat((datos.importe || '22.90').toString().replace(',', '.'));
+  const precio = parseFloat((datos.importe || '29.90').toString().replace(',', '.'));
   let imagenProducto = datos.imagenProducto?.trim();
   if (!imagenProducto) {
     imagenProducto = 'https://www.laboroteca.es/wp-content/uploads/2025/06/DE-CARA-A-LA-JUBILACION-PDF-IGNACIO-SOLSONA-ABOGADO-scaled.webp'; // o lo que quieras como fallback para libros/cursos

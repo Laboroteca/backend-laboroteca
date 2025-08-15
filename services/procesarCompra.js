@@ -15,7 +15,7 @@ module.exports = async function procesarCompra(datos) {
   let nombreProducto = (datos.nombreProducto || 'Producto Laboroteca').trim();
   let descripcionProducto = datos.descripcionProducto || nombreProducto;
   let tipoProducto = datos.tipoProducto || 'Otro';
-  let importe = parseFloat((datos.importe || '22,90').toString().replace(',', '.'));
+  let importe = parseFloat((datos.importe || '29,90').toString().replace(',', '.'));
 
   // 🔍 Buscar email por alias si no es válido
   if (!email.includes('@')) {

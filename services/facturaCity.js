@@ -13,9 +13,9 @@ function obtenerFechaHoy() {
   return `${dd}-${mm}-${yyyy}`;
 }
 
-// Trunca a 2 decimales sin redondear (hacia abajo)
-function trunc2(n) {
-  return Math.floor(n * 100) / 100;
+// Trunca a 4 decimales sin redondear (hacia abajo)
+function trunc4(n) {
+  return Math.floor(n * 10000) / 10000; // 4 decimales exactos
 }
 
 async function crearFacturaEnFacturaCity(datosCliente) {
@@ -24,15 +24,15 @@ async function crearFacturaEnFacturaCity(datosCliente) {
     console.log('🌐 API URL utilizada:', API_BASE);
     console.log('🧾 Datos del cliente recibidos para facturar:', JSON.stringify(datosCliente, null, 2));
 
-    // PVP CON IVA recibido (número)
+    // PVP CON IVA recibido
     const totalConIVA = Number.parseFloat(String(datosCliente.importe).replace(',', '.'));
     if (!totalConIVA || Number.isNaN(totalConIVA)) {
       throw new Error(`❌ El importe recibido no es válido: "${datosCliente.importe}"`);
     }
 
-    // === CALCULAR BASE IMPONIBLE TRUNCADA A 2 DECIMALES (sin redondeo) ===
-    const baseTotal = trunc2(totalConIVA / 1.21); // p.ej. 22.90 -> 18.92 (no 18.93)
-    console.log('💶 Base imponible (truncada):', baseTotal.toFixed(2), '→ Total con IVA:', totalConIVA.toFixed(2));
+    // === CALCULAR BASE IMPONIBLE TRUNCADA A 4 DECIMALES (sin redondeo) ===
+    const baseTotal = trunc4(totalConIVA / 1.21); // Mantener 4 decimales
+    console.log('💶 Base imponible (truncada):', baseTotal.toFixed(4), '→ Total con IVA:', totalConIVA.toFixed(2));
 
     // ===== Cliente =====
     const cliente = {
@@ -93,8 +93,8 @@ async function crearFacturaEnFacturaCity(datosCliente) {
     const esEntrada = tp === 'entrada';
     const cantidad = esEntrada ? parseInt(datosCliente.totalAsistentes || '1', 10) : 1;
 
-    // Base unitario = baseTotal / cantidad, TRUNCADO a 2 decimales (no redondear)
-    const pvpUnitarioBase = trunc2(baseTotal / cantidad).toFixed(2);
+    // Base unitario = baseTotal / cantidad, TRUNCADO a 4 decimales (no redondear)
+    const pvpUnitarioBase = trunc4(baseTotal / cantidad).toFixed(4);
 
     // === Línea SIN incluyeiva (0) para que FacturaCity calcule total exacto desde la base truncada ===
     const lineas = [

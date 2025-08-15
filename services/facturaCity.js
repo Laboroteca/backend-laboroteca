@@ -13,19 +13,28 @@ function obtenerFechaHoy() {
   return `${dd}-${mm}-${yyyy}`;
 }
 
+// Trunca a 2 decimales sin redondear (hacia abajo)
+function trunc2(n) {
+  return Math.floor(n * 100) / 100;
+}
+
 async function crearFacturaEnFacturaCity(datosCliente) {
   try {
     console.log('🔐 API KEY utilizada:', `"${FACTURACITY_API_KEY}"`);
     console.log('🌐 API URL utilizada:', API_BASE);
     console.log('🧾 Datos del cliente recibidos para facturar:', JSON.stringify(datosCliente, null, 2));
 
-    // ⛔ NUNCA dividir entre 1,21. Trabajamos con PVP CON IVA.
+    // PVP CON IVA recibido (número)
     const totalConIVA = Number.parseFloat(String(datosCliente.importe).replace(',', '.'));
     if (!totalConIVA || Number.isNaN(totalConIVA)) {
       throw new Error(`❌ El importe recibido no es válido: "${datosCliente.importe}"`);
     }
 
-    // Cliente
+    // === CALCULAR BASE IMPONIBLE TRUNCADA A 2 DECIMALES (sin redondeo) ===
+    const baseTotal = trunc2(totalConIVA / 1.21); // p.ej. 22.90 -> 18.92 (no 18.93)
+    console.log('💶 Base imponible (truncada):', baseTotal.toFixed(2), '→ Total con IVA:', totalConIVA.toFixed(2));
+
+    // ===== Cliente =====
     const cliente = {
       nombre: `${datosCliente.nombre} ${datosCliente.apellidos}`,
       razonsocial: `${datosCliente.nombre} ${datosCliente.apellidos}`,
@@ -71,36 +80,35 @@ async function crearFacturaEnFacturaCity(datosCliente) {
       console.warn('⚠️ No se pudo añadir dirección fiscal:', err.message);
     }
 
-    // Referencia/Descripción
+    // ===== Referencia/Descripción =====
     const descripcion = datosCliente.descripcionProducto || datosCliente.descripcion || datosCliente.producto;
     let referencia = 'OTRO001';
+    const tp = (datosCliente.tipoProducto || '').toLowerCase();
     if (datosCliente.nombreProducto === 'el-club-laboroteca') referencia = 'CLUB001';
-    else if ((datosCliente.tipoProducto || '').toLowerCase() === 'libro') referencia = 'LIBRO001';
-    else if ((datosCliente.tipoProducto || '').toLowerCase() === 'curso') referencia = 'CURSO001';
-    else if ((datosCliente.tipoProducto || '').toLowerCase() === 'guia')  referencia = 'GUIA001';
+    else if (tp === 'libro') referencia = 'LIBRO001';
+    else if (tp === 'curso') referencia = 'CURSO001';
+    else if (tp === 'guia') referencia = 'GUIA001';
 
-    // Cantidad y precio unitario CON IVA
-    const esEntrada = (datosCliente.tipoProducto || '').toLowerCase() === 'entrada';
+    // ===== Cantidad y PRECIO UNITARIO BASE (sin IVA) =====
+    const esEntrada = tp === 'entrada';
     const cantidad = esEntrada ? parseInt(datosCliente.totalAsistentes || '1', 10) : 1;
 
-    // Precio unitario con IVA con 2 decimales exactos
-    const pvpUnitarioConIVA = (totalConIVA / cantidad);
-    const pvpunitario = pvpUnitarioConIVA.toFixed(2); // ← 22.90
+    // Base unitario = baseTotal / cantidad, TRUNCADO a 2 decimales (no redondear)
+    const pvpUnitarioBase = trunc2(baseTotal / cantidad).toFixed(2);
 
-    // 🔑 Línea con precio que INCLUYE IVA: evita recalcular 21 %
+    // === Línea SIN incluyeiva (0) para que FacturaCity calcule total exacto desde la base truncada ===
     const lineas = [
-    {
-      referencia,
-      descripcion,
-      cantidad,
-      pvpunitario: totalConIVA.toFixed(2), // 22.90
-      codimpuesto: 'IVA21',
-      incluyeiva: 1
-    }
-  ];
+      {
+        referencia,
+        descripcion,
+        cantidad,
+        pvpunitario: pvpUnitarioBase, // BASE imponible por unidad
+        codimpuesto: 'IVA21',
+        incluyeiva: '0'               // 👈 Indicamos que el pvpunitario NO incluye IVA
+      }
+    ];
 
-
-    // Cabecera factura
+    // ===== Cabecera factura =====
     const factura = {
       codcliente,
       lineas: JSON.stringify(lineas),
@@ -113,7 +121,6 @@ async function crearFacturaEnFacturaCity(datosCliente) {
       ciudad: datosCliente.ciudad || '',
       provincia: datosCliente.provincia || '',
       codpostal: datosCliente.cp || ''
-      // No enviamos bases ni totales para que NO recalculen nada distinto
     };
 
     const facturaResp = await axios.post(`${API_BASE}/crearFacturaCliente`, qs.stringify(factura), {

@@ -89,15 +89,16 @@ async function crearFacturaEnFacturaCity(datosCliente) {
 
     // 🔑 Línea con precio que INCLUYE IVA: evita recalcular 21 %
     const lineas = [
-      {
-        referencia,
-        descripcion,
-        cantidad,
-        pvpunitario,     // PVP CON IVA (2 decimales)
-        codimpuesto: 'IVA21',
-        incluyeiva: 1    // ⚠️ CLAVE: indica que pvpunitario ya lleva IVA
-      }
-    ];
+    {
+      referencia,
+      descripcion,
+      cantidad,
+      pvpunitario: totalConIVA.toFixed(2), // 22.90
+      codimpuesto: 'IVA21',
+      incluyeiva: 1
+    }
+  ];
+
 
     // Cabecera factura
     const factura = {

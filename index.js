@@ -25,6 +25,7 @@ const desactivarMembresiaClub = require('./services/desactivarMembresiaClub');
 const { registrarBajaClub } = require('./services/registrarBajaClub');
 const validarEntrada = require('./entradas/routes/validarEntrada');
 const crearCodigoRegalo = require('./regalos/routes/crear-codigo-regalo');
+const registrarConsentimiento = require('./routes/registrar-consentimiento');
 
 
 const app = express();
@@ -71,14 +72,24 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
+// ⚠️ Si NO tienes aún body parser global, añade uno que respete el webhook de Stripe:
+app.use((req, res, next) => {
+  if (req.originalUrl === '/webhook' || req.originalUrl.startsWith('/stripe/webhook')) {
+    return next(); // deja el raw body para Stripe
+  }
+  return express.json({ limit: '1mb' })(req, res, next);
+});
+
+// NUEVO: ruta para registrar consentimiento
+app.use(registrarConsentimiento);
 
 
 // ⚠️ WEBHOOK: SIEMPRE EL PRIMERO Y EN RAW
 app.use('/webhook', require('./routes/webhook'));
 
 // DESPUÉS DEL WEBHOOK, LOS BODY PARSERS
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 app.use(require('./routes/solicitarEliminacionCuenta'));
 app.use(require('./routes/confirmarEliminaciondecuenta'));
 app.use('/regalos', require('./regalos/routes/canjear-codigo'));

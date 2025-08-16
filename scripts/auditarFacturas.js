@@ -17,7 +17,7 @@ const AUDIT_SHEET_ID = '1P39jEoMGO3fxFmFGDKKECxa9sV4xk_N3rv1wXrJyYJM';
 const AUDIT_SHEET_TAB_DEFAULT = 'Hoja 1';
 
 // GCS PDFs
-const GCS_BUCKET = process.env.GCS_BUCKET || 'laboroteca-facturas';
+const GCS_BUCKET = process.env.GOOGLE_CLOUD_BUCKET || 'laboroteca-facturas';
 
 // FacturaCity
 const FC_BASE = (process.env.FACTURACITY_API_URL || '').replace(/\/+$/,'');

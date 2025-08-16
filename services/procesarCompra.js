@@ -34,9 +34,11 @@ module.exports = async function procesarCompra(datos) {
     }
   }
 
-  if (!email || !email.includes('@')) {
-    throw new Error(`❌ Email inválido: "${email}"`);
-  }
+    if (!email || !email.includes('@')) {
+      console.error(`❌ Email inválido: "${email}"`);
+      return { success: false, mensaje: 'email_invalido' };
+    }
+
 
     // 🛑 DEDUPLICACIÓN TEMPRANA (ATÓMICA) + logs
     const claveNormalizada = normalizarProducto(nombreProducto);
@@ -63,13 +65,15 @@ module.exports = async function procesarCompra(datos) {
       const lockRef = firestore.collection('locks').doc(dedupeKey);
       try {
         await lockRef.create({ createdAt: admin.firestore.FieldValue.serverTimestamp() });
-      } catch (e) {
-        if (e.code === 6 || /already exists/i.test(String(e.message || ''))) {
-          console.warn(`🟡 Duplicado ignorado (lock existe) key=${dedupeKey}`);
-          return { success: false, mensaje: 'Compra ya procesada (duplicado)' };
-        }
-        throw e;
+    } catch (e) {
+      if (e.code === 6 || /already exists/i.test(String(e.message || ''))) {
+        console.warn(`🟡 Duplicado ignorado (lock existe) key=${dedupeKey}`);
+        return { success: false, mensaje: 'Compra ya procesada (duplicado)' };
       }
+    console.error('❌ Error creando lock (continuo sin lock, riesgo mínimo de duplicado):', e);
+    // no returns aquí; seguir con el flujo
+    }
+
     }
 
 
@@ -176,8 +180,9 @@ if (invoicingDisabled) {
 
   } catch (err) {
     console.error('❌ Error al crear factura:', err);
-    throw err; // conservamos comportamiento
+    pdfBuffer = null; // 👈 continuamos sin factura
   }
+
 
   // 2) Subir a GCS
   try {
@@ -212,15 +217,18 @@ if (invoicingDisabled) {
   }
 
 
-  // 4) Registrar en Google Sheets
-  try {
+// 4) Registrar en Google Sheets SOLO si hay factura real (pdfBuffer).
+// Nota: en kill-switch ya registras arriba; y si hubo error, lo registra crearFacturaEnFacturaCity.
+try {
+  if (pdfBuffer) {
     console.log('📝 → Registrando en Google Sheets...');
     await guardarEnGoogleSheets(datosCliente);
-  } catch (err) {
-    console.error('❌ Error en Google Sheets:', err);
   }
+} catch (err) {
+  console.error('❌ Error en Google Sheets:', err);
 }
 
+}
 
     const membership_id = MEMBERPRESS_IDS[claveNormalizada];
 
@@ -281,13 +289,12 @@ if (membership_id) { // ← robusto: activa CLUB por mapeo del producto, no por 
 
 
 
-    if (datos.invoiceId) {
-      await firestore.collection('facturasGeneradas').doc(datos.invoiceId).set({
-        procesada: true,
-        fecha: new Date().toISOString()
-      });
-      console.log(`🧾 Factura ${datos.invoiceId} marcada como procesada`);
-    }
+if (datos.invoiceId && pdfBuffer) {
+  await firestore.collection('facturasGeneradas').doc(datos.invoiceId).set({
+    procesada: true,
+    fecha: new Date().toISOString()
+  });
+}
 
     console.log(`✅ Compra procesada con éxito para ${nombre} ${apellidos}`);
     console.timeEnd(`🕒 Compra ${email}`);
@@ -306,7 +313,8 @@ if (membership_id) { // ← robusto: activa CLUB por mapeo del producto, no por 
       }, { merge: true });
     }
     console.error('❌ Error en procesarCompra:', error);
-    throw error;
+    return { success: false, mensaje: 'error_procesar_compra', error: String(error?.message || error) };
+
   }
 
 };

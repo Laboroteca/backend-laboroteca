@@ -187,6 +187,24 @@ async function crearFacturaEnFacturaCity(datosCliente) {
       console.error(`⛔ Error FacturaCity sin respuesta invoiceId=${datosCliente.invoiceId || 'N/A'} email=${datosCliente.email} → ${error.message}`);
     }
 
+    // 📝 Registrar fallo en Sheets y GCS aunque no haya factura
+    try {
+      const { guardarEnGoogleSheets } = require('./googleSheets');
+      const { subirFactura } = require('./gcs');
+      const fakePdf = Buffer.from(`Factura NO generada. Error: ${error.message}`, 'utf-8');
+
+      await guardarEnGoogleSheets({
+        ...datosCliente,
+        estadoFactura: 'ERROR',
+        error: error.message
+      });
+
+      await subirFactura(`fallo-factura-${datosCliente.invoiceId || Date.now()}.txt`, fakePdf);
+      console.warn('⚠️ Fallo de facturación registrado en Sheets y GCS');
+    } catch (logErr) {
+      console.error('⛔ No se pudo registrar el fallo en Sheets/GCS:', logErr.message);
+    }
+
     throw new Error('Error al generar la factura');
   }
 }

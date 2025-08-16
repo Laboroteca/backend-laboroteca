@@ -194,23 +194,6 @@ if (event.type === 'invoice.paid') {
     }
 
 
-    // Idempotencia por invoice.id (ATÓMICO, antes de facturar)
-    const firstInvoice = await ensureOnce('invoices', invoiceId);
-    if (!firstInvoice) {
-      console.log(`🟡 Duplicado invoiceId=${invoiceId} ignorado`);
-      return;
-    }
-    
-    // Gate local de facturación (evita carreras en el mismo proceso)
-    const kFacturar = `facturar:invoice:${invoiceId}`;
-    const firstGateFact = await ensureOnce('facturar', kFacturar);
-    if (!firstGateFact) {
-      console.warn(`🟡 Gate de facturación ya usado para ${kFacturar}. Evito doble factura.`);
-      return;
-    }
-
-
-
     // 📧 Email preferente de la invoice; fallback al customer de Stripe
     let email = (invoice.customer_email || invoice.customer_details?.email || '').toLowerCase().trim();
     if (!email) {
@@ -377,26 +360,13 @@ if (event.type === 'invoice.paid') {
 
     if (session.payment_status !== 'paid') return { ignored: true };
 
-    // ⛔ Candado extra: un pago (payment_intent) => una sola factura
-    const pi = session.payment_intent || session.payment_intent_id;
-    if (pi) {
-      const firstPayment = await ensureOnce('payments', String(pi));
-      if (!firstPayment) {
-        console.warn(`🟡 Duplicado payment_intent=${pi} ignorado (ya facturado)`);
-        return { duplicate_payment: true };
-      }
-    }
-
-
     const sessionId = session.id;
-    const firstSession = await ensureOnce('sessions', sessionId);
-    if (!firstSession) {
-      console.warn(`🟡 Duplicado sessionId=${sessionId} ignorado`);
-      return { duplicate: true };
-    }
-
     const docRef = firestore.collection('comprasProcesadas').doc(sessionId);
     await docRef.set({ sessionId, createdAt: new Date().toISOString() }, { merge: true });
+
+    // ID de pago para dedupe de FacturaCity
+    const pi = session.payment_intent || session.payment_intent_id || null;
+
 
     const m = session.metadata || {};
     const email = (
@@ -472,51 +442,38 @@ try {
     console.warn('⛔ Facturación deshabilitada. Saltando crear/subir/email. Registrando SOLO en Sheets.');
     try { await guardarEnGoogleSheets(datosCliente); } catch (e) { console.error('❌ Sheets (kill-switch):', e?.message || e); }
   } else {
-    // Registra siempre aunque luego haya dedupe
-    try { await guardarEnGoogleSheets(datosCliente); } catch (e) { console.error('❌ Sheets (pre):', e?.message || e); }
+    
+    
+    // 🧾 Crear factura SIEMPRE (la dedupe la hace FacturaCity por invoiceId = payment_intent)
+pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
 
-    // Gate local de facturación (evita carreras en el mismo proceso)
-    const gateKey = sessionId
-      ? `facturar:session:${sessionId}`
-      : (pi ? `facturar:pi:${pi}` : `facturar:tmp:${Date.now()}`);
-
-    const firstGate = await ensureOnce('facturar', gateKey);
-    if (!firstGate) {
-      console.warn(`🟡 Gate de facturación ya usado para ${gateKey}. Evito doble factura.`);
-      pdfBuffer = null;
-    } else {
-      // 🧾 Crear factura
-      pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
-    }
-
-
-   if (!pdfBuffer) {
-  console.warn('🟡 crearFacturaEnFacturaCity devolvió null (dedupe). No se sube ni se envía email.');
+if (!pdfBuffer) {
+  console.warn('🟡 crearFacturaEnFacturaCity devolvió null (dedupe). No registro en Sheets ni subo a GCS.');
 } else {
-  // Segunda compuerta: no repetir subida/envío aunque hubiese doble PDF
-  const kSend = pi ? `send:pi:${pi}` : `send:session:${sessionId}`;
+  // ✅ Solo si FacturaCity devuelve factura real
+  await guardarEnGoogleSheets(datosCliente);
+
+  // 🔒 Gate SOLO de envío/subida para evitar IO duplicado
+  const baseName = (pi || sessionId || Date.now());
+  const kSend = `send:invoice:${baseName}`;
   const firstSend = await ensureOnce('sendFactura', kSend);
   if (!firstSend) {
     console.warn(`🟡 Dedupe envío/Upload para ${kSend}. No repito subir/email.`);
   } else {
-    // Nombre GCS estable: prioriza payment_intent si existe
-    const gcsName = pi
-      ? `facturas/${email}/${pi}.pdf`
-      : `facturas/${email}/${sessionId}-${(datosCliente.producto || 'producto')}.pdf`;
-
-    await subirFactura(gcsName, pdfBuffer, {
+    const nombreArchivo = `facturas/${email}/${baseName}-${datosCliente.producto}.pdf`;
+    await subirFactura(nombreArchivo, pdfBuffer, {
       email,
       nombreProducto: datosCliente.nombreProducto || datosCliente.producto,
       tipoProducto: datosCliente.tipoProducto,
       importe: datosCliente.importe
     });
 
-    // Enviar factura SOLO si no es entrada
     if ((datosCliente.tipoProducto || '').toLowerCase() !== 'entrada') {
       await enviarFacturaPorEmail(datosCliente, pdfBuffer);
     }
   }
 }
+
 
   }
 

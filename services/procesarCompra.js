@@ -98,48 +98,73 @@ module.exports = async function procesarCompra(datos) {
     console.time(`🕒 Compra ${email}`);
     console.log('📦 [procesarCompra] Datos facturación finales:\n', JSON.stringify(datosCliente, null, 2));
 
-    let pdfBuffer;
-    try {
-      console.log('🧾 → Generando factura...');
-      pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
-      console.log(`✅ Factura PDF generada (${pdfBuffer.length} bytes)`);
-    } catch (err) {
-      console.error('❌ Error al crear factura:', err);
-      throw err;
-    }
+    
+// ⛔ Kill-switch de facturación
+const invoicingDisabled =
+  String(process.env.DISABLE_INVOICING).toLowerCase() === 'true' ||
+  process.env.DISABLE_INVOICING === '1';
 
-    try {
-      const nombreArchivo = `facturas/${email}/Factura Laboroteca.pdf`;
-      console.log('☁️ → Subiendo a GCS:', nombreArchivo);
-      await subirFactura(nombreArchivo, pdfBuffer, {
-        email,
-        nombreProducto,
-        tipoProducto,
-        importe
-      });
-      console.log('✅ Subido a GCS');
-    } catch (err) {
-      console.error('❌ Error subiendo a GCS:', err);
-    }
+let pdfBuffer;
 
-    try {
-      console.log('📧 → Enviando email con factura...');
-      const resultado = await enviarFacturaPorEmail(datosCliente, pdfBuffer);
-      if (resultado === 'OK') {
-        console.log('✅ Email enviado');
-      } else {
-        console.warn('⚠️ Resultado inesperado del envío de email:', resultado);
-      }
-    } catch (err) {
-      console.error('❌ Error enviando email:', err);
-    }
+if (invoicingDisabled) {
+  console.warn('⛔ Facturación deshabilitada en procesarCompra. Saltando creación/subida/email.');
 
-    try {
-      console.log('📝 → Registrando en Google Sheets...');
-      await guardarEnGoogleSheets(datosCliente);
-    } catch (err) {
-      console.error('❌ Error en Google Sheets:', err);
+  // ✅ Registrar SIEMPRE en Google Sheets aunque no haya factura
+  try {
+    console.log('📝 → Registrando en Google Sheets (kill-switch activo)...');
+    await guardarEnGoogleSheets(datosCliente);
+  } catch (err) {
+    console.error('❌ Error en Google Sheets:', err);
+  }
+
+} else {
+  // 1) Crear factura
+  try {
+    console.log('🧾 → Generando factura...');
+    pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
+    console.log(`✅ Factura PDF generada (${pdfBuffer.length} bytes)`);
+  } catch (err) {
+    console.error('❌ Error al crear factura:', err);
+    throw err; // conservamos comportamiento
+  }
+
+  // 2) Subir a GCS
+  try {
+    const nombreArchivo = `facturas/${email}/Factura Laboroteca.pdf`;
+    console.log('☁️ → Subiendo a GCS:', nombreArchivo);
+    await subirFactura(nombreArchivo, pdfBuffer, {
+      email,
+      nombreProducto,
+      tipoProducto,
+      importe
+    });
+    console.log('✅ Subido a GCS');
+  } catch (err) {
+    console.error('❌ Error subiendo a GCS:', err);
+  }
+
+  // 3) Enviar por email
+  try {
+    console.log('📧 → Enviando email con factura...');
+    const resultado = await enviarFacturaPorEmail(datosCliente, pdfBuffer);
+    if (resultado === 'OK') {
+      console.log('✅ Email enviado');
+    } else {
+      console.warn('⚠️ Resultado inesperado del envío de email:', resultado);
     }
+  } catch (err) {
+    console.error('❌ Error enviando email:', err);
+  }
+
+  // 4) Registrar en Google Sheets
+  try {
+    console.log('📝 → Registrando en Google Sheets...');
+    await guardarEnGoogleSheets(datosCliente);
+  } catch (err) {
+    console.error('❌ Error en Google Sheets:', err);
+  }
+}
+
 
     const membership_id = MEMBERPRESS_IDS[claveNormalizada];
     if (tipoProducto.toLowerCase() === 'club' && membership_id) {

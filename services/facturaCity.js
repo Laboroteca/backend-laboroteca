@@ -13,6 +13,8 @@ function obtenerFechaHoy() {
   return `${dd}-${mm}-${yyyy}`;
 }
 
+const { ensureOnce } = require('../utils/dedupe');
+
 // Trunca a 4 decimales sin redondear (hacia abajo)
 function trunc4(n) {
   return Math.floor(n * 10000) / 10000; // 4 decimales exactos
@@ -20,6 +22,15 @@ function trunc4(n) {
 
 async function crearFacturaEnFacturaCity(datosCliente) {
   try {
+    // ✅ Kill-switch de duplicados FacturaCity
+    if (datosCliente.invoiceId) {
+      const first = await ensureOnce('facturasGeneradas', datosCliente.invoiceId);
+      if (!first) {
+        console.warn(`⛔ Factura ya generada previamente para invoiceId=${datosCliente.invoiceId}`);
+        return null;
+      }
+    }
+
     console.log('🔐 API KEY utilizada:', `"${FACTURACITY_API_KEY}"`);
     console.log('🌐 API URL utilizada:', API_BASE);
     console.log('🧾 Datos del cliente recibidos para facturar:', JSON.stringify(datosCliente, null, 2));

@@ -242,10 +242,18 @@ if (event.type === 'invoice.paid') {
       invoiceId,
     };
 
-    const pdfBuffer = await crearFacturaEnFacturaCity(datosRenovacion);
-    await subirFactura(email, pdfBuffer, invoiceId);
-    await guardarEnGoogleSheets(datosRenovacion);
-    await enviarFacturaPorEmail(datosRenovacion, pdfBuffer);
+    const invoicingDisabled = process.env.DISABLE_INVOICING === 'true';
+    let pdfBuffer = null;
+
+    if (invoicingDisabled) {
+      console.warn(`⛔ Facturación deshabilitada (invoiceId=${invoiceId}). Saltando crear/subir/email/Sheets.`);
+    } else {
+      pdfBuffer = await crearFacturaEnFacturaCity(datosRenovacion);
+      await subirFactura(email, pdfBuffer, invoiceId);
+      await guardarEnGoogleSheets(datosRenovacion);
+      await enviarFacturaPorEmail(datosRenovacion, pdfBuffer);
+    }
+
 
     const emailSeguro = (email || '').toString().trim().toLowerCase();
 
@@ -377,41 +385,44 @@ if (event.type === 'invoice.paid') {
     let errorProcesando = false;
 
     try {
+    const invoicingDisabled = process.env.DISABLE_INVOICING === 'true';
+    let pdfBuffer = null;
+
+    if (invoicingDisabled) {
+      console.warn('⛔ Facturación deshabilitada. Saltando crear/subir/email/Sheets.');
+    } else {
       await guardarEnGoogleSheets(datosCliente);
 
-      console.log('📤 Llamando a crearFacturaEnFacturaCity con:');
-      console.log('🧾 descripcionProducto:', datosCliente.descripcionProducto);
-      console.log('🧾 importe:', datosCliente.importe);
-      console.log('🧾 tipoProducto:', datosCliente.tipoProducto);
+      // 🧾 Comprobación de asistentes antes de facturar (se mantiene tal cual)
+      if (
+        normalizarProducto(datosCliente.tipoProducto) === 'entrada' &&
+        (!datosCliente.totalAsistentes || parseInt(datosCliente.totalAsistentes, 10) < 1)
+      ) {
+        datosCliente.totalAsistentes = parseInt(session.metadata?.totalAsistentes || '1', 10);
+      }
 
-// 🧾 Comprobación de asistentes antes de facturar
-    if (
-      normalizarProducto(datosCliente.tipoProducto) === 'entrada' &&
-      (!datosCliente.totalAsistentes || parseInt(datosCliente.totalAsistentes, 10) < 1)
-    ) {
-      datosCliente.totalAsistentes = parseInt(session.metadata?.totalAsistentes || '1', 10);
+      // 1. Crear factura
+      pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
+
+      // 2. Subir factura
+      const nombreArchivo = `facturas/${email}/${Date.now()}-${datosCliente.producto}.pdf`;
+      await subirFactura(nombreArchivo, pdfBuffer, {
+        email,
+        nombreProducto: datosCliente.producto,
+        tipoProducto: datosCliente.tipoProducto,
+        importe: datosCliente.importe
+      });
+
+      // 3. Enviar factura SOLO si no es entrada (las entradas se envían más abajo con su flujo)
+      if (datosCliente.tipoProducto?.toLowerCase() !== 'entrada') {
+        await enviarFacturaPorEmail(datosCliente, pdfBuffer);
+      }
     }
 
-    console.log(`🧾 totalAsistentes para factura: ${datosCliente.totalAsistentes}`);
-
-    // 1. Crear factura
-    const pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
-
-    // 2. Subir factura a GCS
-    const nombreArchivo = `facturas/${email}/${Date.now()}-${datosCliente.producto}.pdf`;
-    await subirFactura(nombreArchivo, pdfBuffer, {
-      email,
-      nombreProducto: datosCliente.producto,
-      tipoProducto: datosCliente.tipoProducto,
-      importe: datosCliente.importe
-    });
-
-    // 3. Enviar factura o preparar envío con entradas
+        // 🎫 Procesar entradas SIEMPRE (aunque DISABLE_INVOICING sea true)
     if (datosCliente.tipoProducto?.toLowerCase() === 'entrada') {
       const procesarEntradas = require('../entradas/services/procesarEntradas');
-      await procesarEntradas({ session, datosCliente, pdfBuffer }); // 🔁 PASA pdfBuffer aquí
-    } else {
-      await enviarFacturaPorEmail(datosCliente, pdfBuffer); // 👍 Libros, Club, etc.
+      await procesarEntradas({ session, datosCliente, pdfBuffer }); // pdfBuffer puede ser null si kill-switch activo
     }
 
       

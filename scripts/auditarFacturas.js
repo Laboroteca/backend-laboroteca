@@ -3,7 +3,6 @@
 
 const { google } = require('googleapis');
 const { Storage } = require('@google-cloud/storage');
-const fetch = require('node-fetch');
 
 // ───────────────────────── CONFIG ─────────────────────────
 const WINDOW_DAYS = 25;

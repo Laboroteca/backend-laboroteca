@@ -169,20 +169,32 @@ function detectarDuplicadosSheets(rows){
 }
 
 // ───────────────────────── GCS ─────────────────────────
+// Nueva heurística: agrupar por EMAIL + SLUG (nombre lógico del documento)
+// Espera rutas tipo: facturas/{email}/{timestamp}-{slug}.pdf
+function extractEmailFromPath(path){
+  const m = String(path).match(/^facturas\/([^/]+)\//);
+  return m ? decodeURIComponent(m[1]).toLowerCase() : '';
+}
+function extractSlugFromPath(path){
+  const m = String(path).match(/\/\d{10,}-([^/]+)\.pdf$/i);
+  if (m) return m[1].toLowerCase();
+  // fallback: nombre sin extensión
+  const b = path.split('/').pop() || '';
+  return b.replace(/\.pdf$/i,'').toLowerCase();
+}
+
 async function listarGcsEnVentana(){
   const minDate = startDate();
   const [files] = await storage.bucket(GCS_BUCKET).getFiles({ prefix: 'facturas/' });
   const rows = (files || []).map(f => {
     const updated = new Date(f.metadata?.updated || f.metadata?.timeCreated || 0);
-    const m = f.name.match(/^facturas\/([^/]+)\//);
-    const email = m ? decodeURIComponent(m[1]).toLowerCase() : '';
     return {
       fuente: 'GCS',
-      email,
-      nombre: '', apellidos: '', nombreN: '', apellidosN: '',
-      descripcion: '', descN: '',
+      email: extractEmailFromPath(f.name),
+      slug: extractSlugFromPath(f.name),
       numero: null,
-      fecha: updated, fechaStr: fmtES(updated),
+      fecha: updated,
+      fechaStr: fmtES(updated),
       file: f.name
     };
   }).filter(r => r.fecha && r.fecha >= minDate);
@@ -192,29 +204,98 @@ async function listarGcsEnVentana(){
 }
 
 function detectarDuplicadosGcs(rows){
-  const byEmail = new Map();
+  // Incidencias por (email + slug) con >= 2 PDFs en la ventana
+  const byKey = new Map();
   for (const r of rows){
-    if (!byEmail.has(r.email)) byEmail.set(r.email, []);
-    byEmail.get(r.email).push(r);
+    const key = `${r.email}||${r.slug}`;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(r);
   }
   const out = [];
-  for (const [email, arr] of byEmail.entries()){
-    if (email && arr.length >= 2){
+  for (const [key, arr] of byKey.entries()){
+    if (!arr[0].email || !arr[0].slug) continue;
+    if (arr.length >= 2){
       out.push({
         tipo: 'DUP_GCS_MULTI_PDF',
-        email,
+        email: arr[0].email,
+        slug: arr[0].slug,
         count: arr.length,
-        fechas: arr.map(x=>x.fechaStr).slice(0,6),
-        files: arr.map(x=>x.file).slice(0,6),
+        fechas: arr.map(x=>x.fechaStr).slice(0,20),
+        files: arr.map(x=>x.file).slice(0,20),
         numerosFactura: []
       });
     }
   }
-  log(`🔎 GCS indicios de duplicado (multi-PDF por email): ${out.length}`);
+  log(`🔎 GCS duplicados por documento: ${out.length}`);
   return out;
 }
 
 // ───────────────────────── FACTURACITY ─────────────────────────
+// Descubrimiento de endpoint (FacturaScripts): consulto índice y detecto recurso de facturas
+async function discoverFacturaCityResource(){
+  const candidates = ['', '/', '/index.php', '/?format=json'];
+  const headersToTry = [
+    { name: 'Token', build: v => ({ Token: v }) },
+    { name: 'Authorization: Token', build: v => ({ Authorization: `Token ${v}` }) },
+    { name: 'Authorization: Bearer', build: v => ({ Authorization: `Bearer ${v}` }) },
+  ];
+  for (const suffix of candidates){
+    const url = `${FC_BASE}${suffix}`;
+    for (const h of headersToTry){
+      try{
+        log(`🌐 FC INDEX GET ${url} [${h.name}]`);
+        const r = await axios.get(url, { headers: { Accept: 'application/json', ...h.build(FC_KEY) }, timeout: 10000, validateStatus: () => true });
+        if (r.status >= 200 && r.status < 300 && r.data){
+          const text = JSON.stringify(r.data).toLowerCase();
+          // Busca nombres típicos
+          const matches = [];
+          ['factura', 'facturas', 'ventas', 'ventas_facturas', 'facturacliente', 'crearFacturaCliente'.toLowerCase()].forEach(k=>{
+            if (text.includes(k)) matches.push(k);
+          });
+          return { headers: h.build(FC_KEY), raw: r.data, indexUrl: url, matches };
+        } else {
+          warn(`FC INDEX ${url} → HTTP ${r.status} ${String(r.data).slice(0,200)}`);
+        }
+      }catch(e){
+        warn(`FC INDEX error ${url}: ${e.message}`);
+      }
+    }
+  }
+  return null;
+}
+
+function buildFcAttempts(resourceHint){
+  // Paths probables en FacturaScripts / factura.city
+  const basePaths = [
+    '/ventas_facturas', '/facturas', '/factura', '/facturacliente', '/api/ventas_facturas',
+  ];
+  // filtros posibles
+  const filters = ({from, to}) => ([
+    { method: 'GET',  qs: { desde: from, hasta: to } },
+    { method: 'GET',  qs: { from, to } },
+    { method: 'GET',  qs: { fecha_desde: from, fecha_hasta: to } },
+    { method: 'POST', form: { desde: from, hasta: to } },
+    { method: 'POST', form: { from, to } },
+  ]);
+
+  const hintPaths = [];
+  const text = JSON.stringify(resourceHint||{}).toLowerCase();
+  if (text.includes('ventas_facturas')) hintPaths.push('/ventas_facturas');
+  if (text.includes('facturas')) hintPaths.push('/facturas');
+  if (text.includes('facturacliente')) hintPaths.push('/facturacliente');
+
+  const paths = Array.from(new Set([...hintPaths, ...basePaths]));
+  return (from,to) => {
+    const attempts = [];
+    for (const p of paths){
+      for (const f of filters({from,to})){
+        attempts.push({ path: p, ...f });
+      }
+    }
+    return attempts;
+  };
+}
+
 async function fetchFacturaCityList(fromDate, toDate){
   if (!FC_BASE || !FC_KEY) {
     warn('FacturaCity desactivado: falta FACTURACITY_API_URL o FACTURACITY_API_KEY');
@@ -223,44 +304,46 @@ async function fetchFacturaCityList(fromDate, toDate){
   const from = toYMD(fromDate);
   const to = toYMD(toDate);
 
-  // Intentos de endpoints habituales (v3)
-  const tries = [
-    { path: '/facturas/listar', fields: { desde: from, hasta: to } },
-    { path: '/invoices/list',  fields: { from, to } },
-    { path: '/facturas',       fields: { desde: from, hasta: to } },
-    { path: '/invoices',       fields: { from, to } }
-  ];
+  const discovery = await discoverFacturaCityResource();
+  const headers = discovery?.headers || { Token: FC_KEY, Accept: 'application/json' };
+  const attemptBuilder = buildFcAttempts(discovery?.raw);
 
-  for (const t of tries){
-    const url = `${FC_BASE}${t.path}`;
+  const attempts = attemptBuilder(from, to);
+
+  for (const a of attempts){
+    const url = `${FC_BASE}${a.path}`;
     try{
-      log(`🌐 FacturaCity POST ${url} [Token]`);
-      const body = new URLSearchParams(t.fields);
-      const r = await axios.post(url, body.toString(), {
-        headers: {
-          'Token': FC_KEY,
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Accept': 'application/json'
-        },
-        timeout: 15000
-      });
+      let r;
+      if (a.method === 'POST'){
+        const body = new URLSearchParams(a.form || {});
+        log(`🌐 FC POST ${url} [filters=${JSON.stringify(a.form)}]`);
+        r = await axios.post(url, body.toString(), {
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json', ...headers },
+          timeout: 15000, validateStatus: () => true
+        });
+      } else {
+        log(`🌐 FC GET  ${url} [qs=${JSON.stringify(a.qs)}]`);
+        r = await axios.get(url, { params: a.qs, headers: { Accept: 'application/json', ...headers }, timeout: 15000, validateStatus: () => true });
+      }
 
-      const data = r.data;
-      const list = Array.isArray(data) ? data
-                 : Array.isArray(data?.items) ? data.items
-                 : Array.isArray(data?.data) ? data.data
-                 : [];
-
-      log(`✅ FacturaCity OK (${t.path}): ${list.length} registros`);
-      return list.map(mapFCItem).filter(i => i.fecha && i.fecha >= fromDate && i.fecha <= toDate);
+      if (r.status >= 200 && r.status < 300){
+        const data = r.data;
+        const list = Array.isArray(data) ? data
+                   : Array.isArray(data?.items) ? data.items
+                   : Array.isArray(data?.data) ? data.data
+                   : Array.isArray(data?.result) ? data.result
+                   : [];
+        log(`✅ FacturaCity OK (${a.method} ${a.path}) → ${list.length} registros`);
+        return list.map(mapFCItem).filter(i => i.fecha && i.fecha >= fromDate && i.fecha <= toDate);
+      } else {
+        warn(`FacturaCity ${a.method} ${a.path} → HTTP ${r.status} BODY=${(typeof r.data==='string'?r.data:JSON.stringify(r.data)).slice(0,240)}`);
+      }
     }catch(e){
-      const status = e.response?.status;
-      warn(`FacturaCity ${t.path} → ${status || 'ERR'} ${e.message}`);
-      continue;
+      warn(`FacturaCity ${a.method} ${a.path} error: ${e.message}`);
     }
   }
 
-  warn('FacturaCity: no se pudo obtener listado con los intentos POST.');
+  warn('FacturaCity: no se pudo obtener listado tras intentos dinámicos.');
   return [];
 }
 
@@ -273,8 +356,8 @@ function mapFCItem(x){
     }
     return undefined;
   };
-  const numero = get(['numero','num','number','invoice_number','code']) || '';
-  const fechaRaw = get(['fecha','created_at','date','issued_at','emitted_at']);
+  const numero = get(['numero','num','number','invoice_number','code','codigo']) || '';
+  const fechaRaw = get(['fecha','created_at','date','issued_at','emitted_at','fecha_emision']);
   let fecha = fechaRaw ? new Date(fechaRaw) : null;
   if (fecha && isNaN(fecha.getTime())) {
     const m = String(fechaRaw).match(/^(\d{4})-(\d{2})-(\d{2})/);
@@ -389,17 +472,19 @@ async function enviarInformeEmail({ fcDup, shDup, gcsDup, totales, resumen }){
   const fmtList = (arr) => arr.map(i => {
     const base = `<b>${i.nombre || ''} ${i.apellidos || ''}</b> — ${i.email || ''}`;
     const fechas = i.fechas?.join(' | ') || '';
-    if (i.tipo.startsWith('DUP_FACTURACITY')) {
+    if (i.tipo?.startsWith('DUP_FACTURACITY')) {
       const nums = i.numerosFactura?.length ? `Nºs: <code>${i.numerosFactura.join(', ')}</code><br/>` : '';
       const desc = i.descripcion ? `Desc: <i>${i.descripcion}</i><br/>` :
                    i.descripciones ? `Desc: <i>${i.descripciones.join(' · ')}</i><br/>` : '';
       return `<li>${base}<br/>${desc}${nums}Fechas: ${fechas}<br/>Coincidencias: ${i.count}</li>`;
-    } else if (i.tipo.startsWith('DUP_SHEETS')) {
+    } else if (i.tipo?.startsWith('DUP_SHEETS')) {
       const desc = i.descripcion ? `Desc: <i>${i.descripcion}</i><br/>` : '';
       return `<li>${base}<br/>${desc}Fechas: ${fechas}<br/>Coincidencias: ${i.count}</li>`;
     } else {
       const files = i.files?.length ? `Ficheros: <code>${i.files.join(' | ')}</code><br/>` : '';
-      return `<li>${base}<br/>${files}Fechas: ${fechas}<br/>Coincidencias: ${i.count}</li>`;
+      // para GCS, mostramos slug también si existe
+      const title = i.slug ? `<i>${i.slug}</i><br/>` : '';
+      return `<li>${i.email || '—'}<br/>${title}${files}Fechas: ${fechas}<br/>Coincidencias: ${i.count}</li>`;
     }
   }).join('\n');
 
@@ -411,7 +496,7 @@ async function enviarInformeEmail({ fcDup, shDup, gcsDup, totales, resumen }){
       <ul style="margin-top:0">
         <li>FacturaCity: <b>${fcDup.length}</b></li>
         <li>Google Sheets: <b>${shDup.length}</b></li>
-        <li>GCS: <b>${gcsDup.length}</b></li>
+        <li>GCS (por documento): <b>${gcsDup.length}</b></li>
       </ul>
 
       <h4>Resumen de fechas</h4>
@@ -431,19 +516,10 @@ async function enviarInformeEmail({ fcDup, shDup, gcsDup, totales, resumen }){
     `Duplicados — total incidencias: ${totalIncidencias}`,
     `- FacturaCity: ${fcDup.length}`,
     `- Google Sheets: ${shDup.length}`,
-    `- GCS: ${gcsDup.length}`,
+    `- GCS (por documento): ${gcsDup.length}`,
     '',
     'Resumen de fechas:',
     resumen.fechasResumen.join(' | ') || '—',
-    '',
-    'Detalle FacturaCity:',
-    ...(fcDup.length ? fcDup.map(i => `- ${i.nombre||''} ${i.apellidos||''} | ${i.email||''} | ${i.descripcion||i.descripciones?.join(' · ')||''} | nums=${(i.numerosFactura||[]).join(',')} | fechas=${i.fechas?.join(' | ')||''} | x${i.count}`) : ['Sin incidencias.']),
-    '',
-    'Detalle Google Sheets:',
-    ...(shDup.length ? shDup.map(i => `- ${i.nombre||''} ${i.apellidos||''} | ${i.email||''} | ${i.descripcion||''} | fechas=${i.fechas?.join(' | ')||''} | x${i.count}`) : ['Sin incidencias.']),
-    '',
-    'Detalle GCS:',
-    ...(gcsDup.length ? gcsDup.map(i => `- ${i.email||''} | files=${(i.files||[]).join(' | ')} | fechas=${i.fechas?.join(' | ')||''} | x${i.count}`) : ['Sin incidencias.'])
   ].join('\n');
 
   await enviarEmailPersonalizado({
@@ -468,17 +544,14 @@ async function enviarInformeEmail({ fcDup, shDup, gcsDup, totales, resumen }){
       fetchFacturaCityList(startDate(), now())
     ]);
 
-    // Totales para email (facturas emitidas en FacturaCity en la ventana)
-    const totales = {
-      fcEmitidas: fcRows.length
-    };
+    const totales = { fcEmitidas: fcRows.length };
 
-    // 2) Detectar duplicados en cada fuente
+    // 2) Detectar duplicados
     const shDup = detectarDuplicadosSheets(shRows);
     const gcsDup = detectarDuplicadosGcs(gcsRows);
     const fcDup = detectarDuplicadosFacturaCity(fcRows);
 
-    // 3) Completar nº de factura en incidencias de Sheets con FacturaCity (si coincide persona y desc)
+    // 3) Completar nº de factura en incidencias de Sheets con FacturaCity
     if (fcRows.length && shDup.length){
       const byPersonFC = new Map();
       for (const it of fcRows){
@@ -497,28 +570,24 @@ async function enviarInformeEmail({ fcDup, shDup, gcsDup, totales, resumen }){
       }
     }
 
-    // 4) Emails afectados (unión)
+    // 4) Emails afectados
     const emailsAfectados = Array.from(new Set([
       ...fcDup.map(i=>i.email).filter(Boolean),
       ...shDup.map(i=>i.email).filter(Boolean),
       ...gcsDup.map(i=>i.email).filter(Boolean),
     ]));
 
-    // 5) Fechas resumen (tomamos las primeras de cada incidencia)
+    // 5) Fechas resumen
     const fechasResumen = [
       ...fcDup.flatMap(i => i.fechas || []).slice(0,6),
       ...shDup.flatMap(i => i.fechas || []).slice(0,6),
       ...gcsDup.flatMap(i => i.fechas || []).slice(0,6),
     ];
 
-    // 6) Enviar email SIEMPRE (aunque no haya incidencias)
-    await enviarInformeEmail({
-      fcDup, shDup, gcsDup,
-      totales,
-      resumen: { fechasResumen }
-    });
+    // 6) Email SIEMPRE
+    await enviarInformeEmail({ fcDup, shDup, gcsDup, totales, resumen: { fechasResumen } });
 
-    // 7) Registrar en hoja de auditorías A–F (mantenemos mismo esquema)
+    // 7) Registrar en hoja de auditorías
     await appendAuditRow({
       countSheets: shDup.length,
       countGcs: gcsDup.length,

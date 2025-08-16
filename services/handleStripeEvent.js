@@ -185,12 +185,19 @@ if (event.type === 'invoice.paid') {
       return;
     }
 
-    // ✅ Procesar compra inicial y renovaciones del Club
-    // Aceptamos 'subscription_create' (primera cuota) y 'subscription_cycle' (renovaciones).
-    if (!['subscription_create', 'subscription_cycle'].includes(billingReason)) {
+    // ✅ Procesar compra inicial, renovaciones y (TEMPORAL) facturas manuales en TEST
+    const isManual = billingReason === 'manual';
+    const isAllowed =
+      billingReason === 'subscription_create' ||
+      billingReason === 'subscription_cycle' ||
+      (isManual && event.livemode === false); // permitir manual solo en modo TEST
+
+    if (!isAllowed) {
       console.log(`📭 invoice.paid ignorado (billing_reason=${billingReason}) invoiceId=${invoiceId}`);
       return;
     }
+    // TODO: Revertir después → aceptar solo 'subscription_create' y 'subscription_cycle'
+
 
 
 

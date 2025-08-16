@@ -3,6 +3,7 @@
 
 const { google } = require('googleapis');
 const { Storage } = require('@google-cloud/storage');
+const fetch = require('node-fetch');
 
 // ───────────────────────── CONFIG ─────────────────────────
 const WINDOW_DAYS = 25;
@@ -13,17 +14,16 @@ const COMPRAS_SHEET_TAB = 'Hoja 1'; // A: Nombre, B: Apellidos, C: DNI, D: Descr
 
 // Registro auditorías (ESCRITURA)
 const AUDIT_SHEET_ID = '1P39jEoMGO3fxFmFGDKKECxa9sV4xk_N3rv1wXrJyYJM';
-// si no sabes el nombre de la pestaña, usa la primera. Aquí usamos "Hoja 1" por defecto.
 const AUDIT_SHEET_TAB_DEFAULT = 'Hoja 1';
 
 // GCS PDFs
 const GCS_BUCKET = process.env.GOOGLE_CLOUD_BUCKET || 'laboroteca-facturas';
 
-// FacturaCity
-const FC_BASE = (process.env.FACTURACITY_API_URL || '').replace(/\/+$/,'');
-const FC_KEY  = process.env.FACTURACITY_API_KEY || '';
+// FacturaCity (con fallbacks proporcionados)
+const FC_BASE = (process.env.FACTURACITY_API_URL || 'https://app2.factura.city/680d72cf23386/api/3').replace(/\/+$/,'');
+const FC_KEY  = (process.env.FACTURACITY_API_KEY || 'KlyDZCM6gbsyBP7jgDum').trim();
 
-// Email (usamos tu helper SMTP2GO)
+// Email (tu helper SMTP2GO)
 const { enviarEmailPersonalizado } = require('../services/email');
 const EMAIL_DEST = 'laboroteca@gmail.com';
 
@@ -31,9 +31,7 @@ const EMAIL_DEST = 'laboroteca@gmail.com';
 if (!process.env.GCP_CREDENTIALS_BASE64) {
   throw new Error('❌ Falta GCP_CREDENTIALS_BASE64');
 }
-const credentials = JSON.parse(
-  Buffer.from(process.env.GCP_CREDENTIALS_BASE64, 'base64').toString('utf8')
-);
+const credentials = JSON.parse(Buffer.from(process.env.GCP_CREDENTIALS_BASE64, 'base64').toString('utf8'));
 const sheetsAuth = new google.auth.GoogleAuth({
   credentials,
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
@@ -43,14 +41,11 @@ const storage = new Storage({ credentials });
 // ───────────────────────── UTILS ─────────────────────────
 const now = () => new Date();
 const utcISO = d => new Date(d).toISOString();
-const esNow = () =>
-  new Date().toLocaleString('es-ES', { timeZone: 'Europe/Madrid' });
-
 function log(msg, extra=''){ console.log(`[${utcISO(Date.now())}] ${msg}${extra?' '+extra:''}`); }
 function warn(msg, extra=''){ console.warn(`[${utcISO(Date.now())}] ${msg}${extra?' '+extra:''}`); }
 
 function normalizarTexto(str=''){
-  return str.toLowerCase()
+  return String(str).toLowerCase()
     .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
     .replace(/[^a-z0-9]+/g,' ')
     .trim();
@@ -59,11 +54,10 @@ function normalizarTexto(str=''){
 function parseFechaESES(s){
   if (!s) return null;
   const t = String(s).replace(',', '');
-  const m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  const m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
   if (!m) return null;
-  const [_, d, mo, y, h, mi, se] = m;
-  // interpretamos como Europe/Madrid ~ UTC (suficiente para ventana de 25 días)
-  return new Date(Date.UTC(+y, +mo-1, +d, +h, +mi, +(se||0)));
+  const [_, d, mo, y, h='0', mi='0', se='0'] = m;
+  return new Date(Date.UTC(+y, +mo-1, +d, +h, +mi, +se));
 }
 
 function daysDiff(a,b){ return Math.abs((a - b) / 86400000); }
@@ -80,6 +74,18 @@ function toYMD(d){
   const m = String(d.getUTCMonth()+1).padStart(2,'0');
   const da = String(d.getUTCDate()).padStart(2,'0');
   return `${y}-${m}-${da}`;
+}
+
+function dedupObjects(arr, keyFn){
+  const seen = new Set();
+  const out = [];
+  for (const it of arr){
+    const k = keyFn(it);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(it);
+  }
+  return out;
 }
 
 // ───────────────────────── SHEETS (COMPRAS) ─────────────────────────
@@ -116,14 +122,13 @@ async function leerComprasDeSheets(){
 
 function detectarDuplicadosSheets(rows){
   const out = [];
-  // agrupar por persona
   const byPerson = new Map();
   for (const r of rows) {
     const key = `${r.nombreN}||${r.apellidosN}`;
     if (!byPerson.has(key)) byPerson.set(key, []);
     byPerson.get(key).push(r);
   }
-  for (const [key, arr] of byPerson.entries()){
+  for (const arr of byPerson.values()){
     arr.sort((a,b)=>a.fecha-b.fecha);
     for (let i=0;i<arr.length;i++){
       const base = arr[i];
@@ -134,7 +139,6 @@ function detectarDuplicadosSheets(rows){
         else break;
       }
       if (grupo.length >= 2){
-        // misma descripción
         const byDesc = new Map();
         for (const x of grupo){
           if (!byDesc.has(x.descN)) byDesc.set(x.descN, []);
@@ -148,7 +152,7 @@ function detectarDuplicadosSheets(rows){
               descripcion: arrD[0].descripcion,
               count: arrD.length,
               fechas: arrD.map(e=>e.fechaStr),
-              numerosFactura: [] // Sheets no tiene nº factura; lo completamos con FacturaCity si hay match
+              numerosFactura: [] // se completa con FacturaCity si hay match
             });
           }
         }
@@ -165,7 +169,6 @@ async function listarGcsEnVentana(){
   const [files] = await storage.bucket(GCS_BUCKET).getFiles({ prefix: 'facturas/' });
   const rows = (files || []).map(f => {
     const updated = new Date(f.metadata?.updated || f.metadata?.timeCreated || 0);
-    // email por ruta: facturas/{email}/...
     const m = f.name.match(/^facturas\/([^/]+)\//);
     const email = m ? decodeURIComponent(m[1]).toLowerCase() : '';
     return {
@@ -184,7 +187,6 @@ async function listarGcsEnVentana(){
 }
 
 function detectarDuplicadosGcs(rows){
-  // Heurística: más de 1 PDF por email en la ventana → indicio
   const byEmail = new Map();
   for (const r of rows){
     if (!byEmail.has(r.email)) byEmail.set(r.email, []);
@@ -199,7 +201,7 @@ function detectarDuplicadosGcs(rows){
         count: arr.length,
         fechas: arr.map(x=>x.fechaStr).slice(0,6),
         files: arr.map(x=>x.file).slice(0,6),
-        numerosFactura: [] // no disponible en GCS
+        numerosFactura: []
       });
     }
   }
@@ -262,10 +264,8 @@ function mapFCItem(x){
   let nombre = get(['cliente_nombre','nombre','customer_name','cliente','razon_social']) || '';
   const apellidos = get(['cliente_apellidos','apellidos','surname','last_name']) || '';
   if (!apellidos && nombre.includes(' ')) {
-    // intenta separar
     const parts = String(nombre).trim().split(/\s+/);
     nombre = parts.shift() || '';
-    // resto como apellidos
   }
   const descripcion = get(['concepto','descripcion','description','detalle','notes']) || '';
   const total = Number(get(['total','importe','amount','grand_total','total_amount']) || 0);
@@ -273,7 +273,7 @@ function mapFCItem(x){
     fuente: 'FC',
     numero: String(numero).trim(),
     fecha,
-    fechaStr: fecha ? fecha.toISOString().slice(0,19).replace('T',' ') : '',
+    fechaStr: fecha ? fecha.toISOString().slice(0,10) : '',  // → YYYY-MM-DD
     email,
     nombre: nombre || '', apellidos: apellidos || '',
     nombreN: normalizarTexto(nombre || ''), apellidosN: normalizarTexto(apellidos || ''),
@@ -285,16 +285,14 @@ function mapFCItem(x){
 
 function detectarDuplicadosFacturaCity(items){
   const out = [];
-  // por persona
   const byPerson = new Map();
   for (const it of items){
     const key = `${it.nombreN}||${it.apellidosN}`;
     if (!byPerson.has(key)) byPerson.set(key, []);
     byPerson.get(key).push(it);
   }
-  for (const [key, arr] of byPerson.entries()){
+  for (const arr of byPerson.values()){
     arr.sort((a,b)=>a.fecha-b.fecha);
-    // misma descripción (grupos con descN)
     const byDesc = new Map();
     for (const it of arr){
       if (!byDesc.has(it.descN)) byDesc.set(it.descN, []);
@@ -312,7 +310,6 @@ function detectarDuplicadosFacturaCity(items){
         });
       }
     }
-    // descripciones distintas (prueba fuerte)
     const uniqDescs = Array.from(new Set(arr.map(x=>x.descN).filter(Boolean)));
     if (uniqDescs.length >= 2 && arr.length >= 2){
       out.push({
@@ -334,11 +331,10 @@ async function appendAuditRow({ countSheets, countGcs, countFc, emailsAfectados,
   const client = await sheetsAuth.getClient();
   const sheets = google.sheets({ version:'v4', auth: client });
 
-  // Obtener primera pestaña si no sabemos el nombre
   const meta = await sheets.spreadsheets.get({ spreadsheetId: AUDIT_SHEET_ID });
   const tabName = meta.data.sheets?.[0]?.properties?.title || AUDIT_SHEET_TAB_DEFAULT;
 
-  const fechaAuditoria = new Date().toLocaleString('es-ES', { timeZone: 'Europe/Madrid' });
+  const fechaAuditoria = new Date().toLocaleDateString('es-ES', { timeZone: 'Europe/Madrid' });
 
   const row = [
     fechaAuditoria,
@@ -361,16 +357,13 @@ async function appendAuditRow({ countSheets, countGcs, countFc, emailsAfectados,
 }
 
 // ───────────────────────── EMAIL ─────────────────────────
-async function enviarInformeEmail({ fcDup, shDup, gcsDup }){
+async function enviarInformeEmail({ fcDup, shDup, gcsDup, totales, resumen }){
   if (!process.env.SMTP2GO_API_KEY || !process.env.SMTP2GO_FROM_EMAIL) {
     warn('Email no enviado: faltan credenciales SMTP2GO');
     return;
   }
+
   const totalIncidencias = fcDup.length + shDup.length + gcsDup.length;
-  if (totalIncidencias === 0) {
-    log('📧 No se envía email: 0 incidencias.');
-    return;
-  }
 
   const fmtList = (arr) => arr.map(i => {
     const base = `<b>${i.nombre || ''} ${i.apellidos || ''}</b> — ${i.email || ''}`;
@@ -384,7 +377,6 @@ async function enviarInformeEmail({ fcDup, shDup, gcsDup }){
       const desc = i.descripcion ? `Desc: <i>${i.descripcion}</i><br/>` : '';
       return `<li>${base}<br/>${desc}Fechas: ${fechas}<br/>Coincidencias: ${i.count}</li>`;
     } else {
-      // GCS
       const files = i.files?.length ? `Ficheros: <code>${i.files.join(' | ')}</code><br/>` : '';
       return `<li>${base}<br/>${files}Fechas: ${fechas}<br/>Coincidencias: ${i.count}</li>`;
     }
@@ -392,9 +384,19 @@ async function enviarInformeEmail({ fcDup, shDup, gcsDup }){
 
   const html = `
     <div style="font-family:Arial, sans-serif; font-size:14px; color:#333">
-      <p><b>Auditoría de duplicados (ventana ${WINDOW_DAYS} días)</b></p>
-      <p>Total incidencias: <b>${totalIncidencias}</b></p>
+      <p><b>Auditoría diaria (ventana ${WINDOW_DAYS} días)</b></p>
+      <p><b>Facturas emitidas (FacturaCity) en ${WINDOW_DAYS} días:</b> ${totales.fcEmitidas}</p>
+      <p><b>Duplicados detectados</b> — Total incidencias: <b>${totalIncidencias}</b></p>
+      <ul style="margin-top:0">
+        <li>FacturaCity: <b>${fcDup.length}</b></li>
+        <li>Google Sheets: <b>${shDup.length}</b></li>
+        <li>GCS: <b>${gcsDup.length}</b></li>
+      </ul>
 
+      <h4>Resumen de fechas</h4>
+      <p>${resumen.fechasResumen.length ? resumen.fechasResumen.join(' | ') : '—'}</p>
+
+      <h3>Detalle</h3>
       ${fcDup.length ? `<h4>FacturaCity</h4><ul>${fmtList(fcDup)}</ul>` : '<h4>FacturaCity</h4><p>Sin incidencias.</p>'}
       ${shDup.length ? `<h4>Google Sheets</h4><ul>${fmtList(shDup)}</ul>` : '<h4>Google Sheets</h4><p>Sin incidencias.</p>'}
       ${gcsDup.length ? `<h4>GCS</h4><ul>${fmtList(gcsDup)}</ul>` : '<h4>GCS</h4><p>Sin incidencias.</p>'}
@@ -402,40 +404,35 @@ async function enviarInformeEmail({ fcDup, shDup, gcsDup }){
   `;
 
   const text = [
-    `Auditoría duplicados (ventana ${WINDOW_DAYS} días)`,
-    `Total incidencias: ${totalIncidencias}`,
+    `Auditoría diaria (ventana ${WINDOW_DAYS} días)`,
+    `Facturas emitidas (FacturaCity): ${totales.fcEmitidas}`,
     '',
-    'FacturaCity:',
-    ...fcDup.map(i => `- ${i.nombre||''} ${i.apellidos||''} | ${i.email||''} | ${i.descripcion||i.descripciones?.join(' · ')||''} | nums=${(i.numerosFactura||[]).join(',')} | fechas=${i.fechas?.join(' | ')||''} | x${i.count}`),
+    `Duplicados — total incidencias: ${totalIncidencias}`,
+    `- FacturaCity: ${fcDup.length}`,
+    `- Google Sheets: ${shDup.length}`,
+    `- GCS: ${gcsDup.length}`,
     '',
-    'Google Sheets:',
-    ...shDup.map(i => `- ${i.nombre||''} ${i.apellidos||''} | ${i.email||''} | ${i.descripcion||''} | fechas=${i.fechas?.join(' | ')||''} | x${i.count}`),
+    'Resumen de fechas:',
+    resumen.fechasResumen.join(' | ') || '—',
     '',
-    'GCS:',
-    ...gcsDup.map(i => `- ${i.email||''} | files=${(i.files||[]).join(' | ')} | fechas=${i.fechas?.join(' | ')||''} | x${i.count}`)
+    'Detalle FacturaCity:',
+    ...(fcDup.length ? fcDup.map(i => `- ${i.nombre||''} ${i.apellidos||''} | ${i.email||''} | ${i.descripcion||i.descripciones?.join(' · ')||''} | nums=${(i.numerosFactura||[]).join(',')} | fechas=${i.fechas?.join(' | ')||''} | x${i.count}`) : ['Sin incidencias.']),
+    '',
+    'Detalle Google Sheets:',
+    ...(shDup.length ? shDup.map(i => `- ${i.nombre||''} ${i.apellidos||''} | ${i.email||''} | ${i.descripcion||''} | fechas=${i.fechas?.join(' | ')||''} | x${i.count}`) : ['Sin incidencias.']),
+    '',
+    'Detalle GCS:',
+    ...(gcsDup.length ? gcsDup.map(i => `- ${i.email||''} | files=${(i.files||[]).join(' | ')} | fechas=${i.fechas?.join(' | ')||''} | x${i.count}`) : ['Sin incidencias.'])
   ].join('\n');
 
   await enviarEmailPersonalizado({
     to: EMAIL_DEST,
-    subject: `⚠️ Informe duplicados (Sheets+GCS+FacturaCity) — ${totalIncidencias} casos`,
+    subject: `📊 Auditoría diaria — Facturas ${totales.fcEmitidas} | Dups FC:${fcDup.length} SH:${shDup.length} GCS:${gcsDup.length}`,
     html,
     text
   });
 
   log(`📧 Informe enviado a ${EMAIL_DEST}`);
-}
-
-// ───────────────────────── HELPERS ─────────────────────────
-function dedupObjects(arr, keyFn){
-  const seen = new Set();
-  const out = [];
-  for (const it of arr){
-    const k = keyFn(it);
-    if (seen.has(k)) continue;
-    seen.add(k);
-    out.push(it);
-  }
-  return out;
 }
 
 // ───────────────────────── RUNNER ─────────────────────────
@@ -450,12 +447,17 @@ function dedupObjects(arr, keyFn){
       fetchFacturaCityList(startDate(), now())
     ]);
 
+    // Totales para email (facturas emitidas en FacturaCity en la ventana)
+    const totales = {
+      fcEmitidas: fcRows.length
+    };
+
     // 2) Detectar duplicados en cada fuente
     const shDup = detectarDuplicadosSheets(shRows);
     const gcsDup = detectarDuplicadosGcs(gcsRows);
     const fcDup = detectarDuplicadosFacturaCity(fcRows);
 
-    // 3) Completar nº de factura en incidencias de Sheets con FacturaCity (si coincide persona)
+    // 3) Completar nº de factura en incidencias de Sheets con FacturaCity (si coincide persona y desc)
     if (fcRows.length && shDup.length){
       const byPersonFC = new Map();
       for (const it of fcRows){
@@ -466,7 +468,6 @@ function dedupObjects(arr, keyFn){
       for (const inc of shDup){
         const key = `${normalizarTexto(inc.nombre)}||${normalizarTexto(inc.apellidos)}`;
         const cand = byPersonFC.get(key) || [];
-        // dentro de ventana y misma descripción
         const nums = cand
           .filter(x => inc.descripcion && x.descN === normalizarTexto(inc.descripcion))
           .map(x => x.numero)
@@ -489,10 +490,14 @@ function dedupObjects(arr, keyFn){
       ...gcsDup.flatMap(i => i.fechas || []).slice(0,6),
     ];
 
-    // 6) Email informe si hay incidencias
-    await enviarInformeEmail({ fcDup, shDup, gcsDup });
+    // 6) Enviar email SIEMPRE (aunque no haya incidencias)
+    await enviarInformeEmail({
+      fcDup, shDup, gcsDup,
+      totales,
+      resumen: { fechasResumen }
+    });
 
-    // 7) Registrar en hoja de auditorías A–F
+    // 7) Registrar en hoja de auditorías A–F (mantenemos mismo esquema)
     await appendAuditRow({
       countSheets: shDup.length,
       countGcs: gcsDup.length,

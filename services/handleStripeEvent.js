@@ -178,28 +178,20 @@ if (event.type === 'invoice.paid') {
     const invoice = event.data.object;
     const invoiceId = invoice.id;
     const customerId = invoice.customer;
-    const billingReason = event.billing_reason || event.data.object.billing_reason;
+    const billingReason = invoice.billing_reason;
 
     if (!invoiceId || !customerId) {
       console.warn('⚠️ Falta invoiceId o customerId en invoice.paid');
       return;
     }
 
-    // ⚠️ IGNORAR facturas de tipo 'subscription_create' (compra inicial → ya procesada en checkout.session.completed)
-    if (billingReason === 'subscription_create') {
-      console.log(`ℹ️ Ignorado invoice.paid por compra inicial (billing_reason=subscription_create): ${invoiceId}`);
+    // ✅ Procesar compra inicial y renovaciones del Club
+    // Aceptamos 'subscription_create' (primera cuota) y 'subscription_cycle' (renovaciones).
+    if (!['subscription_create', 'subscription_cycle'].includes(billingReason)) {
+      console.log(`📭 invoice.paid ignorado (billing_reason=${billingReason}) invoiceId=${invoiceId}`);
       return;
     }
 
-    // ✅ Procesar facturas de tipo 'subscription_cycle' o manual si lleva 'Renovación' en la descripción
-    const descripcion = (invoice.description || '').toLowerCase();
-    if (
-      billingReason !== 'subscription_cycle' &&
-      !(billingReason === 'manual' && event.livemode === false)
-    ) {
-      console.log('📭 Ignorado evento no válido para facturación:', billingReason);
-      return;
-    }
 
 
     // Idempotencia por invoice.id (ATÓMICO, antes de facturar)
@@ -210,37 +202,68 @@ if (event.type === 'invoice.paid') {
     }
 
 
-    // 🔍 Obtener email desde Stripe
-    const customer = await stripe.customers.retrieve(customerId);
-    const email = (customer.email || '').toLowerCase().trim();
 
-    if (!email.includes('@')) {
-      console.warn(`❌ Email no válido en invoice.paid: ${email}`);
+    // 📧 Email preferente de la invoice; fallback al customer de Stripe
+    let email = (invoice.customer_email || invoice.customer_details?.email || '').toLowerCase().trim();
+    if (!email) {
+      const cust = await stripe.customers.retrieve(customerId);
+      email = (cust.email || '').toLowerCase().trim();
+    }
+
+    if (!email || !email.includes('@')) {
+      console.warn(`❌ Email no válido en invoice.paid: ${email || '[vacío]'}`);
       return;
     }
 
-    // 📦 Recuperar datos fiscales guardados en la compra inicial
-    const clienteDoc = await firestore.collection('datosFiscalesPorEmail').doc(email).get();
-    if (!clienteDoc.exists) {
-      console.error(`❌ No se encontraron datos fiscales para ${email} en datosFiscalesPorEmail`);
-      return;
+
+    // 🔎 Carga/crea ficha fiscal
+    const docRef = firestore.collection('datosFiscalesPorEmail').doc(email);
+    const snap = await docRef.get();
+
+    const addr = invoice.customer_address || invoice.customer_details?.address || {};
+    const nameFromStripe = invoice.customer_details?.name || '';
+    const dniFromStripe  = invoice.customer_tax_ids?.[0]?.value || '';
+
+    const base = snap.exists ? (snap.data() || {}) : {};
+
+    const nombre    = base.nombre    || nameFromStripe || 'Cliente Laboroteca';
+    const apellidos = base.apellidos || '';
+    const dni       = base.dni       || dniFromStripe || '';
+    const direccion = base.direccion || addr.line1 || '';
+    const ciudad    = base.ciudad    || addr.city || '';
+    const provincia = base.provincia || addr.state || '';
+    const cp        = base.cp        || addr.postal_code || '';
+
+    // Si no existía ficha, la persistimos para futuras renovaciones
+    if (!snap.exists) {
+      await docRef.set({
+        nombre, apellidos, dni, direccion, ciudad, provincia, cp, email,
+        origen: 'invoice.paid',
+        fecha: new Date().toISOString()
+      }, { merge: true });
+      console.log(`ℹ️ Datos fiscales creados desde invoice.paid para ${email}`);
     }
 
-    const datosFiscales = clienteDoc.data();
-    const nombre = datosFiscales.nombre || 'Cliente Laboroteca';
-    const apellidos = datosFiscales.apellidos || '';
+    // Etiqueta ALTA vs RENOVACIÓN
+    const isAlta = billingReason === 'subscription_create';
 
     const datosRenovacion = {
-      ...datosFiscales,
       email,
       nombre,
       apellidos,
-      nombreProducto: 'Renovación mensual Club Laboroteca',
-      descripcionProducto: 'Renovación mensual Club Laboroteca',
+      dni,
+      direccion,
+      ciudad,
+      provincia,
+      cp,
+      nombreProducto: isAlta ? 'Alta y primera cuota Club Laboroteca' : 'Renovación mensual Club Laboroteca',
+      descripcionProducto: isAlta ? 'Alta y primera cuota Club Laboroteca' : 'Renovación mensual Club Laboroteca',
       tipoProducto: 'Club',
-      importe: (invoice.amount_paid || 999) / 100,
+      producto: 'el club laboroteca',
+      importe: (invoice.amount_paid ?? invoice.amount_due ?? 0) / 100,
       invoiceId,
     };
+
 
     const invoicingDisabled = process.env.DISABLE_INVOICING === 'true';
     let pdfBuffer = null;
@@ -249,7 +272,9 @@ if (event.type === 'invoice.paid') {
       console.warn(`⛔ Facturación deshabilitada (invoiceId=${invoiceId}). Saltando crear/subir/email/Sheets.`);
     } else {
       pdfBuffer = await crearFacturaEnFacturaCity(datosRenovacion);
-      await subirFactura(email, pdfBuffer, invoiceId);
+      const nombreArchivoGCS = `facturas/${email}/${invoiceId}.pdf`;
+      await subirFactura(nombreArchivoGCS, pdfBuffer);
+
       await guardarEnGoogleSheets(datosRenovacion);
       await enviarFacturaPorEmail(datosRenovacion, pdfBuffer);
     }
@@ -273,11 +298,11 @@ if (event.type === 'invoice.paid') {
       procesada: true,
       fecha: new Date().toISOString(),
       email,
-      tipo: 'renovacion'
+      tipo: isAlta ? 'alta' : 'renovacion'
     });
 
 
-    console.log(`✅ Factura de renovación mensual procesada para ${email}`);
+    console.log(`✅ Factura de ${isAlta ? 'ALTA' : 'RENOVACIÓN'} procesada para ${email}`);
   } catch (error) {
     console.error('❌ Error al procesar invoice.paid:', error);
   }

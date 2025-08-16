@@ -3,7 +3,7 @@
 
 const { google } = require('googleapis');
 const { Storage } = require('@google-cloud/storage');
-const fetch = require('node-fetch');
+const axios = require('axios');
 
 // ───────────────────────── CONFIG ─────────────────────────
 const WINDOW_DAYS = 25;
@@ -20,7 +20,7 @@ const AUDIT_SHEET_TAB_DEFAULT = 'Hoja 1';
 const GCS_BUCKET = process.env.GOOGLE_CLOUD_BUCKET || 'laboroteca-facturas';
 
 // FacturaCity (con fallbacks proporcionados)
-const FC_BASE = (process.env.FACTURACITY_API_URL || 'https://app2.factura.city/680d72cf23386/api/3').replace(/\/+$/,'');
+const FC_BASE = (process.env.FACTURACITY_API_URL || 'https://app2.factura.city/680d72cf23386/api/3').replace(/\/+$/, '');
 const FC_KEY  = (process.env.FACTURACITY_API_KEY || 'KlyDZCM6gbsyBP7jgDum').trim();
 
 // Email (tu helper SMTP2GO)
@@ -76,6 +76,11 @@ function toYMD(d){
   return `${y}-${m}-${da}`;
 }
 
+function fmtES(d) {
+  if (!d) return '';
+  return new Date(d).toLocaleDateString('es-ES', { timeZone: 'Europe/Madrid' });
+}
+
 function dedupObjects(arr, keyFn){
   const seen = new Set();
   const out = [];
@@ -112,7 +117,7 @@ async function leerComprasDeSheets(){
       nombreN: normalizarTexto(nombre || ''), apellidosN: normalizarTexto(apellidos || ''),
       email: (email || '').toLowerCase().trim(),
       descripcion: descripcion || '', descN: normalizarTexto(descripcion || ''),
-      importe, fecha, fechaStr: fechaStr || ''
+      importe, fecha, fechaStr: fmtES(fecha)
     };
   }).filter(r => r.fecha && r.fecha >= minDate);
 
@@ -177,7 +182,7 @@ async function listarGcsEnVentana(){
       nombre: '', apellidos: '', nombreN: '', apellidosN: '',
       descripcion: '', descN: '',
       numero: null,
-      fecha: updated, fechaStr: updated ? updated.toISOString().replace('T',' ').slice(0,19) : '',
+      fecha: updated, fechaStr: fmtES(updated),
       file: f.name
     };
   }).filter(r => r.fecha && r.fecha >= minDate);
@@ -215,31 +220,47 @@ async function fetchFacturaCityList(fromDate, toDate){
     warn('FacturaCity desactivado: falta FACTURACITY_API_URL o FACTURACITY_API_KEY');
     return [];
   }
-  const from = toYMD(fromDate), to = toYMD(toDate);
-  const tryCalls = [
-    { path: '/facturas', headers: { 'Authorization': `Bearer ${FC_KEY}` } },
-    { path: '/invoices', headers: { 'Authorization': `Bearer ${FC_KEY}` } },
-    { path: '/facturas', headers: { 'X-API-KEY': FC_KEY } },
-    { path: '/invoices', headers: { 'X-API-KEY': FC_KEY } },
+  const from = toYMD(fromDate);
+  const to = toYMD(toDate);
+
+  // Intentos de endpoints habituales (v3)
+  const tries = [
+    { path: '/facturas/listar', fields: { desde: from, hasta: to } },
+    { path: '/invoices/list',  fields: { from, to } },
+    { path: '/facturas',       fields: { desde: from, hasta: to } },
+    { path: '/invoices',       fields: { from, to } }
   ];
-  for (const t of tryCalls){
-    const url = `${FC_BASE}${t.path}?from=${from}&to=${to}`;
+
+  for (const t of tries){
+    const url = `${FC_BASE}${t.path}`;
     try{
-      log(`🌐 FacturaCity GET ${url} [${Object.keys(t.headers)[0]}]`);
-      const r = await fetch(url, { headers: { Accept:'application/json', ...t.headers } });
-      if (!r.ok) { warn(`FacturaCity ${t.path} → HTTP ${r.status}`); continue; }
-      const data = await r.json();
+      log(`🌐 FacturaCity POST ${url} [Token]`);
+      const body = new URLSearchParams(t.fields);
+      const r = await axios.post(url, body.toString(), {
+        headers: {
+          'Token': FC_KEY,
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Accept': 'application/json'
+        },
+        timeout: 15000
+      });
+
+      const data = r.data;
       const list = Array.isArray(data) ? data
                  : Array.isArray(data?.items) ? data.items
                  : Array.isArray(data?.data) ? data.data
                  : [];
+
       log(`✅ FacturaCity OK (${t.path}): ${list.length} registros`);
       return list.map(mapFCItem).filter(i => i.fecha && i.fecha >= fromDate && i.fecha <= toDate);
     }catch(e){
-      warn(`FacturaCity error (${t.path}): ${e.message}`);
+      const status = e.response?.status;
+      warn(`FacturaCity ${t.path} → ${status || 'ERR'} ${e.message}`);
+      continue;
     }
   }
-  warn('FacturaCity: no se pudo obtener listado con rutas/headers probados.');
+
+  warn('FacturaCity: no se pudo obtener listado con los intentos POST.');
   return [];
 }
 
@@ -273,7 +294,7 @@ function mapFCItem(x){
     fuente: 'FC',
     numero: String(numero).trim(),
     fecha,
-    fechaStr: fecha ? fecha.toISOString().slice(0,10) : '',  // → YYYY-MM-DD
+    fechaStr: fmtES(fecha), // solo fecha
     email,
     nombre: nombre || '', apellidos: apellidos || '',
     nombreN: normalizarTexto(nombre || ''), apellidosN: normalizarTexto(apellidos || ''),

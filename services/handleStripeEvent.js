@@ -14,6 +14,8 @@ const fs = require('fs').promises;
 const path = require('path');
 const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+const { ensureOnce } = require('../utils/dedupe');
+
 
 const RUTA_CUPONES = path.join(__dirname, '../data/cupones.json');
 
@@ -38,6 +40,13 @@ const MEMBERPRESS_IDS = {
 
 // 🔁 BLOQUE IMPAGO – Cancela TODO al primer intento fallido, email claro y sin generar factura
 async function handleStripeEvent(event) {
+  // Idempotencia global por evento Stripe
+const firstEvent = await ensureOnce('events', event.id);
+if (!firstEvent) {
+  console.warn(`🟡 Evento repetido ignorado: ${event.id} (${event.type})`);
+  return { duplicateEvent: true };
+}
+
   // ---- IMPAGO EN INVOICE ----
   if (event.type === 'invoice.payment_failed') {
     const invoice = event.data.object;
@@ -56,14 +65,14 @@ async function handleStripeEvent(event) {
       return { error: 'email_invalido_o_ausente' };
     }
 
-    // --- No procesar duplicados de impago ---
+    // --- No procesar duplicados de impago (atómico) ---
     const paymentIntentId = invoice.payment_intent || `sin_intent_${invoiceId}`;
-    const docRefIntento = firestore.collection('intentosImpago').doc(paymentIntentId);
-    const docSnapIntento = await docRefIntento.get();
-    if (docSnapIntento.exists) {
-      console.warn(`⛔️ [IMPAGO] Evento duplicado ignorado: ${paymentIntentId}`);
+    const unicoImpago = await ensureOnce('intentosImpago', paymentIntentId);
+    if (!unicoImpago) {
+      console.warn(`⛔️ [IMPAGO] Duplicado ignorado: ${paymentIntentId}`);
       return { received: true, duplicate: true };
     }
+
 
     // --- Recuperar nombre (si hay) ---
     let nombre = invoice.customer_details?.name || '';
@@ -121,6 +130,8 @@ async function handleStripeEvent(event) {
 
       await registrarBajaClub({ email, motivo: 'impago' });
 
+      const docRefIntento = firestore.collection('intentosImpago').doc(paymentIntentId);
+
       await docRefIntento.set({
         invoiceId,
         email,
@@ -162,6 +173,7 @@ async function handleStripeEvent(event) {
 
 // 📌 Evento: invoice.paid (renovación Club Laboroteca)
 if (event.type === 'invoice.paid') {
+
   try {
     const invoice = event.data.object;
     const invoiceId = invoice.id;
@@ -190,12 +202,13 @@ if (event.type === 'invoice.paid') {
     }
 
 
-    // ❌ Evitar duplicados por invoiceId
-    const yaExiste = await firestore.collection('facturasEmitidas').doc(invoiceId).get();
-    if (yaExiste.exists) {
-      console.log(`🟡 Factura ya emitida para invoiceId: ${invoiceId}`);
+    // Idempotencia por invoice.id (ATÓMICO, antes de facturar)
+    const firstInvoice = await ensureOnce('invoices', invoiceId);
+    if (!firstInvoice) {
+      console.log(`🟡 Duplicado invoiceId=${invoiceId} ignorado`);
       return;
     }
+
 
     // 🔍 Obtener email desde Stripe
     const customer = await stripe.customers.retrieve(customerId);
@@ -289,25 +302,19 @@ if (event.type === 'invoice.paid') {
 
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
+    if (session.mode === 'subscription') {
+      console.log('[checkout.session.completed] Suscripción: se factura en invoice.paid. Ignorado aquí.');
+      return { ignored_subscription: true };
+    }
+
     if (session.payment_status !== 'paid') return { ignored: true };
 
     const sessionId = session.id;
+    const firstSession = await ensureOnce('sessions', sessionId);
+    if (!firstSession) return { duplicate: true };
+
     const docRef = firestore.collection('comprasProcesadas').doc(sessionId);
-    const yaProcesado = await firestore.runTransaction(async (tx) => {
-      const doc = await tx.get(docRef);
-      if (doc.exists) return true;
-      tx.set(docRef, {
-        sessionId,
-        email: '',
-        producto: '',
-        fecha: new Date().toISOString(),
-        procesando: true,
-        error: false,
-        facturaGenerada: false
-      });
-      return false;
-    });
-    if (yaProcesado) return { duplicate: true };
+    await docRef.set({ sessionId, createdAt: new Date().toISOString() }, { merge: true });
 
     const m = session.metadata || {};
     const email = (
@@ -319,9 +326,13 @@ if (event.type === 'invoice.paid') {
 
     if (!email) {
       console.error('❌ Email inválido en Stripe');
-      await docRef.update({ error: true, errorMsg: 'Email inválido en Stripe' });
+      await docRef.set({
+        error: true,
+        errorMsg: 'Email inválido en Stripe'
+      }, { merge: true });
       return { error: 'Email inválido' };
     }
+
 
     const name = (session.customer_details?.name || `${m.nombre || ''} ${m.apellidos || ''}`).trim();
     const amountTotal = session.amount_total || 0;
@@ -437,26 +448,30 @@ if (event.type === 'invoice.paid') {
 // 🎫 Si es producto tipo Entrada, lanzar flujo de entradas QR
     
 
-    } catch (err) {
-      errorProcesando = true;
-      console.error('❌ Error general en flujo Stripe:', err?.message);
-      await docRef.update({ error: true, errorMsg: err?.message || err });
-      throw err;
-    } finally {
-      await docRef.update({
-        email,
-        producto: datosCliente.producto,
-        fecha: new Date().toISOString(),
-        procesando: false,
-        facturaGenerada: !errorProcesando,
-        error: errorProcesando
-      });
-    }
-
-    return { success: true };
-  }
-
-  return { ignored: true };
+  } catch (err) {
+  errorProcesando = true;
+  console.error('❌ Error general en flujo Stripe:', err?.message);
+  await docRef.set({
+    error: true,
+    errorMsg: err?.message || err
+  }, { merge: true });
+  throw err;
+} finally {
+  await docRef.set({
+    email,
+    producto: datosCliente.producto,
+    fecha: new Date().toISOString(),
+    procesando: false,
+    facturaGenerada: !errorProcesando,
+    error: errorProcesando
+  }, { merge: true });
 }
+
+return { success: true };
+}
+
+return { ignored: true };
+}
+
 
 module.exports = handleStripeEvent;

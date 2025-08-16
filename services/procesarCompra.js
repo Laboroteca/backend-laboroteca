@@ -1,6 +1,5 @@
 const admin = require('../firebase');
 const firestore = admin.firestore();
-const crypto = require('crypto');
 
 const { crearFacturaEnFacturaCity } = require('./facturaCity');
 const { enviarFacturaPorEmail } = require('./email');
@@ -9,6 +8,8 @@ const { guardarEnGoogleSheets } = require('./googleSheets');
 const { activarMembresiaClub } = require('./activarMembresiaClub');
 const { syncMemberpressClub } = require('./syncMemberpressClub');
 const { normalizarProducto, MEMBERPRESS_IDS } = require('../utils/productos');
+const { ensureOnce } = require('../utils/dedupe');
+
 
 module.exports = async function procesarCompra(datos) {
   let email = (datos.email_autorelleno || datos.email || '').trim().toLowerCase();
@@ -37,14 +38,15 @@ module.exports = async function procesarCompra(datos) {
     throw new Error(`❌ Email inválido: "${email}"`);
   }
 
-  // 🛑 DEDUPLICACIÓN TEMPRANA POR invoiceId
-  if (datos.invoiceId) {
-    const facturaDoc = await firestore.collection('facturasGeneradas').doc(datos.invoiceId).get();
-    if (facturaDoc.exists) {
-      console.log(`🛑 La factura ${datos.invoiceId} ya fue procesada. Cancelando ejecución.`);
-      return { success: false, mensaje: 'Factura ya procesada' };
+// 🛑 DEDUPLICACIÓN TEMPRANA (ATÓMICA) POR invoiceId
+    if (datos.invoiceId) {
+      const first = await ensureOnce('facturasGeneradas', datos.invoiceId);
+      if (!first) {
+        console.log(`🛑 La factura ${datos.invoiceId} ya fue procesada. Cancelando ejecución.`);
+        return { success: false, mensaje: 'Factura ya procesada' };
+      }
     }
-  }
+
 
   // ✅ LOGS ADICIONALES
   console.log('🧪 tipoProducto:', tipoProducto);

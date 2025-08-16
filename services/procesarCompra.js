@@ -38,34 +38,76 @@ module.exports = async function procesarCompra(datos) {
     throw new Error(`❌ Email inválido: "${email}"`);
   }
 
-// 🛑 DEDUPLICACIÓN TEMPRANA (ATÓMICA) POR invoiceId
-    if (datos.invoiceId) {
-      const first = await ensureOnce('facturasGeneradas', datos.invoiceId);
+    // 🛑 DEDUPLICACIÓN TEMPRANA (ATÓMICA) + logs
+    const claveNormalizada = normalizarProducto(nombreProducto);
+
+    // Clave de idempotencia priorizando IDs "fuertes"
+    const dedupeKey =
+      datos.invoiceId ||
+      datos.sessionId ||
+      datos.pedidoId ||
+      // fallback conservador: para Club, una por día por email+importe
+      (tipoProducto?.toLowerCase() === 'club'
+        ? `club:${email}:${importe.toFixed(2)}:${new Date().toISOString().slice(0,10)}`
+        : null);
+
+
+    if (dedupeKey) {
+      const first = await ensureOnce('comprasOnce', dedupeKey);
       if (!first) {
-        console.warn(`🟡 Duplicado invoiceId=${datos.invoiceId} ignorado en procesarCompra`);
-        return { success: false, mensaje: 'Factura ya procesada (duplicado)' };
+        console.warn(`🟡 Duplicado ignorado key=${dedupeKey}`);
+        return { success: false, mensaje: 'Compra ya procesada (duplicado)' };
+      }
+
+      // 🔒 Segundo cerrojo: evita carreras simultáneas en paralelo
+      const lockRef = firestore.collection('locks').doc(dedupeKey);
+      try {
+        await lockRef.create({ createdAt: admin.firestore.FieldValue.serverTimestamp() });
+      } catch (e) {
+        if (e.code === 6 || /already exists/i.test(String(e.message || ''))) {
+          console.warn(`🟡 Duplicado ignorado (lock existe) key=${dedupeKey}`);
+          return { success: false, mensaje: 'Compra ya procesada (duplicado)' };
+        }
+        throw e;
       }
     }
 
 
-    // ✅ LOGS ADICIONALES
-  console.log('🧪 tipoProducto:', tipoProducto);
-  console.log('🧪 nombreProducto:', nombreProducto);
+    // ✅ LOGS
+    console.log('🧪 tipoProducto:', tipoProducto);
+    console.log('🧪 nombreProducto:', nombreProducto);
+    console.log('🔑 Clave normalizada para deduplicación:', claveNormalizada);
 
-  const claveNormalizada = normalizarProducto(nombreProducto);
-
-  console.log('🔑 Clave normalizada para deduplicación:', claveNormalizada);
 
   const compraId = `compra-${Date.now()}`;
   const docRef = firestore.collection('comprasProcesadas').doc(compraId);
+  let compRef = null; // ← añadido para tracking por dedupeKey
+
 
   await docRef.set({
     compraId,
     estado: 'procesando',
     email,
     producto: claveNormalizada,
+    dedupeKey: dedupeKey || null,
     fechaInicio: new Date().toISOString()
   });
+
+  // Tracking estable por dedupeKey (además del doc temporal con timestamp)
+    if (dedupeKey) {
+      compRef = firestore.collection('comprasProcesadas').doc(dedupeKey);
+      await compRef.set({
+        estado: 'procesando',
+        email,
+        producto: claveNormalizada,
+        dedupeKey,
+        tipoProducto,
+        importe,
+        fechaInicio: new Date().toISOString()
+      }, { merge: true });
+    }
+
+
 
   try {
     const nombre = datos.nombre || datos.Nombre || '';
@@ -91,6 +133,10 @@ module.exports = async function procesarCompra(datos) {
       tipoProducto
     };
 
+    if (datos.invoiceId) {
+      datosCliente.invoiceId = datos.invoiceId;
+    }
+    
     if (!nombre || !apellidos || !dni || !direccion || !ciudad || !provincia || !cp) {
       console.warn(`⚠️ [procesarCompra] Datos incompletos para factura de ${email}`);
     }
@@ -122,7 +168,12 @@ if (invoicingDisabled) {
   try {
     console.log('🧾 → Generando factura...');
     pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
+    if (!pdfBuffer) {
+    console.warn('🟡 FacturaCity devolvió null (posible duplicado). No se sube ni se envía.');
+  } else {
     console.log(`✅ Factura PDF generada (${pdfBuffer.length} bytes)`);
+  }
+
   } catch (err) {
     console.error('❌ Error al crear factura:', err);
     throw err; // conservamos comportamiento
@@ -130,31 +181,36 @@ if (invoicingDisabled) {
 
   // 2) Subir a GCS
   try {
-    const nombreArchivo = `facturas/${email}/Factura Laboroteca.pdf`;
-    console.log('☁️ → Subiendo a GCS:', nombreArchivo);
-    await subirFactura(nombreArchivo, pdfBuffer, {
-      email,
-      nombreProducto,
-      tipoProducto,
-      importe
-    });
-    console.log('✅ Subido a GCS');
+    if (pdfBuffer) {
+      const nombreArchivo = `facturas/${email}/${datos.invoiceId || Date.now()}-${claveNormalizada}.pdf`;
+      console.log('☁️ → Subiendo a GCS:', nombreArchivo);
+      await subirFactura(nombreArchivo, pdfBuffer, {
+        email,
+        nombreProducto,
+        tipoProducto,
+        importe
+      });
+      console.log('✅ Subido a GCS');
+    }
   } catch (err) {
     console.error('❌ Error subiendo a GCS:', err);
   }
 
   // 3) Enviar por email
   try {
-    console.log('📧 → Enviando email con factura...');
-    const resultado = await enviarFacturaPorEmail(datosCliente, pdfBuffer);
-    if (resultado === 'OK') {
-      console.log('✅ Email enviado');
-    } else {
-      console.warn('⚠️ Resultado inesperado del envío de email:', resultado);
+    if (pdfBuffer) {
+      console.log('📧 → Enviando email con factura...');
+      const resultado = await enviarFacturaPorEmail(datosCliente, pdfBuffer);
+      if (resultado === 'OK') {
+        console.log('✅ Email enviado');
+      } else {
+        console.warn('⚠️ Resultado inesperado del envío de email:', resultado);
+      }
     }
   } catch (err) {
     console.error('❌ Error enviando email:', err);
   }
+
 
   // 4) Registrar en Google Sheets
   try {
@@ -167,58 +223,63 @@ if (invoicingDisabled) {
 
 
     const membership_id = MEMBERPRESS_IDS[claveNormalizada];
-    if (tipoProducto.toLowerCase() === 'club' && membership_id) {
-      try {
-        console.log(`🔓 → Activando membresía CLUB con ID ${membership_id} para ${email}`);
-        await activarMembresiaClub(email);
-        await syncMemberpressClub({
-          email,
-          accion: 'activar',
-          membership_id,
-          importe
-        });
-        console.log('✅ Membresía del CLUB activada correctamente');
-      } catch (err) {
-        console.error('❌ Error activando membresía del CLUB:', err.message || err);
-      }
-    } else if (tipoProducto.toLowerCase() === 'libro') {
-      try {
-        const { syncMemberpressLibro } = require('./syncMemberpressLibro');
-        console.log(`📘 → Activando membresía LIBRO para ${email}`);
-        await syncMemberpressLibro({ email, accion: 'activar', importe });
-        console.log('✅ Membresía del LIBRO activada correctamente');
-      } catch (err) {
-        console.error('❌ Error activando membresía del LIBRO:', err.message || err);
-      }
-    }
 
+if (membership_id) { // ← robusto: activa CLUB por mapeo del producto, no por texto "club"
+  try {
+    console.log(`🔓 → Activando membresía CLUB con ID ${membership_id} para ${email}`);
+    await activarMembresiaClub(email);
+    await syncMemberpressClub({ email, accion: 'activar', membership_id, importe });
+    console.log('✅ Membresía del CLUB activada correctamente');
+  } catch (err) {
+    console.error('❌ Error activando membresía del CLUB:', err.message || err);
+  }
+} else if (tipoProducto.toLowerCase() === 'libro') {
+  try {
+    const { syncMemberpressLibro } = require('./syncMemberpressLibro');
+    console.log(`📘 → Activando membresía LIBRO para ${email}`);
+    await syncMemberpressLibro({ email, accion: 'activar', importe });
+    console.log('✅ Membresía del LIBRO activada correctamente');
+  } catch (err) {
+    console.error('❌ Error activando membresía del LIBRO:', err.message || err);
+  }
+}
 
     const datosFiscalesRef = firestore.collection('datosFiscalesPorEmail').doc(email);
+
+    // ✅ Guardar/actualizar datos fiscales sin borrar el documento (merge)
     try {
-      console.log('🧨 Eliminando datos fiscales antiguos de Firestore (si existían)');
-      await datosFiscalesRef.delete();
+      console.log('🧾 Guardando/actualizando datos fiscales en Firestore (merge)');
+      await datosFiscalesRef.set({
+        nombre,
+        apellidos,
+        dni,
+        direccion,
+        ciudad,
+        provincia,
+        cp,
+        email,
+        fecha: new Date().toISOString()
+      }, { merge: true });
     } catch (err) {
-      console.warn('⚠️ No se pudo eliminar el documento previo (puede que no existiera):', err.message || err);
+      console.error('❌ Error guardando datos fiscales en Firestore:', err.message || err);
     }
 
-    console.log('🧾 Guardando nuevos datos fiscales en Firestore');
-    await datosFiscalesRef.set({
-      nombre,
-      apellidos,
-      dni,
-      direccion,
-      ciudad,
-      provincia,
-      cp,
-      email,
-      fecha: new Date().toISOString()
-    });
 
     await docRef.update({
       estado: 'finalizado',
-      facturaGenerada: true,
+      facturaGenerada: !!pdfBuffer,
       fechaFin: new Date().toISOString()
     });
+
+    if (compRef) {
+      await compRef.set({
+        estado: 'finalizado',
+        facturaGenerada: !!pdfBuffer,
+        fechaFin: new Date().toISOString()
+      }, { merge: true });
+    }
+
+
 
     if (datos.invoiceId) {
       await firestore.collection('facturasGeneradas').doc(datos.invoiceId).set({
@@ -237,7 +298,15 @@ if (invoicingDisabled) {
       estado: 'error',
       errorMsg: error?.message || error
     });
+    if (compRef) {
+      await compRef.set({
+        estado: 'error',
+        errorMsg: error?.message || String(error),
+        fechaFin: new Date().toISOString()
+      }, { merge: true });
+    }
     console.error('❌ Error en procesarCompra:', error);
     throw error;
   }
+
 };

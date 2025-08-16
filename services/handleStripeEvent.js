@@ -35,6 +35,7 @@ function normalizarProducto(str) {
 
 const MEMBERPRESS_IDS = {
   'el club laboroteca': 10663,
+  'club laboroteca': 10663,
   'de cara a la jubilacion': 7994
 };
 
@@ -185,26 +186,26 @@ if (event.type === 'invoice.paid') {
       return;
     }
 
-    // ✅ Procesar compra inicial, renovaciones y (TEMPORAL) facturas manuales en TEST
-    const isManual = billingReason === 'manual';
-    const isAllowed =
-      billingReason === 'subscription_create' ||
-      billingReason === 'subscription_cycle' ||
-      (isManual && event.livemode === false); // permitir manual solo en modo TEST
-
-    if (!isAllowed) {
+    // ✅ Procesar compra inicial y renovaciones del Club
+    // Aceptamos 'subscription_create' (primera cuota) y 'subscription_cycle' (renovaciones).
+    if (!['subscription_create', 'subscription_cycle'].includes(billingReason)) {
       console.log(`📭 invoice.paid ignorado (billing_reason=${billingReason}) invoiceId=${invoiceId}`);
       return;
     }
-    // TODO: Revertir después → aceptar solo 'subscription_create' y 'subscription_cycle'
-
-
 
 
     // Idempotencia por invoice.id (ATÓMICO, antes de facturar)
     const firstInvoice = await ensureOnce('invoices', invoiceId);
     if (!firstInvoice) {
       console.log(`🟡 Duplicado invoiceId=${invoiceId} ignorado`);
+      return;
+    }
+    
+    // Gate local de facturación (evita carreras en el mismo proceso)
+    const kFacturar = `facturar:invoice:${invoiceId}`;
+    const firstGateFact = await ensureOnce('facturar', kFacturar);
+    if (!firstGateFact) {
+      console.warn(`🟡 Gate de facturación ya usado para ${kFacturar}. Evito doble factura.`);
       return;
     }
 
@@ -272,18 +273,45 @@ if (event.type === 'invoice.paid') {
     };
 
 
-    const invoicingDisabled = process.env.DISABLE_INVOICING === 'true';
-    let pdfBuffer = null;
+    const invoicingDisabled =
+      String(process.env.DISABLE_INVOICING || '').toLowerCase() === 'true' ||
+      process.env.DISABLE_INVOICING === '1';
+
+    let pdfBuffer = null; //
 
     if (invoicingDisabled) {
-      console.warn(`⛔ Facturación deshabilitada (invoiceId=${invoiceId}). Saltando crear/subir/email/Sheets.`);
+      console.warn(`⛔ Facturación deshabilitada (invoiceId=${invoiceId}). Saltando crear/subir/email. Registrando SOLO en Sheets.`);
+      try { await guardarEnGoogleSheets(datosRenovacion); } catch (e) { console.error('❌ Sheets (kill-switch):', e?.message || e); }
     } else {
-      pdfBuffer = await crearFacturaEnFacturaCity(datosRenovacion);
-      const nombreArchivoGCS = `facturas/${email}/${invoiceId}.pdf`;
-      await subirFactura(nombreArchivoGCS, pdfBuffer);
+      try {
+        pdfBuffer = await crearFacturaEnFacturaCity(datosRenovacion);
+        if (!pdfBuffer) {
+          console.warn(`🟡 crearFacturaEnFacturaCity devolvió null (dedupe). No se sube ni se envía email. Registrando en Sheets.`);
+          try { await guardarEnGoogleSheets(datosRenovacion); } catch (e) { console.error('❌ Sheets (dedupe):', e?.message || e); }
 
-      await guardarEnGoogleSheets(datosRenovacion);
-      await enviarFacturaPorEmail(datosRenovacion, pdfBuffer);
+          } else {
+      // Segunda compuerta: no repetir subida/envío aunque hubiese doble PDF
+      const kSend = `send:invoice:${invoiceId}`;
+      const firstSend = await ensureOnce('sendFactura', kSend);
+      if (!firstSend) {
+        console.warn(`🟡 Dedupe envío/Upload para ${kSend}. No repito subir/email.`);
+      } else {
+        const nombreArchivoGCS = `facturas/${email}/${invoiceId}.pdf`;
+        await subirFactura(nombreArchivoGCS, pdfBuffer, {
+          email,
+          nombreProducto: datosRenovacion.nombreProducto,
+          tipoProducto: datosRenovacion.tipoProducto,
+          importe: datosRenovacion.importe
+        });
+        await guardarEnGoogleSheets(datosRenovacion);
+        await enviarFacturaPorEmail(datosRenovacion, pdfBuffer);
+      }
+    }
+
+      } catch (e) {
+        console.error('❌ Error facturación invoice.paid:', e?.message || e);
+        // opcional: rethrow si quieres parar el flujo
+      }
     }
 
 
@@ -349,6 +377,17 @@ if (event.type === 'invoice.paid') {
 
     if (session.payment_status !== 'paid') return { ignored: true };
 
+    // ⛔ Candado extra: un pago (payment_intent) => una sola factura
+    const pi = session.payment_intent || session.payment_intent_id;
+    if (pi) {
+      const firstPayment = await ensureOnce('payments', String(pi));
+      if (!firstPayment) {
+        console.warn(`🟡 Duplicado payment_intent=${pi} ignorado (ya facturado)`);
+        return { duplicate_payment: true };
+      }
+    }
+
+
     const sessionId = session.id;
     const firstSession = await ensureOnce('sessions', sessionId);
     if (!firstSession) {
@@ -411,6 +450,9 @@ if (event.type === 'invoice.paid') {
       producto: productoNormalizado
     };
 
+    // Reutilizamos la dedupe de FacturaCity: invoiceId = payment_intent
+    if (pi) datosCliente.invoiceId = String(pi);
+
     if (productoNormalizado === 'entrada') {
       datosCliente.totalAsistentes = parseInt(m.totalAsistentes || '0');
     }
@@ -418,83 +460,102 @@ if (event.type === 'invoice.paid') {
     console.log('📦 Procesando producto:', productoSlug, '-', datosCliente.importe, '€');
 
     let errorProcesando = false;
+let pdfBuffer = null; // ← movido fuera del try para que esté accesible en finally
 
-    try {
-    const invoicingDisabled = process.env.DISABLE_INVOICING === 'true';
-    let pdfBuffer = null;
+try {
+  const invoicingDisabled =
+    String(process.env.DISABLE_INVOICING || '').toLowerCase() === 'true' ||
+    process.env.DISABLE_INVOICING === '1';
+  // (eliminada la línea "let pdfBuffer = null;" de aquí)
 
-    if (invoicingDisabled) {
-      console.warn('⛔ Facturación deshabilitada. Saltando crear/subir/email/Sheets.');
+  if (invoicingDisabled) {
+    console.warn('⛔ Facturación deshabilitada. Saltando crear/subir/email. Registrando SOLO en Sheets.');
+    try { await guardarEnGoogleSheets(datosCliente); } catch (e) { console.error('❌ Sheets (kill-switch):', e?.message || e); }
+  } else {
+    // Registra siempre aunque luego haya dedupe
+    try { await guardarEnGoogleSheets(datosCliente); } catch (e) { console.error('❌ Sheets (pre):', e?.message || e); }
+
+    // Gate local de facturación (evita carreras en el mismo proceso)
+    const gateKey = sessionId
+      ? `facturar:session:${sessionId}`
+      : (pi ? `facturar:pi:${pi}` : `facturar:tmp:${Date.now()}`);
+
+    const firstGate = await ensureOnce('facturar', gateKey);
+    if (!firstGate) {
+      console.warn(`🟡 Gate de facturación ya usado para ${gateKey}. Evito doble factura.`);
+      pdfBuffer = null;
     } else {
-      await guardarEnGoogleSheets(datosCliente);
-
-      // 🧾 Comprobación de asistentes antes de facturar (se mantiene tal cual)
-      if (
-        normalizarProducto(datosCliente.tipoProducto) === 'entrada' &&
-        (!datosCliente.totalAsistentes || parseInt(datosCliente.totalAsistentes, 10) < 1)
-      ) {
-        datosCliente.totalAsistentes = parseInt(session.metadata?.totalAsistentes || '1', 10);
-      }
-
-      // 1. Crear factura
+      // 🧾 Crear factura
       pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
-
-      // 2. Subir factura
-      const nombreArchivo = `facturas/${email}/${Date.now()}-${datosCliente.producto}.pdf`;
-      await subirFactura(nombreArchivo, pdfBuffer, {
-        email,
-        nombreProducto: datosCliente.producto,
-        tipoProducto: datosCliente.tipoProducto,
-        importe: datosCliente.importe
-      });
-
-      // 3. Enviar factura SOLO si no es entrada (las entradas se envían más abajo con su flujo)
-      if (datosCliente.tipoProducto?.toLowerCase() !== 'entrada') {
-        await enviarFacturaPorEmail(datosCliente, pdfBuffer);
-      }
     }
 
-        // 🎫 Procesar entradas SIEMPRE (aunque DISABLE_INVOICING sea true)
-    if (datosCliente.tipoProducto?.toLowerCase() === 'entrada') {
-      const procesarEntradas = require('../entradas/services/procesarEntradas');
-      await procesarEntradas({ session, datosCliente, pdfBuffer }); // pdfBuffer puede ser null si kill-switch activo
+
+   if (!pdfBuffer) {
+  console.warn('🟡 crearFacturaEnFacturaCity devolvió null (dedupe). No se sube ni se envía email.');
+} else {
+  // Segunda compuerta: no repetir subida/envío aunque hubiese doble PDF
+  const kSend = pi ? `send:pi:${pi}` : `send:session:${sessionId}`;
+  const firstSend = await ensureOnce('sendFactura', kSend);
+  if (!firstSend) {
+    console.warn(`🟡 Dedupe envío/Upload para ${kSend}. No repito subir/email.`);
+  } else {
+    // Nombre GCS estable: prioriza payment_intent si existe
+    const gcsName = pi
+      ? `facturas/${email}/${pi}.pdf`
+      : `facturas/${email}/${sessionId}-${(datosCliente.producto || 'producto')}.pdf`;
+
+    await subirFactura(gcsName, pdfBuffer, {
+      email,
+      nombreProducto: datosCliente.nombreProducto || datosCliente.producto,
+      tipoProducto: datosCliente.tipoProducto,
+      importe: datosCliente.importe
+    });
+
+    // Enviar factura SOLO si no es entrada
+    if ((datosCliente.tipoProducto || '').toLowerCase() !== 'entrada') {
+      await enviarFacturaPorEmail(datosCliente, pdfBuffer);
     }
+  }
+}
 
-      
-        // 🛡️ Guardar los datos del formulario solo si están completos
-      if (
-        datosCliente.nombre &&
-        datosCliente.apellidos &&
-        datosCliente.dni &&
-        datosCliente.direccion &&
-        datosCliente.ciudad &&
-        datosCliente.provincia &&
-        datosCliente.cp
-      ) {
-        await firestore.collection('datosFiscalesPorEmail').doc(email).set(datosCliente, { merge: true });
-        console.log(`✅ Datos fiscales guardados para ${email}`);
-      } else {
-        console.warn(`⚠️ Datos incompletos. No se guardan en Firestore para ${email}`);
-      }
+  }
 
+  // 🎫 Procesar entradas SIEMPRE (aunque DISABLE_INVOICING sea true)
+  if (datosCliente.tipoProducto?.toLowerCase() === 'entrada') {
+    const procesarEntradas = require('../entradas/services/procesarEntradas');
+    await procesarEntradas({ session, datosCliente, pdfBuffer }); // pdfBuffer puede ser null si kill-switch activo
+  }
 
-      if (memberpressId === 10663) {
-        await syncMemberpressClub({ email, accion: 'activar', membership_id: memberpressId, importe: datosCliente.importe });
-        await activarMembresiaClub(email);
-      }
+  // 🛡️ Guardar datos fiscales si están completos
+  if (
+    datosCliente.nombre &&
+    datosCliente.apellidos &&
+    datosCliente.dni &&
+    datosCliente.direccion &&
+    datosCliente.ciudad &&
+    datosCliente.provincia &&
+    datosCliente.cp
+  ) {
+    await firestore.collection('datosFiscalesPorEmail').doc(email).set(datosCliente, { merge: true });
+    console.log(`✅ Datos fiscales guardados para ${email}`);
+  } else {
+    console.warn(`⚠️ Datos incompletos. No se guardan en Firestore para ${email}`);
+  }
 
-      if (memberpressId === 7994) {
-        await syncMemberpressLibro({
-          email,
-          accion: 'activar',
-          importe: datosCliente.importe
-        });
-      }
+  if (memberpressId === 10663) {
+    await syncMemberpressClub({ email, accion: 'activar', membership_id: memberpressId, importe: datosCliente.importe });
+    await activarMembresiaClub(email);
+  }
 
-// 🎫 Si es producto tipo Entrada, lanzar flujo de entradas QR
-    
+  if (memberpressId === 7994) {
+    await syncMemberpressLibro({
+      email,
+      accion: 'activar',
+      importe: datosCliente.importe
+    });
+  }
 
-  } catch (err) {
+} catch (err) {
   errorProcesando = true;
   console.error('❌ Error general en flujo Stripe:', err?.message);
   await docRef.set({
@@ -508,7 +569,7 @@ if (event.type === 'invoice.paid') {
     producto: datosCliente.producto,
     fecha: new Date().toISOString(),
     procesando: false,
-    facturaGenerada: !errorProcesando,
+    facturaGenerada: !!pdfBuffer,  // ← ahora siempre accesible
     error: errorProcesando
   }, { merge: true });
 }

@@ -74,9 +74,16 @@ También puede reclamar ante la autoridad de control si lo considera necesario.
 async function enviarFacturaPorEmail(datos, pdfBuffer) {
   const importeTexto = datos.importe ? `${Number(datos.importe).toFixed(2)} €` : 'importe no disponible';
   const nombre = datos.nombre || '';
-  const producto = (datos.producto || '').toLowerCase();
 
-  const esClub = producto.includes('club laboroteca');
+  const esClub =
+    (datos.tipoProducto && datos.tipoProducto.toString().toLowerCase() === 'club') ||
+    [datos.producto, datos.nombreProducto, datos.descripcionProducto]
+      .filter(Boolean)
+      .map(s => s.toString().toLowerCase())
+      .some(s => s.includes('club laboroteca'));
+
+  // 👉 Nombre del producto a mostrar cuando NO es Club
+  const nombreProductoMostrar = datos.nombreProducto || datos.descripcionProducto || 'Producto Laboroteca';
 
   const subject = esClub
     ? 'Factura mensual de tu suscripción al Club Laboroteca'
@@ -98,7 +105,7 @@ async function enviarFacturaPorEmail(datos, pdfBuffer) {
       <div style="font-family: Arial, sans-serif; font-size: 16px; color: #333;">
         <p>Hola ${nombre},</p>
         <p>Gracias por tu compra. Adjuntamos en este correo la factura correspondiente al producto:</p>
-        <p><strong>${datos.producto}</strong></p>
+        <p><strong>${nombreProductoMostrar}</strong></p>
         <p>Importe: <strong>${importeTexto}</strong></p>
         <p>Puedes acceder a tu contenido desde <a href="https://laboroteca.es/mi-cuenta">www.laboroteca.es/mi-cuenta</a></p>
         <p>Un afectuoso saludo,<br>Ignacio Solsona</p>
@@ -120,7 +127,7 @@ Abogado`
     : `Hola ${nombre},
 
 Gracias por tu compra. Adjuntamos en este correo la factura correspondiente al producto:
-- ${datos.producto}
+- ${nombreProductoMostrar}
 - Importe: ${importeTexto}
 
 Puedes acceder a tu contenido desde: https://laboroteca.es/mi-cuenta
@@ -136,6 +143,7 @@ Ignacio Solsona`;
     pdfBuffer
   });
 }
+
 
 // ✅ AVISO DE IMPAGO (cancelación inmediata, sin reintentos)
 async function enviarAvisoImpago(email, nombre, intento, enlacePago = "https://www.laboroteca.es/membresia-club-laboroteca/", cancelarYa = false) {

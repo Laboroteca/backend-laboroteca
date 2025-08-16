@@ -15,6 +15,10 @@ function obtenerFechaHoy() {
 
 const { ensureOnce } = require('../utils/dedupe');
 
+const AXIOS_TIMEOUT = 10000; // 10s razonable
+const fcHeaders = { Token: FACTURACITY_API_KEY, 'Content-Type': 'application/x-www-form-urlencoded' };
+
+
 // Trunca a 4 decimales sin redondear (hacia abajo)
 function trunc4(n) {
   return Math.floor(n * 10000) / 10000; // 4 decimales exactos
@@ -31,7 +35,17 @@ async function crearFacturaEnFacturaCity(datosCliente) {
       }
     }
 
-    console.log('🔐 API KEY utilizada:', `"${FACTURACITY_API_KEY}"`);
+    const maskedKey = FACTURACITY_API_KEY ? FACTURACITY_API_KEY.slice(-4).padStart(8, '•') : '(no definida)';
+    console.log('🔐 API KEY utilizada (mascarada):', maskedKey);
+
+    if (!API_BASE) {
+      throw new Error('FACTURACITY_API_URL no está definida');
+    }
+    if (!FACTURACITY_API_KEY) {
+      throw new Error('FACTURACITY_API_KEY no está definida');
+    }
+
+
     console.log('🌐 API URL utilizada:', API_BASE);
     console.log('🧾 Datos del cliente recibidos para facturar:', JSON.stringify(datosCliente, null, 2));
 
@@ -62,7 +76,8 @@ async function crearFacturaEnFacturaCity(datosCliente) {
     };
 
     const clienteResp = await axios.post(`${API_BASE}/clientes`, qs.stringify(cliente), {
-      headers: { Token: FACTURACITY_API_KEY, 'Content-Type': 'application/x-www-form-urlencoded' }
+      headers: fcHeaders,
+      timeout: AXIOS_TIMEOUT
     });
 
     const codcliente = clienteResp.data?.data?.codcliente;
@@ -84,8 +99,10 @@ async function crearFacturaEnFacturaCity(datosCliente) {
         email: datosCliente.email
       };
       await axios.post(`${API_BASE}/direccionescliente`, qs.stringify(direccionFiscal), {
-        headers: { Token: FACTURACITY_API_KEY, 'Content-Type': 'application/x-www-form-urlencoded' }
+        headers: fcHeaders,
+        timeout: AXIOS_TIMEOUT
       });
+
       console.log(`🏠 Dirección fiscal añadida para codcliente=${codcliente} email=${datosCliente.email}`);
     } catch (err) {
       console.warn('⚠️ No se pudo añadir dirección fiscal:', err.message);
@@ -95,10 +112,13 @@ async function crearFacturaEnFacturaCity(datosCliente) {
     const descripcion = datosCliente.descripcionProducto || datosCliente.descripcion || datosCliente.producto;
     let referencia = 'OTRO001';
     const tp = (datosCliente.tipoProducto || '').toLowerCase();
-    if (datosCliente.nombreProducto === 'el-club-laboroteca') referencia = 'CLUB001';
+    const nombreNorm = (datosCliente.nombreProducto || '').toLowerCase().replace(/\s+/g,' ').trim();
+    const esClub = /club laboroteca/.test(nombreNorm) || tp === 'club';
+    if (esClub) referencia = 'CLUB001';
     else if (tp === 'libro') referencia = 'LIBRO001';
     else if (tp === 'curso') referencia = 'CURSO001';
     else if (tp === 'guia') referencia = 'GUIA001';
+
 
     // ===== Cantidad y PRECIO UNITARIO BASE (sin IVA) =====
     const esEntrada = tp === 'entrada';
@@ -135,8 +155,10 @@ async function crearFacturaEnFacturaCity(datosCliente) {
     };
 
     const facturaResp = await axios.post(`${API_BASE}/crearFacturaCliente`, qs.stringify(factura), {
-      headers: { Token: FACTURACITY_API_KEY, 'Content-Type': 'application/x-www-form-urlencoded' }
+      headers: fcHeaders,
+      timeout: AXIOS_TIMEOUT
     });
+
 
     console.log('📩 Respuesta completa de crearFacturaCliente:', JSON.stringify(facturaResp.data, null, 2));
 
@@ -147,8 +169,10 @@ async function crearFacturaEnFacturaCity(datosCliente) {
     const pdfUrl = `${API_BASE}/exportarFacturaCliente/${idfactura}?lang=es_ES`;
     const pdfResponse = await axios.get(pdfUrl, {
       headers: { Token: FACTURACITY_API_KEY },
-      responseType: 'arraybuffer'
+      responseType: 'arraybuffer',
+      timeout: AXIOS_TIMEOUT
     });
+
 
     const pdfSize = pdfResponse.data?.length || 0;
     console.log(`📦 PDF generado (${pdfSize} bytes)`);

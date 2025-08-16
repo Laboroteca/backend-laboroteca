@@ -88,8 +88,6 @@ app.use(registrarConsentimiento);
 app.use('/webhook', require('./routes/webhook'));
 
 // DESPUÉS DEL WEBHOOK, LOS BODY PARSERS
-app.use(express.json({ limit: '1mb' }));
-app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 app.use(require('./routes/solicitarEliminacionCuenta'));
 app.use(require('./routes/confirmarEliminaciondecuenta'));
 app.use('/regalos', require('./regalos/routes/canjear-codigo'));
@@ -198,8 +196,8 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
         nombreProducto,
         descripcionProducto
       },
-      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(nombreProducto)}`,
-      cancel_url: 'https://laboroteca.es/error'
+      success_url: `https://www.laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(nombreProducto)}`,
+      cancel_url: 'https://www.laboroteca.es/error'
     });
 
     return res.json({ url: session.url });
@@ -283,8 +281,8 @@ app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
         nombreProducto,
         descripcionProducto
       },
-      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(nombreProducto)}`,
-      cancel_url: 'https://laboroteca.es/error'
+      success_url: `https://www.laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(nombreProducto)}`,
+      cancel_url: 'https://www.laboroteca.es/error'
     });
 
     return res.json({ url: session.url });

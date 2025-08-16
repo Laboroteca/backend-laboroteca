@@ -6,7 +6,8 @@
   "type": "commonjs",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js"
+    "dev": "nodemon index.js",
+    "audit:facturas": "node scripts/auditarFacturas.js"
   },
   "engines": {
     "node": "18.x"

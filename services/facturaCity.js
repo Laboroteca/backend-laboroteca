@@ -23,10 +23,10 @@ function trunc4(n) {
 async function crearFacturaEnFacturaCity(datosCliente) {
   try {
     // ✅ Kill-switch de duplicados FacturaCity
-    if (datosCliente.invoiceId) {
+   if (datosCliente.invoiceId) {
       const first = await ensureOnce('facturasGeneradas', datosCliente.invoiceId);
       if (!first) {
-        console.warn(`⛔ Factura ya generada previamente para invoiceId=${datosCliente.invoiceId}`);
+        console.warn(`🟡 Duplicado invoiceId=${datosCliente.invoiceId} ignorado en crearFacturaEnFacturaCity`);
         return null;
       }
     }
@@ -67,7 +67,7 @@ async function crearFacturaEnFacturaCity(datosCliente) {
 
     const codcliente = clienteResp.data?.data?.codcliente;
     if (!codcliente) throw new Error('❌ No se pudo obtener codcliente');
-    console.log(`✅ Cliente creado: ${codcliente}`);
+    console.log(`✅ Cliente creado en FacturaCity codcliente=${codcliente} email=${datosCliente.email}`);
 
     // 🏠 Dirección fiscal (opcional)
     try {
@@ -86,7 +86,7 @@ async function crearFacturaEnFacturaCity(datosCliente) {
       await axios.post(`${API_BASE}/direccionescliente`, qs.stringify(direccionFiscal), {
         headers: { Token: FACTURACITY_API_KEY, 'Content-Type': 'application/x-www-form-urlencoded' }
       });
-      console.log('🏠 Dirección fiscal registrada correctamente');
+      console.log(`🏠 Dirección fiscal añadida para codcliente=${codcliente} email=${datosCliente.email}`);
     } catch (err) {
       console.warn('⚠️ No se pudo añadir dirección fiscal:', err.message);
     }
@@ -142,7 +142,7 @@ async function crearFacturaEnFacturaCity(datosCliente) {
 
     const idfactura = facturaResp.data?.doc?.idfactura;
     if (!idfactura) throw new Error('❌ No se recibió idfactura');
-    console.log(`🧾 Factura creada con ID ${idfactura}`);
+    console.log(`✅ Factura emitida idfactura=${idfactura} invoiceId=${datosCliente.invoiceId || 'N/A'} email=${datosCliente.email}`);
 
     const pdfUrl = `${API_BASE}/exportarFacturaCliente/${idfactura}?lang=es_ES`;
     const pdfResponse = await axios.get(pdfUrl, {
@@ -155,13 +155,14 @@ async function crearFacturaEnFacturaCity(datosCliente) {
 
     return pdfResponse.data;
   } catch (error) {
-    if (error.response) {
-      console.error('❌ Error al crear factura en FacturaCity:');
+   if (error.response) {
+      console.error(`⛔ Error FacturaCity invoiceId=${datosCliente.invoiceId || 'N/A'} email=${datosCliente.email}`);
       console.error('🔢 Status:', error.response.status);
       console.error('📦 Data:', error.response.data);
     } else {
-      console.error('❌ Error sin respuesta del servidor:', error.message);
+      console.error(`⛔ Error FacturaCity sin respuesta invoiceId=${datosCliente.invoiceId || 'N/A'} email=${datosCliente.email} → ${error.message}`);
     }
+
     throw new Error('Error al generar la factura');
   }
 }

@@ -319,7 +319,10 @@ if (event.type === 'invoice.paid') {
 
     const sessionId = session.id;
     const firstSession = await ensureOnce('sessions', sessionId);
-    if (!firstSession) return { duplicate: true };
+    if (!firstSession) {
+      console.warn(`🟡 Duplicado sessionId=${sessionId} ignorado`);
+      return { duplicate: true };
+    }
 
     const docRef = firestore.collection('comprasProcesadas').doc(sessionId);
     await docRef.set({ sessionId, createdAt: new Date().toISOString() }, { merge: true });

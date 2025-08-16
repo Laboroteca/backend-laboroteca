@@ -42,13 +42,13 @@ module.exports = async function procesarCompra(datos) {
     if (datos.invoiceId) {
       const first = await ensureOnce('facturasGeneradas', datos.invoiceId);
       if (!first) {
-        console.log(`🛑 La factura ${datos.invoiceId} ya fue procesada. Cancelando ejecución.`);
-        return { success: false, mensaje: 'Factura ya procesada' };
+        console.warn(`🟡 Duplicado invoiceId=${datos.invoiceId} ignorado en procesarCompra`);
+        return { success: false, mensaje: 'Factura ya procesada (duplicado)' };
       }
     }
 
 
-  // ✅ LOGS ADICIONALES
+    // ✅ LOGS ADICIONALES
   console.log('🧪 tipoProducto:', tipoProducto);
   console.log('🧪 nombreProducto:', nombreProducto);
 

@@ -29,7 +29,13 @@ async function guardarEnGoogleSheets(datos) {
     const sheets = google.sheets({ version: 'v4', auth: client });
 
     const now = new Date();
-    const nowString = now.toLocaleDateString('es-ES', { timeZone: 'Europe/Madrid' });
+    const nowString = now.toLocaleDateString('es-ES', { 
+      timeZone: 'Europe/Madrid', 
+      day: '2-digit', 
+      month: '2-digit', 
+      year: 'numeric' 
+    });
+
     const email = (datos.email || '').trim().toLowerCase();
     const descripcion = datos.descripcionProducto || datos.nombreProducto || 'Producto Laboroteca';
     const importe = typeof datos.importe === 'number'

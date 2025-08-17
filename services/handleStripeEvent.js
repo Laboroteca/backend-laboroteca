@@ -22,8 +22,8 @@ const RUTA_CUPONES = path.join(__dirname, '../data/cupones.json');
 function normalizarProducto(str) {
   return (str || '')
     .toLowerCase()
-    .normalize('NFD').replace(/[̀-ͯ]/g, '')
-    .replace(/\./g, '') // quita puntos
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // ← esta línea
+    .replace(/\./g, '')
     .replace(/suscripcion mensual (a|al)? el? club laboroteca.*$/i, 'club laboroteca')
     .replace(/el club laboroteca.*$/i, 'club laboroteca')
     .replace(/libro digital.*jubilacion/i, 'de cara a la jubilacion')
@@ -31,6 +31,7 @@ function normalizarProducto(str) {
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
 }
+
 
 
 const MEMBERPRESS_IDS = {
@@ -286,8 +287,13 @@ if (event.type === 'invoice.paid') {
           tipoProducto: datosRenovacion.tipoProducto,
           importe: datosRenovacion.importe
         });
-        await guardarEnGoogleSheets(datosRenovacion);
-        await enviarFacturaPorEmail(datosRenovacion, pdfBuffer);
+        try {
+  await guardarEnGoogleSheets(datosRenovacion);
+  } catch (e) {
+    console.warn('⚠️ Sheets (invoice.paid) falló (ignorado):', e?.message || e);
+  }
+  await enviarFacturaPorEmail(datosRenovacion, pdfBuffer);
+
       }
     }
 
@@ -390,7 +396,17 @@ if (event.type === 'invoice.paid') {
     const amountTotal = session.amount_total || 0;
 
     const rawNombreProducto = m.nombreProducto || '';
-    const productoSlug = amountTotal === 999 ? 'el club laboroteca' : normalizarProducto(rawNombreProducto);
+    // Detecta Club sin depender del precio
+    const nombreNorm = normalizarProducto(rawNombreProducto);
+    const isClub =
+      session.mode === 'subscription' ||                          // suscripciones van a invoice.paid
+      (m.tipoProducto && m.tipoProducto.toLowerCase() === 'club') ||
+      nombreNorm === 'el club laboroteca' || 
+      nombreNorm === 'club laboroteca';
+
+
+    const productoSlug = isClub ? 'club laboroteca' : nombreNorm;
+
     const memberpressId = MEMBERPRESS_IDS[productoSlug];
 
     const descripcionProducto = m.descripcionProducto || rawNombreProducto || 'Producto Laboroteca';
@@ -429,6 +445,56 @@ if (event.type === 'invoice.paid') {
 
     console.log('📦 Procesando producto:', productoSlug, '-', datosCliente.importe, '€');
 
+    // 🔐 GATE PAGO CONFIRMADO (PaymentIntent)
+    const piId = session.payment_intent || session.payment_intent_id;
+    if (!piId) {
+      console.warn('⏸️ Sin PaymentIntent en session. No activo todavía.');
+      await docRef.set({ error: true, errorMsg: 'Sin PaymentIntent en session' }, { merge: true });
+      return { queued: true, motivo: 'sin_payment_intent' };
+    }
+
+    let piObj;
+    try {
+      piObj = await stripe.paymentIntents.retrieve(piId);
+    } catch (e) {
+      console.error('❌ No se pudo recuperar PaymentIntent:', e?.message || e);
+      await docRef.set({ error: true, errorMsg: `PI retrieve error: ${e?.message || e}` }, { merge: true });
+      return { queued: true, motivo: 'error_recuperando_pi' };
+    }
+
+    const pagoOk = (
+      piObj?.status === 'succeeded' &&
+      (piObj?.charges?.data?.[0]?.paid !== false)
+    );
+
+    if (!pagoOk) {
+      console.warn(`⏸️ Pago aún NO confirmado (PI=${piObj?.status}, capture=${piObj?.capture_method}). No activo.`);
+      await docRef.set({
+        pendienteConfirmacionPago: true,
+        piStatus: piObj?.status || 'desconocido',
+        captureMethod: piObj?.capture_method || 'desconocido',
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+      return { queued: true, motivo: 'pago_no_confirmado' };
+    }
+    // ✅ A partir de aquí, el pago está confirmado: se puede activar sin miedo.
+
+
+        // 🔓 Activación inmediata (no bloqueada por Sheets/Email/GCS/FacturaCity)
+    try {
+      if (memberpressId === 10663) {
+        await activarMembresiaClub(email);
+        await syncMemberpressClub({ email, accion: 'activar', membership_id: memberpressId, importe: datosCliente.importe });
+        console.log('✅ CLUB activado inmediatamente');
+      } else if (memberpressId === 7994) {
+        await syncMemberpressLibro({ email, accion: 'activar', importe: datosCliente.importe });
+        console.log('✅ LIBRO activado inmediatamente');
+      }
+    } catch (e) {
+      console.error('❌ Error activando membresía (se registrará igualmente la compra):', e?.message || e);
+    }
+
+
     let errorProcesando = false;
 let pdfBuffer = null; // ← movido fuera del try para que esté accesible en finally
 
@@ -450,8 +516,13 @@ pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
 if (!pdfBuffer) {
   console.warn('🟡 crearFacturaEnFacturaCity devolvió null (dedupe). No registro en Sheets ni subo a GCS.');
 } else {
-  // ✅ Solo si FacturaCity devuelve factura real
-  await guardarEnGoogleSheets(datosCliente);
+// ✅ Solo si FacturaCity devuelve factura real (no bloqueante)
+  try {
+    await guardarEnGoogleSheets(datosCliente);
+  } catch (e) {
+    console.warn('⚠️ Sheets falló (ignorado, no bloquea activación):', e?.message || e);
+  }
+
 
   // 🔒 Gate SOLO de envío/subida para evitar IO duplicado
   const baseName = (pi || sessionId || Date.now());
@@ -499,34 +570,27 @@ if (!pdfBuffer) {
     console.warn(`⚠️ Datos incompletos. No se guardan en Firestore para ${email}`);
   }
 
-  if (memberpressId === 10663) {
-    await syncMemberpressClub({ email, accion: 'activar', membership_id: memberpressId, importe: datosCliente.importe });
-    await activarMembresiaClub(email);
-  }
-
-  if (memberpressId === 7994) {
-    await syncMemberpressLibro({
-      email,
-      accion: 'activar',
-      importe: datosCliente.importe
-    });
-  }
 
 } catch (err) {
   errorProcesando = true;
-  console.error('❌ Error general en flujo Stripe:', err?.message);
+  console.error('❌ Error general en flujo Stripe (continuo, no bloqueo):', err?.message || err);
+
+  // Registramos el error en Firestore pero NO lanzamos excepción
   await docRef.set({
     error: true,
-    errorMsg: err?.message || err
+    errorMsg: err?.message || String(err)
   }, { merge: true });
-  throw err;
+
+  // devolvemos objeto de error controlado, pero no rompemos el webhook
+  return { success: false, mensaje: 'error_parcial', detalle: err?.message || String(err) };
+
 } finally {
   await docRef.set({
     email,
     producto: datosCliente.producto,
     fecha: new Date().toISOString(),
     procesando: false,
-    facturaGenerada: !!pdfBuffer,  // ← ahora siempre accesible
+    facturaGenerada: !!pdfBuffer,  // ← accesible siempre
     error: errorProcesando
   }, { merge: true });
 }

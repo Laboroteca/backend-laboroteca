@@ -1,5 +1,6 @@
 // utils/consentLogs.js
-// Guarda consentimientos (PP/TOS) y, si hay bucket, sube snapshot HTML por versión.
+// Guarda consentimientos (Política de Privacidad / Términos y Condiciones)
+// y, si hay bucket, sube snapshot HTML por versión.
 // Añade en Firestore: privacyHash/termsHash + privacyBlobPath/termsBlobPath + *SnapshotOk
 
 const admin = require('firebase-admin');
@@ -33,7 +34,7 @@ let Storage = null;
 try { ({ Storage } = require('@google-cloud/storage')); } catch {}
 
 const GCS_BUCKET =
-  process.env.GOOGLE_CLOUD_BUCKET || // ← tu variable real
+  process.env.GOOGLE_CLOUD_BUCKET ||
   process.env.GCS_BUCKET ||
   process.env.GCS_BUCKET_NAME ||
   process.env.GCLOUD_STORAGE_BUCKET ||
@@ -41,7 +42,6 @@ const GCS_BUCKET =
 
 console.log('[CONSENT] GCS_BUCKET =', GCS_BUCKET || '(vacío)');
 
-// Cliente global de Storage (usa GCP_CREDENTIALS_BASE64 o FIREBASE_SERVICE_ACCOUNT_JSON; si no, ADC)
 let storage = null;
 if (Storage) {
   try {
@@ -62,14 +62,14 @@ if (Storage) {
   } catch (e) {
     console.warn('[CONSENT] GCS creds parse/init error:', e?.message || e);
     try {
-      storage = new Storage(); // último intento: ADC
+      storage = new Storage();
     } catch {
       storage = null;
     }
   }
 }
 
-const BASE_PATH = 'consents'; // consents/pp/2025-08-15.html, consents/tos/2025-08-15.html
+const BASE_PATH = 'consents';
 
 // ───────────────────────────── Utils ─────────────────────────────
 function sha256Hex(s) {
@@ -80,9 +80,6 @@ function getIp(req) {
   return fwd ? fwd.split(',')[0].trim() : (req?.ip || req?.connection?.remoteAddress || '');
 }
 
-/**
- * Descarga HTML con UA explícito. No sigue redirecciones.
- */
 function fetchHtml(urlStr, timeoutMs = 10000) {
   return new Promise((resolve, reject) => {
     if (!urlStr) return reject(new Error('URL vacía'));
@@ -118,10 +115,7 @@ function fetchHtml(urlStr, timeoutMs = 10000) {
   });
 }
 
-/**
- * Sube snapshot de TOS/PP al bucket si está configurado.
- * Devuelve hash, ruta y flag de snapshotOk.
- */
+// ───────────────────────────── Snapshots ─────────────────────────────
 async function ensureSnapshot({ type, version, url, htmlOverride }) {
   if (!GCS_BUCKET || !Storage || !storage) {
     console.warn('[CONSENT] Modo degradado: bucket o @google-cloud/storage ausentes', {
@@ -132,7 +126,12 @@ async function ensureSnapshot({ type, version, url, htmlOverride }) {
   }
 
   const bucket = storage.bucket(GCS_BUCKET);
-  const folder = type === 'pp' ? 'pp' : 'tos';
+  // 🔄 Carpeta formal y legible
+  const folder =
+    type === 'pp'
+      ? 'politica-privacidad'
+      : 'terminos-condiciones';
+
   const blobPath = `${BASE_PATH}/${folder}/${version}.html`;
   const file = bucket.file(blobPath);
 
@@ -162,9 +161,7 @@ async function ensureSnapshot({ type, version, url, htmlOverride }) {
   }
 }
 
-/**
- * Guarda un consentimiento en Firestore.
- */
+// ───────────────────────────── Guardar consentimiento ─────────────────────────────
 async function logConsent(opts = {}) {
   const {
     uid = null,
@@ -223,8 +220,8 @@ async function logConsent(opts = {}) {
     paymentIntentId
   ].join('|'));
 
-  const docRef = db.collection('consentLogs').doc(); // histórico
-  const idxRef = db.collection('consentLogs_idx').doc(fingerprint); // índice
+  const docRef = db.collection('consentLogs').doc();
+  const idxRef = db.collection('consentLogs_idx').doc(fingerprint);
 
   const batch = db.batch();
   batch.set(docRef, { ...data, idx: fingerprint });

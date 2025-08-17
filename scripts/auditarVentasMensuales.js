@@ -30,6 +30,11 @@ const fmtEUR = (n) =>
 const log = (m) => console.log(m);
 const warn = (m) => console.warn(m);
 
+// Limpia espacios e invisibles (incluye NBSP)
+function cleanText(s = '') {
+  return String(s).replace(/\u00A0/g, ' ').trim();
+}
+
 function monthLabelESFrom(year, month1) {
   const d = new Date(Date.UTC(year, month1 - 1, 1));
   return d.toLocaleDateString('es-ES', { month: 'long', year: 'numeric', timeZone: 'Europe/Madrid' });
@@ -57,25 +62,14 @@ function yyyymmFrom(year, month1) {
   return `${year}-${String(month1).padStart(2, '0')}`;
 }
 
-function normalizarDescripcion(s = '') {
-  return String(s)
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
 // dd/mm/yyyy (opcional hh:mm) → {date, year, month1, yyyymm}
 function parseFechaCell(fechaCell) {
   if (!fechaCell) return null;
 
-  // 1) Si es número serial (algunas filas antiguas)
+  // 1) Número serial de Sheets
   if (typeof fechaCell === 'number') {
-    // días desde 1899-12-30
-    const ms = Math.round(fechaCell * 24 * 60 * 60 * 1000);
+    const ms = Math.round(fechaCell * 24 * 60 * 60 * 1000);  // días→ms
     const date = new Date(Date.UTC(1899, 11, 30) + ms);
-    // Obtén año/mes en Europe/Madrid
     const parts = new Intl.DateTimeFormat('es-ES', {
       timeZone: 'Europe/Madrid',
       year: 'numeric',
@@ -86,7 +80,7 @@ function parseFechaCell(fechaCell) {
     return { date, year, month1, yyyymm: yyyymmFrom(year, month1) };
   }
 
-  // 2) Si es cadena "dd/mm/yyyy" o "dd/mm/yyyy hh:mm"
+  // 2) Cadena "dd/mm/yyyy" (con o sin hora)
   if (typeof fechaCell === 'string') {
     const t = fechaCell.trim();
     const m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
@@ -94,7 +88,7 @@ function parseFechaCell(fechaCell) {
     const day = Number(m[1]);
     const month1 = Number(m[2]);
     const year = Number(m[3]);
-    const date = new Date(Date.UTC(year, month1 - 1, day)); // referencia UTC
+    const date = new Date(Date.UTC(year, month1 - 1, day));
     return { date, year, month1, yyyymm: yyyymmFrom(year, month1) };
   }
 
@@ -122,12 +116,13 @@ function parseImporteCell(importeCell) {
 
   const s = String(importeCell).trim();
 
-  // Quita el símbolo €, espacios y separadores de miles (puntos solo si van antes de 3 dígitos)
+  // Quita símbolo €, espacios y separadores de miles (puntos solo si van antes de 3 dígitos),
+  // y convierte coma decimal a punto.
   const clean = s
     .replace(/[€]/g, '')
     .replace(/\s/g, '')
-    .replace(/\.(?=\d{3}(\D|$))/g, '')  // elimina . como miles
-    .replace(',', '.');                 // decimal a punto
+    .replace(/\.(?=\d{3}(\D|$))/g, '') // elimina . si es miles
+    .replace(',', '.');
 
   const n = Number(clean);
   return isNaN(n) ? 0 : n;
@@ -138,30 +133,53 @@ async function leerComprasDeSheets() {
   const client = await sheetsAuth.getClient();
   const sheets = google.sheets({ version: 'v4', auth: client });
 
+  // 1) Detectar última fila real mirando la columna D (Descripción)
+  const probe = await sheets.spreadsheets.values.get({
+    spreadsheetId: COMPRAS_SHEET_ID,
+    range: `${COMPRAS_SHEET_TAB}!D:D`,
+    valueRenderOption: 'UNFORMATTED_VALUE',
+  });
+  const lastRow = (probe.data.values || []).length; // última fila no vacía en D
+
+  if (lastRow < 2) {
+    log('📥 Compras: 0 filas con datos.');
+    return [];
+  }
+
+  // 2) Leer solo hasta la última fila real
   const { data } = await sheets.spreadsheets.values.get({
     spreadsheetId: COMPRAS_SHEET_ID,
-    range: `${COMPRAS_SHEET_TAB}!A2:K`,
+    range: `${COMPRAS_SHEET_TAB}!A2:K${lastRow}`,
     valueRenderOption: 'UNFORMATTED_VALUE',
   });
 
-  const rows = (data.values || []).map((r) => {
-    const [nombre, apellidos, dni, descripcion, importeRaw, fechaRaw, email] = r;
-    const fecha = parseFechaCell(fechaRaw);
-    const importe = parseImporteCell(importeRaw);
-    const descOriginal = (descripcion || '').toString().trim();
-    return {
-      nombre: nombre || '',
-      apellidos: apellidos || '',
-      dni: dni || '',
-      descripcion: descOriginal,
-      descKey: normalizarDescripcion(descOriginal),
-      importe,
-      fecha, // {date, year, month1, yyyymm}
-      email: (email || '').toLowerCase().trim(),
-    };
-  }).filter((r) => r.fecha && r.fecha.yyyymm && r.importe > 0);
+  // 3) Mapear y filtrar filas válidas (evita filas fantasma)
+  const rows = (data.values || [])
+    .map((r) => {
+      const [nombre, apellidos, dni, descripcion, importeRaw, fechaRaw, email] = r;
+      const fecha = parseFechaCell(fechaRaw);
+      const importe = parseImporteCell(importeRaw);
+      const descOriginal = cleanText(descripcion || '');
+      return {
+        nombre: cleanText(nombre || ''),
+        apellidos: cleanText(apellidos || ''),
+        dni: cleanText(dni || ''),
+        descripcion: descOriginal,
+        importe,
+        fecha, // {date, year, month1, yyyymm}
+        email: (email || '').toLowerCase().trim(),
+      };
+    })
+    .filter(
+      (r) =>
+        r.fecha &&
+        r.fecha.yyyymm &&
+        r.importe > 0 &&
+        r.descripcion &&
+        r.descripcion.trim() !== ''
+    );
 
-  log(`📥 Compras: ${rows.length} filas leídas de Sheets.`);
+  log(`📥 Compras: ${rows.length} filas válidas leídas de Sheets (hasta fila ${lastRow}).`);
   return rows;
 }
 
@@ -423,10 +441,10 @@ async function enviarInformeEmail({ monthLabel, totalMes, desglose, tablaCompara
   try {
     log('🚀 Informe mensual de ventas — inicio');
 
-    // 1) Leer todas las compras
+    // 1) Leer todas las compras válidas
     const rows = await leerComprasDeSheets();
 
-    // 2) Fijar MES OBJETIVO = mes anterior en Europe/Madrid
+    // 2) Mes objetivo = mes anterior (Europe/Madrid)
     const { year: prevYear, month1: prevMonth1 } = previousYearMonth();
     const targetYYYYMM = yyyymmFrom(prevYear, prevMonth1);
     const monthLabel = monthLabelESFrom(prevYear, prevMonth1);
@@ -461,10 +479,10 @@ async function enviarInformeEmail({ monthLabel, totalMes, desglose, tablaCompara
       total: totalsMap.get(yyyymm) || 0,
     }));
 
-    // 5) Email
+    // 5) Enviar email
     await enviarInformeEmail({ monthLabel, totalMes, desglose, tablaComparativa, serie12Meses });
 
-    // 6) Escribir en “ESTADÍSTICAS” con formato pedido
+    // 6) Registrar en “ESTADÍSTICAS” con formato pedido
     await appendStatsRows({ mesLabel: monthLabel, items: desglose });
 
     log('✅ Informe mensual de ventas — fin');

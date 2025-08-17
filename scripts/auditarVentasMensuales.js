@@ -501,7 +501,7 @@ async function enviarInformeEmail({ monthLabel, totalMes, desglose, tablaCompara
 
     // 4) Comparativa y serie 12 meses
     const totalsMap = totalesPorMesTodos(rows);
-    const meses = lastNMonthsYYYYMM(12, prevYear, prevMonth1); // reciente → antiguo
+    const meses = lastNMonthsYYYYMM(12, targetYear, targetMonth1); // reciente → antiguo
 
     const tablaComparativa = meses.map(({ year, month1, yyyymm }) => {
       const actual = totalsMap.has(yyyymm) ? totalsMap.get(yyyymm) : 0;

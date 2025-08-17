@@ -1,5 +1,6 @@
 // scripts/auditarVentasMensuales.js
-// Ejecuta: node scripts/auditarVentasMensuales.js
+// Ejecuta: CLEAN_SHEET=1 node scripts/auditarVentasMensuales.js  (opcional CLEAN_SHEET)
+//          npm run audit:ventas
 
 const { google } = require('googleapis');
 const { enviarEmailPersonalizado } = require('../services/email');
@@ -27,7 +28,7 @@ const sheetsAuth = new google.auth.GoogleAuth({
 const fmtEUR = (n) =>
   new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2 }).format(Number(n || 0));
 
-const log = (m) => console.log(m);
+const log  = (m) => console.log(m);
 const warn = (m) => console.warn(m);
 
 // Limpia espacios e invisibles (incluye NBSP)
@@ -68,7 +69,7 @@ function parseFechaCell(fechaCell) {
 
   // 1) Número serial de Sheets
   if (typeof fechaCell === 'number') {
-    const ms = Math.round(fechaCell * 24 * 60 * 60 * 1000);  // días→ms
+    const ms = Math.round(fechaCell * 24 * 60 * 60 * 1000);
     const date = new Date(Date.UTC(1899, 11, 30) + ms);
     const parts = new Intl.DateTimeFormat('es-ES', {
       timeZone: 'Europe/Madrid',
@@ -116,8 +117,7 @@ function parseImporteCell(importeCell) {
 
   const s = String(importeCell).trim();
 
-  // Quita símbolo €, espacios y separadores de miles (puntos solo si van antes de 3 dígitos),
-  // y convierte coma decimal a punto.
+  // Quita símbolo €, espacios y separadores de miles (puntos solo si van antes de 3 dígitos), y usa punto como decimal
   const clean = s
     .replace(/[€]/g, '')
     .replace(/\s/g, '')
@@ -128,32 +128,99 @@ function parseImporteCell(importeCell) {
   return isNaN(n) ? 0 : n;
 }
 
+// ───────────────────────── LIMPIEZA HOJA COMPRAS ─────────────────────────
+async function getSheetMeta(spreadsheetId) {
+  const client = await sheetsAuth.getClient();
+  const sheets = google.sheets({ version: 'v4', auth: client });
+  const meta = await sheets.spreadsheets.get({ spreadsheetId });
+  return { sheets, meta: meta.data };
+}
+
+async function detectarUltimaFilaReal({ sheets, meta, tabName }) {
+  const sheet = meta.sheets.find((s) => s.properties.title === tabName);
+  if (!sheet) throw new Error(`No existe la pestaña "${tabName}"`);
+  const spreadsheetId = meta.spreadsheetId;
+
+  // Conservador: miramos D (Descripción), F (Fecha) y G (Email)
+  const rangos = ['D:D', 'F:F', 'G:G'];
+  let last = 1; // header en fila 1
+  for (const r of rangos) {
+    const { data } = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${tabName}!${r}`,
+      valueRenderOption: 'UNFORMATTED_VALUE',
+    });
+    last = Math.max(last, (data.values || []).length);
+  }
+  return {
+    sheetId: sheet.properties.sheetId,
+    rowCount: sheet.properties.gridProperties.rowCount,
+    lastDataRow: last,
+  };
+}
+
+/** Elimina físicamente las filas por debajo de la última fila con datos reales */
+async function compactarHojaCompras() {
+  const { sheets, meta } = await getSheetMeta(COMPRAS_SHEET_ID);
+  const { sheetId, rowCount, lastDataRow } = await detectarUltimaFilaReal({
+    sheets,
+    meta,
+    tabName: COMPRAS_SHEET_TAB,
+  });
+
+  const firstRowToDelete0 = lastDataRow; // 0-based: borrar desde la (lastDataRow+1)
+  if (firstRowToDelete0 >= rowCount) {
+    log(`🧹 No hay filas extra para borrar. rowCount=${rowCount}, lastDataRow=${lastDataRow}`);
+    return;
+  }
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId: COMPRAS_SHEET_ID,
+    requestBody: {
+      requests: [
+        {
+          deleteDimension: {
+            range: {
+              sheetId,
+              dimension: 'ROWS',
+              startIndex: firstRowToDelete0, // inclusivo
+              endIndex: rowCount,            // exclusivo
+            },
+          },
+        },
+      ],
+    },
+  });
+
+  log(`🧹 Compactada la hoja de compras: eliminadas filas ${firstRowToDelete0 + 1}..${rowCount}`);
+}
+
 // ───────────────────────── LECTURA COMPRAS ─────────────────────────
 async function leerComprasDeSheets() {
   const client = await sheetsAuth.getClient();
   const sheets = google.sheets({ version: 'v4', auth: client });
 
-  // 1) Detectar última fila real mirando la columna D (Descripción)
+  // Detectar última fila real mirando columna D
   const probe = await sheets.spreadsheets.values.get({
     spreadsheetId: COMPRAS_SHEET_ID,
     range: `${COMPRAS_SHEET_TAB}!D:D`,
     valueRenderOption: 'UNFORMATTED_VALUE',
   });
-  const lastRow = (probe.data.values || []).length; // última fila no vacía en D
+  const lastRow = (probe.data.values || []).length;
 
   if (lastRow < 2) {
     log('📥 Compras: 0 filas con datos.');
     return [];
   }
 
-  // 2) Leer solo hasta la última fila real
+  // Leer solo hasta la última fila real
   const { data } = await sheets.spreadsheets.values.get({
     spreadsheetId: COMPRAS_SHEET_ID,
     range: `${COMPRAS_SHEET_TAB}!A2:K${lastRow}`,
     valueRenderOption: 'UNFORMATTED_VALUE',
   });
 
-  // 3) Mapear y filtrar filas válidas (evita filas fantasma)
+  // Mapear y filtrar filas válidas (evita filas fantasma)
   const rows = (data.values || [])
     .map((r) => {
       const [nombre, apellidos, dni, descripcion, importeRaw, fechaRaw, email] = r;
@@ -190,11 +257,10 @@ function agruparPorDescripcion(rowsDelMes) {
     const desc = (r.descripcion || '(sin descripción)').trim();
     if (!map.has(desc)) map.set(desc, { descripcion: desc, count: 0, total: 0 });
     const it = map.get(desc);
-    it.count += 1;                       // 1 fila = 1 venta
+    it.count += 1; // 1 fila = 1 venta
     it.total += Number(r.importe || 0);
   }
-  // Orden por importe DESC
-  return Array.from(map.values()).sort((a, b) => b.total - a.total);
+  return Array.from(map.values()).sort((a, b) => b.total - a.total); // importe DESC
 }
 
 function totalesPorMesTodos(rows) {
@@ -228,10 +294,10 @@ async function appendStatsRows({ mesLabel, items }) {
   // Filas a insertar (detalles + TOTAL)
   const values = [
     ...items.map((it) => [
-      mesLabel,            // A
-      it.descripcion,      // B
-      String(it.count),    // C
-      Number(it.total),    // D (numérico)
+      mesLabel,       // A
+      it.descripcion, // B
+      String(it.count), // C
+      Number(it.total), // D (numérico)
     ]),
     [
       '',                                          // A (vacía, pedido explícito)
@@ -250,83 +316,40 @@ async function appendStatsRows({ mesLabel, items }) {
   });
 
   if (sheetId != null) {
-    const startRowIndex0 = 1 + existingCount;                 // A2 = index 1
-    const endRowIndex0 = startRowIndex0 + values.length;      // no inclusivo
-    const resumenRowIndex0 = endRowIndex0 - 1;                // última fila insertada
+    const startRowIndex0 = 1 + existingCount;            // A2 = index 1
+    const endRowIndex0   = startRowIndex0 + values.length;
+    const resumenRowIndex0 = endRowIndex0 - 1;           // última fila insertada
 
     const requests = [
-      // Formato moneda para D en todas las filas insertadas
+      // D: formato moneda
       {
         repeatCell: {
-          range: {
-            sheetId,
-            startRowIndex: startRowIndex0,
-            endRowIndex: endRowIndex0,
-            startColumnIndex: 3, // D
-            endColumnIndex: 4,
-          },
-          cell: {
-            userEnteredFormat: {
-              numberFormat: { type: 'NUMBER', pattern: '#,##0.00 €' },
-              horizontalAlignment: 'RIGHT',
-            },
-          },
+          range: { sheetId, startRowIndex: startRowIndex0, endRowIndex: endRowIndex0, startColumnIndex: 3, endColumnIndex: 4 },
+          cell: { userEnteredFormat: { numberFormat: { type: 'NUMBER', pattern: '#,##0.00 €' }, horizontalAlignment: 'RIGHT' } },
           fields: 'userEnteredFormat(numberFormat,horizontalAlignment)',
         },
       },
-
-      // Detalles: fondo blanco + NO negrita en A:D (todas menos la última)
+      // Detalles: fondo blanco y NO negrita
       {
         repeatCell: {
-          range: {
-            sheetId,
-            startRowIndex: startRowIndex0,
-            endRowIndex: resumenRowIndex0,
-            startColumnIndex: 0,
-            endColumnIndex: 4,
-          },
-          cell: {
-            userEnteredFormat: {
-              backgroundColor: { red: 1, green: 1, blue: 1 },
-              textFormat: { bold: false },
-            },
-          },
+          range: { sheetId, startRowIndex: startRowIndex0, endRowIndex: resumenRowIndex0, startColumnIndex: 0, endColumnIndex: 4 },
+          cell: { userEnteredFormat: { backgroundColor: { red: 1, green: 1, blue: 1 }, textFormat: { bold: false } } },
           fields: 'userEnteredFormat(backgroundColor,textFormat.bold)',
         },
       },
-
-      // Fila TOTAL: fondo gris en A:D
+      // TOTAL: fondo gris en A:D
       {
         repeatCell: {
-          range: {
-            sheetId,
-            startRowIndex: resumenRowIndex0,
-            endRowIndex: resumenRowIndex0 + 1,
-            startColumnIndex: 0,
-            endColumnIndex: 4,
-          },
-          cell: {
-            userEnteredFormat: {
-              backgroundColor: { red: 0.9, green: 0.9, blue: 0.9 },
-            },
-          },
+          range: { sheetId, startRowIndex: resumenRowIndex0, endRowIndex: resumenRowIndex0 + 1, startColumnIndex: 0, endColumnIndex: 4 },
+          cell: { userEnteredFormat: { backgroundColor: { red: 0.9, green: 0.9, blue: 0.9 } } },
           fields: 'userEnteredFormat.backgroundColor',
         },
       },
-
-      // Fila TOTAL: toda en negrita (A:D)
+      // TOTAL: toda la fila en negrita
       {
         repeatCell: {
-          range: {
-            sheetId,
-            startRowIndex: resumenRowIndex0,
-            endRowIndex: resumenRowIndex0 + 1,
-            startColumnIndex: 0,
-            endColumnIndex: 4,
-          },
-          cell: {
-            userEnteredFormat: { textFormat: { bold: true } },
-          },
+          range: { sheetId, startRowIndex: resumenRowIndex0, endRowIndex: resumenRowIndex0 + 1, startColumnIndex: 0, endColumnIndex: 4 },
+          cell: { userEnteredFormat: { textFormat: { bold: true } } },
           fields: 'userEnteredFormat.textFormat.bold',
         },
       },
@@ -440,6 +463,11 @@ async function enviarInformeEmail({ monthLabel, totalMes, desglose, tablaCompara
 (async () => {
   try {
     log('🚀 Informe mensual de ventas — inicio');
+
+    // 0) (opcional) Compactar la hoja de compras para eliminar filas fantasma
+    if (process.env.CLEAN_SHEET === '1') {
+      await compactarHojaCompras();
+    }
 
     // 1) Leer todas las compras válidas
     const rows = await leerComprasDeSheets();

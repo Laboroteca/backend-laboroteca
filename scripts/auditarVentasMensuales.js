@@ -2,20 +2,18 @@
 // Ejecuta: node scripts/auditarVentasMensuales.js
 
 const { google } = require('googleapis');
+const { enviarEmailPersonalizado } = require('../services/email');
 
 // ───────────────────────── CONFIG ─────────────────────────
 const COMPRAS_SHEET_ID = '1ShSiaz_TtODbVkczI1mfqTBj5nHb3xSEywyB0E6BL9I';
-const COMPRAS_SHEET_TAB = 'Hoja 1'; // A: Nombre, B: Apellidos, C: DNI, D: Descripción, E: Importe, F: Fecha (es-ES), G: Email
+const COMPRAS_SHEET_TAB = 'Hoja 1'; // A: Nombre, B: Apellidos, C: DNI, D: Descripción, E: Importe, F: Fecha, G: Email
 
-// Registro “ESTADÍSTICAS” (ESCRITURA)
 const STATS_SHEET_ID = '1NH7IW-I0XuDKoC5Kwwh2kpDCss-41YKLvntQeuybbgA';
 const STATS_SHEET_TAB_DEFAULT = 'Hoja 1';
 
-// Email
-const { enviarEmailPersonalizado } = require('../services/email');
 const EMAIL_DEST = 'laboroteca@gmail.com';
 
-// Google Auth (mismas credenciales que ya usas)
+// Auth
 if (!process.env.GCP_CREDENTIALS_BASE64) {
   throw new Error('❌ Falta GCP_CREDENTIALS_BASE64');
 }
@@ -25,158 +23,196 @@ const sheetsAuth = new google.auth.GoogleAuth({
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
 
-// ───────────────────────── UTILS ─────────────────────────
-const now = () => new Date();
-const utcISO = d => new Date(d).toISOString();
-function log(msg, extra=''){ console.log(`[${utcISO(Date.now())}] ${msg}${extra?' '+extra:''}`); }
-function warn(msg, extra=''){ console.warn(`[${utcISO(Date.now())}] ${msg}${extra?' '+extra:''}`); }
+// ───────────────────────── UTILIDADES ─────────────────────────
+const fmtEUR = (n) =>
+  new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2 }).format(Number(n || 0));
 
-function normalizarTexto(str=''){
-  return String(str).toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
-    .replace(/[^a-z0-9]+/g,' ')
+const log = (m) => console.log(m);
+const warn = (m) => console.warn(m);
+
+function monthLabelESFrom(year, month1) {
+  const d = new Date(Date.UTC(year, month1 - 1, 1));
+  return d.toLocaleDateString('es-ES', { month: 'long', year: 'numeric', timeZone: 'Europe/Madrid' });
+}
+
+function madridNowYearMonth() {
+  const parts = new Intl.DateTimeFormat('es-ES', {
+    timeZone: 'Europe/Madrid',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const y = Number(parts.find((p) => p.type === 'year').value);
+  const m = Number(parts.find((p) => p.type === 'month').value);
+  return { year: y, month1: m };
+}
+
+function previousYearMonth() {
+  const { year, month1 } = madridNowYearMonth();
+  if (month1 === 1) return { year: year - 1, month1: 12 };
+  return { year, month1: month1 - 1 };
+}
+
+function yyyymmFrom(year, month1) {
+  return `${year}-${String(month1).padStart(2, '0')}`;
+}
+
+function normalizarDescripcion(s = '') {
+  return String(s)
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
     .trim();
 }
 
-function parseFechaESES(s){
-  if (s instanceof Date) return s;
-  if (!s) return null;
-  const t = String(s).replace(',', '');
-  const m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
-  if (!m) return null;
-  const [_, d, mo, y, h='0', mi='0', se='0'] = m;
-  return new Date(Date.UTC(+y, +mo-1, +d, +h, +mi, +se));
-}
+// dd/mm/yyyy (opcional hh:mm) → {date, year, month1, yyyymm}
+function parseFechaCell(fechaCell) {
+  if (!fechaCell) return null;
 
-function fmtEUR(n){
-  return new Intl.NumberFormat('es-ES', { style:'currency', currency:'EUR', minimumFractionDigits:2 }).format(Number(n||0));
-}
-function monthLabelES(d){
-  return new Date(d).toLocaleDateString('es-ES', { month:'long', year:'numeric', timeZone:'Europe/Madrid' });
-}
-function yyyymm(d){ return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}`; }
-function firstDayUTC(year, month0){ return new Date(Date.UTC(year, month0, 1, 0,0,0,0)); }
-function lastDayUTC(year, month0){ return new Date(Date.UTC(year, month0+1, 0, 23,59,59,999)); }
-
-// Devuelve { startPrev, endPrev, refMonthDate }
-function previousMonthBounds(){
-  const nowD = now();
-  const y = nowD.getUTCFullYear();
-  const m0 = nowD.getUTCMonth();
-  const prevY = m0===0 ? y-1 : y;
-  const prevM0 = m0===0 ? 11 : m0-1;
-  return {
-    startPrev: firstDayUTC(prevY, prevM0),
-    endPrev: lastDayUTC(prevY, prevM0),
-    refMonthDate: firstDayUTC(prevY, prevM0)
-  };
-}
-
-function last12MonthsFrom(refMonthDate){
-  // refMonthDate debe ser el primer día del mes de referencia (UTC)
-  const arr = [];
-  let y = refMonthDate.getUTCFullYear();
-  let m0 = refMonthDate.getUTCMonth();
-  for (let i=0;i<12;i++){
-    const d = firstDayUTC(y, m0);
-    arr.push(d);
-    m0--;
-    if (m0 < 0){ m0 = 11; y--; }
+  // 1) Si es número serial (algunas filas antiguas)
+  if (typeof fechaCell === 'number') {
+    // días desde 1899-12-30
+    const ms = Math.round(fechaCell * 24 * 60 * 60 * 1000);
+    const date = new Date(Date.UTC(1899, 11, 30) + ms);
+    // Obtén año/mes en Europe/Madrid
+    const parts = new Intl.DateTimeFormat('es-ES', {
+      timeZone: 'Europe/Madrid',
+      year: 'numeric',
+      month: '2-digit',
+    }).formatToParts(date);
+    const year = Number(parts.find((p) => p.type === 'year').value);
+    const month1 = Number(parts.find((p) => p.type === 'month').value);
+    return { date, year, month1, yyyymm: yyyymmFrom(year, month1) };
   }
-  return arr; // orden: más reciente primero
+
+  // 2) Si es cadena "dd/mm/yyyy" o "dd/mm/yyyy hh:mm"
+  if (typeof fechaCell === 'string') {
+    const t = fechaCell.trim();
+    const m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (!m) return null;
+    const day = Number(m[1]);
+    const month1 = Number(m[2]);
+    const year = Number(m[3]);
+    const date = new Date(Date.UTC(year, month1 - 1, day)); // referencia UTC
+    return { date, year, month1, yyyymm: yyyymmFrom(year, month1) };
+  }
+
+  return null;
 }
 
-// ───────────────────────── LECTURA SHEETS ─────────────────────────
-async function leerComprasDeSheets(){
+function lastNMonthsYYYYMM(n, refYear, refMonth1) {
+  const arr = [];
+  let y = refYear;
+  let m = refMonth1;
+  for (let i = 0; i < n; i++) {
+    arr.push({ year: y, month1: m, yyyymm: yyyymmFrom(y, m) });
+    m -= 1;
+    if (m === 0) {
+      m = 12;
+      y -= 1;
+    }
+  }
+  return arr; // reciente → antiguo
+}
+
+function parseImporteCell(importeCell) {
+  if (typeof importeCell === 'number') return Number(importeCell);
+  if (!importeCell) return 0;
+  // Acepta "9,99 €", "€2.290,00", "9.99", etc.
+  const clean = String(importeCell).replace(/[^\d.,-]/g, '').replace(/\./g, '').replace(',', '.');
+  const n = Number(clean);
+  return isNaN(n) ? 0 : n;
+}
+
+// ───────────────────────── LECTURA COMPRAS ─────────────────────────
+async function leerComprasDeSheets() {
   const client = await sheetsAuth.getClient();
-  const sheets = google.sheets({ version:'v4', auth: client });
+  const sheets = google.sheets({ version: 'v4', auth: client });
 
   const { data } = await sheets.spreadsheets.values.get({
     spreadsheetId: COMPRAS_SHEET_ID,
     range: `${COMPRAS_SHEET_TAB}!A2:K`,
-    valueRenderOption: 'UNFORMATTED_VALUE'
+    valueRenderOption: 'UNFORMATTED_VALUE',
   });
 
-  const rows = (data.values || []).map(r => {
+  const rows = (data.values || []).map((r) => {
     const [nombre, apellidos, dni, descripcion, importeRaw, fechaRaw, email] = r;
-    const fecha = parseFechaESES(fechaRaw);
-    let importe = 0;
-    if (typeof importeRaw === 'number') importe = importeRaw;
-    else if (typeof importeRaw === 'string') importe = Number(importeRaw.replace(/[€\s]/g,'').replace(',','.')) || 0;
+    const fecha = parseFechaCell(fechaRaw);
+    const importe = parseImporteCell(importeRaw);
+    const descOriginal = (descripcion || '').toString().trim();
     return {
       nombre: nombre || '',
       apellidos: apellidos || '',
-      descripcion: descripcion || '',
-      descN: normalizarTexto(descripcion || ''),
+      dni: dni || '',
+      descripcion: descOriginal,
+      descKey: normalizarDescripcion(descOriginal),
       importe,
-      fecha,
-      email: (email||'').toLowerCase().trim()
+      fecha, // {date, year, month1, yyyymm}
+      email: (email || '').toLowerCase().trim(),
     };
-  }).filter(r => r.fecha && !isNaN(r.fecha));
+  }).filter((r) => r.fecha && r.fecha.yyyymm && r.importe > 0);
 
   log(`📥 Compras: ${rows.length} filas leídas de Sheets.`);
   return rows;
 }
 
 // ───────────────────────── ESTADÍSTICAS ─────────────────────────
-function agruparPorDescripcion(rows){
+function agruparPorDescripcion(rowsDelMes) {
   const map = new Map();
-  for (const r of rows){
-    const k = r.descN || '(sin descripcion)';
-    if (!map.has(k)) map.set(k, { descripcion: r.descripcion || '(sin descripción)', count:0, total:0 });
+  for (const r of rowsDelMes) {
+    const k = r.descKey || '(sin descripcion)';
+    if (!map.has(k)) map.set(k, { descripcion: r.descripcion || '(sin descripción)', count: 0, total: 0 });
     const it = map.get(k);
-    it.count += 1;
-    it.total += Number(r.importe||0);
+    it.count += 1;                // ✅ 1 fila = 1 venta
+    it.total += Number(r.importe || 0);
   }
-  // ORDEN POR IMPORTE (€) DESCENDENTE
-  return Array.from(map.values()).sort((a,b) => b.total - a.total);
+  // Orden por importe DESC
+  return Array.from(map.values()).sort((a, b) => b.total - a.total);
 }
 
-function totalesPorMesTodos(rows){
-  // devuelve Map 'YYYY-MM' -> total €
-  const mp = new Map();
-  for (const r of rows){
-    const k = yyyymm(r.fecha);
-    mp.set(k, (mp.get(k)||0) + Number(r.importe||0));
+function totalesPorMesTodos(rows) {
+  const mp = new Map(); // 'YYYY-MM' -> total €
+  for (const r of rows) {
+    const k = r.fecha.yyyymm;
+    mp.set(k, (mp.get(k) || 0) + Number(r.importe || 0));
   }
   return mp;
 }
 
-// ───────────────────────── ESCRITURA STATS SHEET ─────────────────────────
-async function appendStatsRows({ mesLabel, items }){
-  // Totales para la fila resumen
+// ───────────────────────── ESCRITURA EN “ESTADÍSTICAS” ─────────────────────────
+async function appendStatsRows({ mesLabel, items }) {
   const totalCount = items.reduce((s, x) => s + x.count, 0);
-  const totalAmount = items.reduce((s, x) => s + Number(x.total||0), 0);
+  const totalAmount = items.reduce((s, x) => s + Number(x.total || 0), 0);
 
   const client = await sheetsAuth.getClient();
-  const sheets = google.sheets({ version:'v4', auth: client });
+  const sheets = google.sheets({ version: 'v4', auth: client });
 
   const meta = await sheets.spreadsheets.get({ spreadsheetId: STATS_SHEET_ID });
   const sheet = meta.data.sheets?.[0];
   const tabName = sheet?.properties?.title || STATS_SHEET_TAB_DEFAULT;
   const sheetId = sheet?.properties?.sheetId;
 
-  // ¿Cuántas filas de datos hay ya (debajo del header)?
   const existing = await sheets.spreadsheets.values.get({
     spreadsheetId: STATS_SHEET_ID,
-    range: `${tabName}!A2:A`
+    range: `${tabName}!A2:A`,
   });
-  const existingCount = (existing.data.values || []).length; // filas reales debajo del header
+  const existingCount = (existing.data.values || []).length;
 
-  // 1) Añadir desglose (orden descendente) + 2) Fila resumen en la siguiente fila
+  // Filas a insertar (detalles + TOTAL)
   const values = [
-    ...items.map(it => [
-      mesLabel,                 // A
-      it.descripcion,           // B
-      String(it.count),         // C
-      Number(it.total || 0)     // D (numérico)
+    ...items.map((it) => [
+      mesLabel,            // A
+      it.descripcion,      // B
+      String(it.count),    // C
+      Number(it.total),    // D (numérico)
     ]),
     [
-      mesLabel,                                                     // A
-      `TOTAL VENTAS ${mesLabel.toUpperCase()}`,                     // B
-      String(totalCount),                                           // C
-      Number(totalAmount)                                           // D (numérico)
-    ]
+      '',                                          // A (vacía, pedido explícito)
+      `TOTAL VENTAS ${mesLabel.toUpperCase()}`,    // B
+      String(totalCount),                          // C
+      Number(totalAmount),                         // D
+    ],
   ];
 
   await sheets.spreadsheets.values.append({
@@ -184,77 +220,136 @@ async function appendStatsRows({ mesLabel, items }){
     range: `${tabName}!A2`,
     valueInputOption: 'USER_ENTERED',
     insertDataOption: 'INSERT_ROWS',
-    requestBody: { values }
+    requestBody: { values },
   });
 
-  // 3) Dar formato gris claro a la fila resumen (A:D)
   if (sheetId != null) {
-    // Índices 0-based para GridRange:
-    // header está en la fila 0, por tanto A2 corresponde a rowIndex=1
-    const resumenRowIndex0 = 1 /*A2*/ + existingCount + items.length; // fila recién añadida después del desglose
+    const startRowIndex0 = 1 + existingCount;                 // A2 = index 1
+    const endRowIndex0 = startRowIndex0 + values.length;      // no inclusivo
+    const resumenRowIndex0 = endRowIndex0 - 1;                // última fila insertada
+
+    const requests = [
+      // Formato moneda para D en todas las filas insertadas
+      {
+        repeatCell: {
+          range: {
+            sheetId,
+            startRowIndex: startRowIndex0,
+            endRowIndex: endRowIndex0,
+            startColumnIndex: 3, // D
+            endColumnIndex: 4,
+          },
+          cell: {
+            userEnteredFormat: {
+              numberFormat: { type: 'NUMBER', pattern: '#,##0.00 €' },
+              horizontalAlignment: 'RIGHT',
+            },
+          },
+          fields: 'userEnteredFormat(numberFormat,horizontalAlignment)',
+        },
+      },
+
+      // Detalles: fondo blanco + NO negrita en A:D (todas menos la última)
+      {
+        repeatCell: {
+          range: {
+            sheetId,
+            startRowIndex: startRowIndex0,
+            endRowIndex: resumenRowIndex0,
+            startColumnIndex: 0,
+            endColumnIndex: 4,
+          },
+          cell: {
+            userEnteredFormat: {
+              backgroundColor: { red: 1, green: 1, blue: 1 },
+              textFormat: { bold: false },
+            },
+          },
+          fields: 'userEnteredFormat(backgroundColor,textFormat.bold)',
+        },
+      },
+
+      // Fila TOTAL: fondo gris en A:D
+      {
+        repeatCell: {
+          range: {
+            sheetId,
+            startRowIndex: resumenRowIndex0,
+            endRowIndex: resumenRowIndex0 + 1,
+            startColumnIndex: 0,
+            endColumnIndex: 4,
+          },
+          cell: {
+            userEnteredFormat: {
+              backgroundColor: { red: 0.9, green: 0.9, blue: 0.9 },
+            },
+          },
+          fields: 'userEnteredFormat.backgroundColor',
+        },
+      },
+
+      // Fila TOTAL: toda en negrita (A:D)
+      {
+        repeatCell: {
+          range: {
+            sheetId,
+            startRowIndex: resumenRowIndex0,
+            endRowIndex: resumenRowIndex0 + 1,
+            startColumnIndex: 0,
+            endColumnIndex: 4,
+          },
+          cell: {
+            userEnteredFormat: { textFormat: { bold: true } },
+          },
+          fields: 'userEnteredFormat.textFormat.bold',
+        },
+      },
+    ];
+
     await sheets.spreadsheets.batchUpdate({
       spreadsheetId: STATS_SHEET_ID,
-      requestBody: {
-        requests: [
-          {
-            repeatCell: {
-              range: {
-                sheetId,
-                startRowIndex: resumenRowIndex0,
-                endRowIndex: resumenRowIndex0 + 1,
-                startColumnIndex: 0,
-                endColumnIndex: 4
-              },
-              cell: {
-                userEnteredFormat: {
-                  backgroundColor: { red: 0.95, green: 0.95, blue: 0.95 }
-                }
-              },
-              fields: 'userEnteredFormat.backgroundColor'
-            }
-          }
-        ]
-      }
+      requestBody: { requests },
     });
   }
 
-  log(`📝 StatsSheet: añadidas ${items.length} filas + 1 resumen para ${mesLabel}.`);
+  log(`📝 StatsSheet: añadidas ${items.length} filas + TOTAL para ${mesLabel}.`);
 }
 
 // ───────────────────────── EMAIL ─────────────────────────
-async function enviarInformeEmail({ monthLabel, totalMes, desglose, tablaComparativa, serie12Meses }){
+async function enviarInformeEmail({ monthLabel, totalMes, desglose, tablaComparativa, serie12Meses }) {
   if (!process.env.SMTP2GO_API_KEY || !process.env.SMTP2GO_FROM_EMAIL) {
     warn('Email no enviado: faltan credenciales SMTP2GO');
     return;
   }
 
-  const filasDesglose = desglose.map(it =>
-    `<tr>
-      <td style="padding:6px 8px;border:1px solid #ddd;">${it.descripcion}</td>
-      <td style="padding:6px 8px;border:1px solid #ddd;text-align:center;">${it.count}</td>
-      <td style="padding:6px 8px;border:1px solid #ddd;text-align:right;">${fmtEUR(it.total)}</td>
-    </tr>`
+  const filasDesglose = desglose.map(
+    (it) => `
+      <tr>
+        <td style="padding:6px 8px;border:1px solid #ddd;">${it.descripcion}</td>
+        <td style="padding:6px 8px;border:1px solid #ddd;text-align:center;">${it.count}</td>
+        <td style="padding:6px 8px;border:1px solid #ddd;text-align:right;">${fmtEUR(it.total)}</td>
+      </tr>`
   ).join('');
 
-  const filasComparativa = tablaComparativa.map(row =>
-    `<tr>
-      <td style="padding:6px 8px;border:1px solid #ddd;">${row.mesActual}</td>
-      <td style="padding:6px 8px;border:1px solid #ddd;text-align:right;">${row.totalActual === null ? '-' : fmtEUR(row.totalActual)}</td>
-      <td style="padding:6px 8px;border:1px solid #ddd;">${row.mesPrevio}</td>
-      <td style="padding:6px 8px;border:1px solid #ddd;text-align:right;">${row.totalPrevio === null ? '-' : fmtEUR(row.totalPrevio)}</td>
-    </tr>`
+  const filasComparativa = tablaComparativa.map(
+    (row) => `
+      <tr>
+        <td style="padding:6px 8px;border:1px solid #ddd;">${row.mesActual}</td>
+        <td style="padding:6px 8px;border:1px solid #ddd;text-align:right;">${row.totalActual === null ? '-' : fmtEUR(row.totalActual)}</td>
+        <td style="padding:6px 8px;border:1px solid #ddd;">${row.mesPrevio}</td>
+        <td style="padding:6px 8px;border:1px solid #ddd;text-align:right;">${row.totalPrevio === null ? '-' : fmtEUR(row.totalPrevio)}</td>
+      </tr>`
   ).join('');
 
-  // Gráfica (barras DIV, 12 meses, orden más reciente → más antiguo)
-  const maxVal = Math.max(...serie12Meses.map(x=>x.total||0), 1);
-  const barras = serie12Meses.map(x => {
-    const h = Math.round((x.total||0) / maxVal * 140);
+  // Barras (12 meses)
+  const maxVal = Math.max(...serie12Meses.map((x) => x.total || 0), 1);
+  const barras = serie12Meses.map((x) => {
+    const h = Math.round(((x.total || 0) / maxVal) * 140);
     return `
       <div style="display:inline-block;width:28px;margin:0 6px;vertical-align:bottom;text-align:center;">
-        <div title="${x.label}: ${fmtEUR(x.total||0)}" style="background:#4F46E5;height:${h}px;"></div>
+        <div title="${x.label}: ${fmtEUR(x.total || 0)}" style="height:${h}px;background:#4F46E5;"></div>
         <div style="font-size:10px;margin-top:4px;white-space:nowrap;">${x.short}</div>
-      </div>
-    `;
+      </div>`;
   }).join('');
 
   const html = `
@@ -301,15 +396,15 @@ async function enviarInformeEmail({ monthLabel, totalMes, desglose, tablaCompara
     `Informe de ventas — ${monthLabel}`,
     `Total ingresos ${monthLabel}: ${fmtEUR(totalMes)}`,
     ``,
-    `Desglose por producto (importe desc.):`,
-    ...desglose.map(it => `- ${it.descripcion}: ${it.count} uds → ${fmtEUR(it.total)}`),
+    `Desglose por producto:`,
+    ...desglose.map((it) => `- ${it.descripcion}: ${it.count} uds → ${fmtEUR(it.total)}`),
   ].join('\n');
 
   await enviarEmailPersonalizado({
     to: EMAIL_DEST,
     subject: `📈 Ventas ${monthLabel} — Total ${fmtEUR(totalMes)}`,
     html,
-    text
+    text,
   });
 
   log(`📧 Informe mensual enviado a ${EMAIL_DEST}`);
@@ -323,52 +418,46 @@ async function enviarInformeEmail({ monthLabel, totalMes, desglose, tablaCompara
     // 1) Leer todas las compras
     const rows = await leerComprasDeSheets();
 
-    // 2) Ventana del mes anterior
-    const { startPrev, endPrev, refMonthDate } = previousMonthBounds();
-    const monthLabel = monthLabelES(refMonthDate);
+    // 2) Fijar MES OBJETIVO = mes anterior en Europe/Madrid
+    const { year: prevYear, month1: prevMonth1 } = previousYearMonth();
+    const targetYYYYMM = yyyymmFrom(prevYear, prevMonth1);
+    const monthLabel = monthLabelESFrom(prevYear, prevMonth1);
 
-    const prevRows = rows.filter(r => r.fecha >= startPrev && r.fecha <= endPrev);
+    const prevRows = rows.filter((r) => r.fecha.yyyymm === targetYYYYMM);
 
-    // 3) Total del mes anterior + desglose por producto (orden importe desc)
-    const totalMes = prevRows.reduce((acc,r) => acc + Number(r.importe||0), 0);
+    // 3) Total del mes y desglose por descripción
+    const totalMes = prevRows.reduce((acc, r) => acc + Number(r.importe || 0), 0);
     const desglose = agruparPorDescripcion(prevRows);
 
-    // 4) Comparativa 12 meses (desc), y serie para gráfica
+    // 4) Comparativa y serie 12 meses
     const totalsMap = totalesPorMesTodos(rows);
-    const meses = last12MonthsFrom(refMonthDate); // más reciente primero
+    const meses = lastNMonthsYYYYMM(12, prevYear, prevMonth1); // reciente → antiguo
 
-    const tablaComparativa = meses.map(d => {
-      const keyAct = yyyymm(d);
-      const act = totalsMap.has(keyAct) ? totalsMap.get(keyAct) : 0;
-
-      const prevY = d.getUTCFullYear() - 1;
-      const prevM0 = d.getUTCMonth();
-      const dPrev = firstDayUTC(prevY, prevM0);
-      const keyPrev = yyyymm(dPrev);
-      const prev = totalsMap.has(keyPrev) ? totalsMap.get(keyPrev) : null; // null = “-”
-
+    const tablaComparativa = meses.map(({ year, month1, yyyymm }) => {
+      const actual = totalsMap.has(yyyymm) ? totalsMap.get(yyyymm) : 0;
+      const prev = totalsMap.get(yyyymmFrom(year - 1, month1)) ?? null;
       return {
-        mesActual: monthLabelES(d),
-        totalActual: act,
-        mesPrevio: monthLabelES(dPrev),
-        totalPrevio: prev
+        mesActual: monthLabelESFrom(year, month1),
+        totalActual: actual,
+        mesPrevio: monthLabelESFrom(year - 1, month1),
+        totalPrevio: prev,
       };
     });
 
-    const serie12Meses = meses.map(d => ({
-      label: monthLabelES(d),
-      short: d.toLocaleDateString('es-ES', { month:'short', timeZone:'Europe/Madrid' }),
-      total: totalsMap.get(yyyymm(d)) || 0
+    const serie12Meses = meses.map(({ year, month1, yyyymm }) => ({
+      label: monthLabelESFrom(year, month1),
+      short: new Date(Date.UTC(year, month1 - 1, 1)).toLocaleDateString('es-ES', {
+        month: 'short',
+        timeZone: 'Europe/Madrid',
+      }),
+      total: totalsMap.get(yyyymm) || 0,
     }));
 
-    // 5) Email SIEMPRE
+    // 5) Email
     await enviarInformeEmail({ monthLabel, totalMes, desglose, tablaComparativa, serie12Meses });
 
-    // 6) Registrar en hoja “ESTADÍSTICAS”: desglose + fila resumen con fondo gris
-    await appendStatsRows({
-      mesLabel: monthLabel,
-      items: desglose
-    });
+    // 6) Escribir en “ESTADÍSTICAS” con formato pedido
+    await appendStatsRows({ mesLabel: monthLabel, items: desglose });
 
     log('✅ Informe mensual de ventas — fin');
   } catch (e) {

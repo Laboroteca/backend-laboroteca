@@ -39,6 +39,36 @@ const GCS_BUCKET =
   process.env.GCLOUD_STORAGE_BUCKET ||
   '';
 
+console.log('[CONSENT] GCS_BUCKET =', GCS_BUCKET || '(vacío)');
+
+// Cliente global de Storage (usa GCP_CREDENTIALS_BASE64 o FIREBASE_SERVICE_ACCOUNT_JSON; si no, ADC)
+let storage = null;
+if (Storage) {
+  try {
+    let creds = null;
+
+    if (process.env.GCP_CREDENTIALS_BASE64) {
+      const raw = Buffer.from(process.env.GCP_CREDENTIALS_BASE64, 'base64').toString('utf8');
+      creds = JSON.parse(raw);
+      console.log('[CONSENT] usando credenciales de GCP_CREDENTIALS_BASE64');
+    } else if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+      creds = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+      console.log('[CONSENT] usando credenciales de FIREBASE_SERVICE_ACCOUNT_JSON');
+    } else {
+      console.log('[CONSENT] usando ADC (GOOGLE_APPLICATION_CREDENTIALS o metadatos)');
+    }
+
+    storage = creds ? new Storage({ credentials: creds, projectId: creds.project_id }) : new Storage();
+  } catch (e) {
+    console.warn('[CONSENT] GCS creds parse/init error:', e?.message || e);
+    try {
+      storage = new Storage(); // último intento: ADC
+    } catch {
+      storage = null;
+    }
+  }
+}
+
 const BASE_PATH = 'consents'; // consents/pp/2025-08-15.html, consents/tos/2025-08-15.html
 
 // ───────────────────────────── Utils ─────────────────────────────
@@ -93,22 +123,12 @@ function fetchHtml(urlStr, timeoutMs = 10000) {
  * Devuelve hash, ruta y flag de snapshotOk.
  */
 async function ensureSnapshot({ type, version, url, htmlOverride }) {
-  if (!GCS_BUCKET || !Storage) {
+  if (!GCS_BUCKET || !Storage || !storage) {
+    console.warn('[CONSENT] Modo degradado: bucket o @google-cloud/storage ausentes', {
+      hasBucket: !!GCS_BUCKET, hasLib: !!Storage, hasClient: !!storage
+    });
     const basis = htmlOverride || url || `${type}:${version}`;
     return { hash: 'sha256:' + sha256Hex(basis), blobPath: '', snapshotOk: false };
-  }
-
-  let storage;
-  try {
-    if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-      const creds = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
-      storage = new Storage({ credentials: creds, projectId: creds.project_id });
-    } else {
-      storage = new Storage(); // ADC
-    }
-  } catch (e) {
-    console.warn('⚠️ GCS init error:', e?.message || e);
-    storage = new Storage();
   }
 
   const bucket = storage.bucket(GCS_BUCKET);
@@ -117,6 +137,7 @@ async function ensureSnapshot({ type, version, url, htmlOverride }) {
   const file = bucket.file(blobPath);
 
   try {
+    console.log('[CONSENT] Intentando subir snapshot', { type, version, bucket: GCS_BUCKET });
     const [exists] = await file.exists();
     let content = '';
     if (exists) {
@@ -127,6 +148,7 @@ async function ensureSnapshot({ type, version, url, htmlOverride }) {
       if (!content) {
         return { hash: 'sha256:' + sha256Hex(`${type}:${version}:${url || ''}`), blobPath: '', snapshotOk: false };
       }
+      console.log('[CONSENT] Subiendo a GCS →', blobPath);
       await file.save(content, {
         resumable: false,
         contentType: 'text/html; charset=utf-8',

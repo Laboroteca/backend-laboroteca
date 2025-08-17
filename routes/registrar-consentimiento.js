@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 const { logConsent } = require('../utils/consentLogs');
 
-/* ---------- Helpers ---------- */
+/* ───────────── Helpers ───────────── */
 
 // Parseo seguro del campo único consentData (JSON o string vacío)
 function parseConsentData(v) {
@@ -23,20 +23,34 @@ function b(v, def = false) {
        : def;
 }
 
-/* ---------- Ruta (best-effort, nunca bloquea) ---------- */
+/* ───────────── Ruta (best-effort, nunca bloquea) ───────────── */
 
 router.post('/registrar-consentimiento', async (req, res) => {
   try {
+    // Telemetría ligera: detectar formularios sin consentData
+    if (!req.body?.consentData) {
+      const srcHint = s(req.body?.source || req.body?.formularioId || '');
+      const emailHint = s((req.body?.email || '').toLowerCase());
+      console.log(`[CONSENT] sin consentData; source=${srcHint} email=${emailHint}`);
+    }
+
     // Acepta tanto campos sueltos como el blob consentData
     const cd   = parseConsentData(req.body?.consentData);
     const body = { ...(req.body || {}) };
 
     const uid            = s(body.uid || cd.uid || null) || null;
     const email          = s((body.email || cd.email || '').toLowerCase());
-    const termsUrl       = s(body.termsUrl       || cd.termsUrl       || '');
-    const privacyUrl     = s(body.privacyUrl     || cd.privacyUrl     || '');
-    const termsVersion   = s(body.termsVersion   || cd.termsVersion   || '');
-    const privacyVersion = s(body.privacyVersion || cd.privacyVersion || '');
+    const termsUrlRaw    = s(body.termsUrl       || cd.termsUrl       || '');
+    const privacyUrlRaw  = s(body.privacyUrl     || cd.privacyUrl     || '');
+    const termsVerRaw    = s(body.termsVersion   || cd.termsVersion   || '');
+    const privVerRaw     = s(body.privacyVersion || cd.privacyVersion || '');
+
+    // Fallbacks robustos de versión (por si el snippet no los envía)
+    const termsVersion   = termsVerRaw || s(process.env.TERMS_VERSION_FALLBACK || '2025-08-15');
+    const privacyVersion = privVerRaw  || s(process.env.PRIVACY_VERSION_FALLBACK || '2025-08-15');
+    const termsUrl       = termsUrlRaw   || s(process.env.TERMS_URL_FALLBACK   || '');
+    const privacyUrl     = privacyUrlRaw || s(process.env.PRIVACY_URL_FALLBACK || '');
+
     const checkboxesIn   = body.checkboxes ?? cd.checkboxes ?? {};
     const checkboxes     = {
       terms:   b(checkboxesIn.terms, true),
@@ -46,6 +60,7 @@ router.post('/registrar-consentimiento', async (req, res) => {
         return acc;
       }, {})
     };
+
     const source         = s(body.source || body.formularioId || cd.source || cd.formularioId || '');
     const sessionId      = s(body.sessionId || cd.sessionId || '');
     const paymentIntentId= s(body.paymentIntentId || cd.paymentIntentId || '');
@@ -73,7 +88,7 @@ router.post('/registrar-consentimiento', async (req, res) => {
       .then(r => console.log('CONSENT OK:', r.id))
       .catch(e => console.warn('CONSENT WARN (no bloquea):', e?.message || e));
 
-    // ✅ Respuesta inmediata para no afectar al flujo de compra/membresía
+    // ✅ Respuesta inmediata para no afectar al flujo de compra/membresía/registro
     return res.json({ ok: true });
   } catch (err) {
     console.error('registrar-consentimiento error (handler):', err);

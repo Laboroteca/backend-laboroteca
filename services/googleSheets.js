@@ -33,7 +33,7 @@ async function guardarEnGoogleSheets(datos) {
     const email = (datos.email || '').trim().toLowerCase();
     const descripcion = datos.descripcionProducto || datos.nombreProducto || 'Producto Laboroteca';
     const importe = typeof datos.importe === 'number'
-      ? `${datos.importe.toFixed(2)} €`
+      ? `${datos.importe.toFixed(2).replace('.', ',')} €`
       : (datos.importe || '');
 
     // Leer filas existentes

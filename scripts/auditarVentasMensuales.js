@@ -41,6 +41,11 @@ function monthLabelESFrom(year, month1) {
   return d.toLocaleDateString('es-ES', { month: 'long', year: 'numeric', timeZone: 'Europe/Madrid' });
 }
 
+function parseYYYYMM(s) {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(s || ''));
+  return m ? { year: +m[1], month1: +m[2] } : null;
+}
+
 function madridNowYearMonth() {
   const parts = new Intl.DateTimeFormat('es-ES', {
     timeZone: 'Europe/Madrid',
@@ -472,16 +477,27 @@ async function enviarInformeEmail({ monthLabel, totalMes, desglose, tablaCompara
     // 1) Leer todas las compras válidas
     const rows = await leerComprasDeSheets();
 
-    // 2) Mes objetivo = mes anterior (Europe/Madrid)
-    const { year: prevYear, month1: prevMonth1 } = previousYearMonth();
-    const targetYYYYMM = yyyymmFrom(prevYear, prevMonth1);
-    const monthLabel = monthLabelESFrom(prevYear, prevMonth1);
+    // 2) Mes objetivo: override por AUDIT_MONTH="YYYY-MM" o --mes=YYYY-MM; si no, mes anterior.
+    const cliMes = (process.argv.find(a => a.startsWith('--mes=')) || '').replace('--mes=', '');
+    const override = parseYYYYMM(process.env.AUDIT_MONTH || cliMes);
+    const { year: targetYear, month1: targetMonth1 } = override || previousYearMonth();
+    const targetYYYYMM = yyyymmFrom(targetYear, targetMonth1);
+    const monthLabel = monthLabelESFrom(targetYear, targetMonth1);
 
-    const prevRows = rows.filter((r) => r.fecha.yyyymm === targetYYYYMM);
+    const targetRows = rows.filter(r => r.fecha.yyyymm === targetYYYYMM);
+
+    // (Debug opcional)
+    if (process.env.DEBUG === '1') {
+    console.log(`🧪 Filas usadas para ${targetYYYYMM}: ${targetRows.length}`);
+    const counts = {};
+    targetRows.forEach(r => counts[r.descripcion] = (counts[r.descripcion] || 0) + 1);
+    Object.entries(counts).forEach(([desc, c]) => console.log(`- ${desc}: ${c}`));
+    }
 
     // 3) Total del mes y desglose por descripción
-    const totalMes = prevRows.reduce((acc, r) => acc + Number(r.importe || 0), 0);
-    const desglose = agruparPorDescripcion(prevRows);
+    const totalMes = targetRows.reduce((acc, r) => acc + Number(r.importe || 0), 0);
+    const desglose = agruparPorDescripcion(targetRows);
+
 
     // 4) Comparativa y serie 12 meses
     const totalsMap = totalesPorMesTodos(rows);

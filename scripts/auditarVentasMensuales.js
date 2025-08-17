@@ -5,7 +5,7 @@ const { google } = require('googleapis');
 const { enviarEmailPersonalizado } = require('../services/email');
 
 // ───────── CONFIG ─────────
-const COMPRAS_SHEET_ID = '1ShSiaz_TtODbVkczI1mfqTBj5nHb3xSEywyB0E6BL9I';
+const COMPRAS_SHEET_ID = '1Mtffq42G7Q0y44ekzvy7IWPS8obvN4pNahA-08igdGk';
 const COMPRAS_SHEET_TAB = 'Hoja 1'; // A: Nombre, B: Apellidos, C: DNI, D: Descripción, E: Importe, F: Fecha, G: Email
 
 const STATS_SHEET_ID = '1NH7IW-I0XuDKoC5Kwwh2kpDCss-41YKLvntQeuybbgA';

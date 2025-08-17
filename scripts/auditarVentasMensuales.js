@@ -119,8 +119,16 @@ function lastNMonthsYYYYMM(n, refYear, refMonth1) {
 function parseImporteCell(importeCell) {
   if (typeof importeCell === 'number') return Number(importeCell);
   if (!importeCell) return 0;
-  // Acepta "9,99 €", "€2.290,00", "9.99", etc.
-  const clean = String(importeCell).replace(/[^\d.,-]/g, '').replace(/\./g, '').replace(',', '.');
+
+  const s = String(importeCell).trim();
+
+  // Quita el símbolo €, espacios y separadores de miles (puntos solo si van antes de 3 dígitos)
+  const clean = s
+    .replace(/[€]/g, '')
+    .replace(/\s/g, '')
+    .replace(/\.(?=\d{3}(\D|$))/g, '')  // elimina . como miles
+    .replace(',', '.');                 // decimal a punto
+
   const n = Number(clean);
   return isNaN(n) ? 0 : n;
 }
@@ -161,10 +169,10 @@ async function leerComprasDeSheets() {
 function agruparPorDescripcion(rowsDelMes) {
   const map = new Map();
   for (const r of rowsDelMes) {
-    const k = r.descKey || '(sin descripcion)';
-    if (!map.has(k)) map.set(k, { descripcion: r.descripcion || '(sin descripción)', count: 0, total: 0 });
-    const it = map.get(k);
-    it.count += 1;                // ✅ 1 fila = 1 venta
+    const desc = (r.descripcion || '(sin descripción)').trim();
+    if (!map.has(desc)) map.set(desc, { descripcion: desc, count: 0, total: 0 });
+    const it = map.get(desc);
+    it.count += 1;                       // 1 fila = 1 venta
     it.total += Number(r.importe || 0);
   }
   // Orden por importe DESC

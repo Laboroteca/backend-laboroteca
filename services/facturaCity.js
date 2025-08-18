@@ -122,7 +122,8 @@ async function crearFacturaEnFacturaCity(datosCliente) {
 
     // ===== Cantidad y PRECIO UNITARIO BASE (sin IVA) =====
     const esEntrada = tp === 'entrada';
-    const cantidad = esEntrada ? parseInt(datosCliente.totalAsistentes || '1', 10) : 1;
+    let cantidad = esEntrada ? parseInt(datosCliente.totalAsistentes || '1', 10) : 1;
+    if (!Number.isFinite(cantidad) || cantidad < 1) cantidad = 1;
 
     // Base unitario = baseTotal / cantidad, TRUNCADO a 4 decimales (no redondear)
     const pvpUnitarioBase = trunc4(baseTotal / cantidad).toFixed(4);
@@ -132,12 +133,13 @@ async function crearFacturaEnFacturaCity(datosCliente) {
       {
         referencia,
         descripcion,
-        cantidad,
-        pvpunitario: pvpUnitarioBase, // BASE imponible por unidad
+        cantidad: parseInt(cantidad, 10), // 👈 Forzamos número entero (sin decimales)
+        pvpunitario: pvpUnitarioBase,     // BASE imponible por unidad
         codimpuesto: 'IVA21',
-        incluyeiva: '0'               // 👈 Indicamos que el pvpunitario NO incluye IVA
+        incluyeiva: '0'                   // 👈 Indicamos que el pvpunitario NO incluye IVA
       }
     ];
+
 
     // ===== Cabecera factura =====
     const factura = {

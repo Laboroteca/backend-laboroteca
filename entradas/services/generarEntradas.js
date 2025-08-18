@@ -1,5 +1,4 @@
 // /entradas/services/generarEntradas.js
-// 
 
 const fs = require('fs/promises');
 const path = require('path');
@@ -15,13 +14,22 @@ const storage = new Storage({
   credentials: JSON.parse(Buffer.from(process.env.GCP_CREDENTIALS_BASE64, 'base64').toString('utf8'))
 });
 
+// ───────────────────────── Helpers ─────────────────────────
+function slugify(s) {
+  return String(s || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .toLowerCase();
+}
+
 function generarCodigoUnico(slugEvento) {
   const letras = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   const random = () =>
     letras[Math.floor(Math.random() * letras.length)] +
     letras[Math.floor(Math.random() * letras.length)] +
     Math.floor(100 + Math.random() * 899);
-  return `${slugEvento.toUpperCase().slice(0, 3)}-${random()}`;
+  return `${String(slugEvento || 'EVT').toUpperCase().slice(0, 3)}-${random()}`;
 }
 
 function formatearFechaES() {
@@ -35,12 +43,15 @@ function formatearFechaES() {
   });
 }
 
+// ───────────────────────── Mapear formulario→Sheet ─────────────────────────
+// Mantienes el 22 y cambias el resto a 39, 40, 41, (y el último lo pongo como 42).
+// Si realmente el último también es 41, sustituye '42' por el ID correcto.
 const HOJAS_EVENTO = {
-  '22': '1W-0N5kBYxNk_DoSNWDBK7AwkM66mcQIpDHQnPooDW6s',
-  '25': '1PbhRFdm1b1bR0g5wz5nz0ZWAcgsbkakJVEh0dz34lCM',
-  '28': '1EVcNTwE4nRNp4J_rZjiMGmojNO2F5TLZiwKY0AREmZE',
-  '31': '1IUZ2_bQXxEVC_RLxNAzPBql9huu34cpE7_MF4Mg6eTM',
-  '34': '1LGLEsQ_mGj-Hmkj1vjrRQpmSvIADZ1eMaTJoh3QBmQc'
+  '22': '1W-0N5kBYxNk_DoSNWDBK7AwkM66mcQIpDHQnPooDW6s', // Formulario 1 (ID 22)
+  '39': '1PbhRFdm1b1bR0g5wz5nz0ZWAcgsbkakJVEh0dz34lCM', // antes 25
+  '40': '1EVcNTwE4nRNp4J_rZjiMGmojNO2F5TLZiwKY0AREmZE', // antes 28
+  '41': '1IUZ2_bQXxEVC_RLxNAzPBql9huu34cpE7_MF4Mg6eTM', // antes 31
+  '42': '1LGLEsQ_mGj-Hmkj1vjrRQpmSvIADZ1eMaTJoh3QBmQc'  // antes 34  ← cámbialo si el último ID es 41 también
 };
 
 async function generarEntradas({
@@ -57,8 +68,11 @@ async function generarEntradas({
   idFormulario
 }) {
   const bucket = storage.bucket('laboroteca-facturas');
+
   const spreadsheetId = HOJAS_EVENTO[idFormulario?.toString()];
-  if (!spreadsheetId) throw new Error('🟥 No se reconoce el ID del formulario para asociar hoja');
+  if (!spreadsheetId) {
+    throw new Error('🟥 No se reconoce el ID del formulario para asociar hoja');
+  }
 
   const auth = new google.auth.GoogleAuth({
     credentials: JSON.parse(Buffer.from(process.env.GCP_CREDENTIALS_BASE64, 'base64').toString('utf8')),
@@ -67,6 +81,10 @@ async function generarEntradas({
 
   const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
   const entradas = [];
+
+  // Carpeta de GCS basada en descripciónProducto (no en nombre/slug del evento)
+  // Ej.: entradas/jornadas-madrid-18-10-2025/ABC-123.pdf
+  const carpetaEvento = slugify(descripcionProducto || slugEvento || 'evento');
 
   for (let i = 0; i < numEntradas; i++) {
     const asistente = asistentes[i] || { nombre, apellidos };
@@ -105,12 +123,12 @@ async function generarEntradas({
       pdf.on('end', () => resolve(Buffer.concat(buffers)))
     );
 
-    // Subida a GCS
-    const nombreArchivo = `entradas/${slugEvento}/${codigo}.pdf`;
+    // ───────── Subida a GCS (usa descripcionProducto como carpeta) ─────────
+    const nombreArchivo = `entradas/${carpetaEvento}/${codigo}.pdf`;
     await bucket.file(nombreArchivo).save(pdfBuffer);
     console.log(`✅ Entrada subida a GCS: ${nombreArchivo}`);
 
-    // Registro en hoja del evento
+    // ───────── Registro en Google Sheets ─────────
     try {
       await sheets.spreadsheets.values.append({
         spreadsheetId,
@@ -127,16 +145,16 @@ async function generarEntradas({
       console.error(`❌ Error registrando en Google Sheets entrada ${codigo}:`, err.message);
     }
 
-    // Registro en Firebase
+    // ───────── Registro en Firebase ─────────
     try {
       await firestore.collection('entradas').doc(codigo).set({
         codigo,
         email,
         nombre: asistente.nombre,
         apellidos: asistente.apellidos,
-        slugEvento,
+        slugEvento,               // lo mantengo por compatibilidad
         fechaEvento,
-        descripcionProducto,
+        descripcionProducto,      // importante para trazabilidad de carpetas
         nEntrada: i + 1,
         usada: false,
         timestamp: Date.now()

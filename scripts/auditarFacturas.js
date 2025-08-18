@@ -8,7 +8,7 @@ const { Storage } = require('@google-cloud/storage');
 const WINDOW_DAYS = 25;
 
 // Compras (LECTURA)
-const COMPRAS_SHEET_ID = '1ShSiaz_TtODbVkczI1mfqTBj5nHb3xSEywyB0E6BL9I';
+const COMPRAS_SHEET_ID = '1Mtffq42G7Q0y44ekzvy7IWPS8obvN4pNahA-08igdGk';
 const COMPRAS_SHEET_TAB = 'Hoja 1'; // A: Nombre, B: Apellidos, C: DNI, D: Descripción, E: Importe, F: Fecha (es-ES), G: Email
 
 // Registro auditorías (ESCRITURA)

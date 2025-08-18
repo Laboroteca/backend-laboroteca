@@ -439,8 +439,12 @@ if (event.type === 'invoice.paid') {
     // Reutilizamos la dedupe de FacturaCity: invoiceId = payment_intent
     if (pi) datosCliente.invoiceId = String(pi);
 
-    if (productoNormalizado === 'entrada') {
-      datosCliente.totalAsistentes = parseInt(m.totalAsistentes || '0');
+    const tipoLower = (m.tipoProducto || '').toLowerCase().trim();
+    const totalAsist = parseInt((m.totalAsistentes || '0'), 10);
+    const esEntrada = tipoLower.startsWith('entrada') || totalAsist > 0;
+    if (esEntrada) {
+      datosCliente.tipoProducto = 'entrada';              // normalizamos
+      datosCliente.totalAsistentes = isNaN(totalAsist) ? 0 : totalAsist;
     }
 
     console.log('📦 Procesando producto:', productoSlug, '-', datosCliente.importe, '€');
@@ -539,7 +543,7 @@ if (!pdfBuffer) {
       importe: datosCliente.importe
     });
 
-    if ((datosCliente.tipoProducto || '').toLowerCase() !== 'entrada') {
+    if (!esEntrada) {
       await enviarFacturaPorEmail(datosCliente, pdfBuffer);
     }
   }
@@ -549,7 +553,7 @@ if (!pdfBuffer) {
   }
 
   // 🎫 Procesar entradas SIEMPRE (aunque DISABLE_INVOICING sea true)
-  if (datosCliente.tipoProducto?.toLowerCase() === 'entrada') {
+  if (esEntrada) {
     const procesarEntradas = require('../entradas/services/procesarEntradas');
     await procesarEntradas({ session, datosCliente, pdfBuffer }); // pdfBuffer puede ser null si kill-switch activo
   }

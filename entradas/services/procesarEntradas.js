@@ -18,16 +18,28 @@ const { registrarEntradaFirestore } = require('./registrarEntradaFirestore');
  * @param {Buffer|null} [params.pdfBuffer] - Factura en PDF (opcional, solo si se ha generado antes)
  */
 module.exports = async function procesarEntradas({ session, datosCliente, pdfBuffer = null }) {
-  const emailComprador = datosCliente.email;
+  const emailComprador  = datosCliente.email;
+
+  // ⚙️ Datos del evento (preferimos descripcionProducto para carpeta/etiquetas)
   const nombreActuacion = session.metadata.nombreProducto || 'Evento Laboroteca';
-  const fechaActuacion = session.metadata.fechaActuacion || '';
-  const slugEvento = nombreActuacion.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-  const imagenFondo = session.metadata.imagenEvento || null;
-  const formularioId = session.metadata.formularioId;
-  const total = parseInt(session.metadata.totalAsistentes || 0);
+  const descripcionProd = (session.metadata.descripcionProducto || nombreActuacion).trim();
+  const fechaActuacion  = session.metadata.fechaActuacion || '';
+  const imagenFondo     = session.metadata.imagenEvento || null;
+  const formularioId    = session.metadata.formularioId;
+  const total           = parseInt(session.metadata.totalAsistentes || 0, 10);
 
   if (!formularioId) throw new Error('Falta el formularioId en metadata');
   if (!total || total <= 0) throw new Error('Falta totalAsistentes válido');
+
+  // slug del evento para el código (seguimos usando el “nombreActuacion” como antes)
+  const slugEvento = nombreActuacion.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+
+  // carpeta basada en la descripción (Madrid/Barcelona → carpetas distintas)
+  const carpetaDescripcion = descripcionProd
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
 
   const asistentes = Array.from({ length: total }, () => ({
     nombre: '',
@@ -39,21 +51,23 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
   const sheetId = obtenerSheetIdPorFormulario(formularioId);
 
   for (const [index, asistente] of asistentes.entries()) {
+    // Prefijo del código se sigue generando con el slug del evento (sin cambio)
     const codigo = generarCodigoEntrada(slugEvento);
 
-    const pdfBuffer = await generarEntradaPDF({
+    const pdfBufferEntrada = await generarEntradaPDF({
       nombre: asistente.nombre,
       apellidos: asistente.apellidos,
       codigo,
-      nombreActuacion,
+      nombreActuacion,                         // se muestra en el PDF
       fechaActuacion,
-      descripcionProducto: session.metadata.descripcionProducto || '',
+      descripcionProducto: descripcionProd,    // también disponible para el PDF
       direccionEvento: session.metadata.direccionEvento || '',
       imagenFondo
     });
 
-    const nombreArchivo = `entradas/${slugEvento}/${codigo}.pdf`;
-    await subirEntrada(nombreArchivo, pdfBuffer);
+    // 📂 NUEVA carpeta en GCS basada en descripcionProducto (no slugEvento)
+    const nombreArchivo = `entradas/${carpetaDescripcion}/${codigo}.pdf`;
+    await subirEntrada(nombreArchivo, pdfBufferEntrada);
 
     await guardarEntradaEnSheet({
       sheetId,
@@ -67,18 +81,20 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
       codigoEntrada: codigo,
       emailComprador,
       nombreAsistente: `${asistente.nombre} ${asistente.apellidos}`.trim(),
-      slugEvento,
+      slugEvento,                 // lo mantenemos por compatibilidad
       nombreEvento: nombreActuacion
+      // (si más adelante quieres guardar también descripcionProd, se añade aquí)
     });
 
-    archivosPDF.push({ buffer: pdfBuffer });
+    archivosPDF.push({ buffer: pdfBufferEntrada });
   }
 
+  // ✉️ En el email ponemos la descripción (así coincide con la carpeta y el asunto)
   await enviarEmailConEntradas({
     email: emailComprador,
     nombre: datosCliente.nombre,
     entradas: archivosPDF,
-    descripcionProducto: nombreActuacion,
+    descripcionProducto: descripcionProd,
     importe: datosCliente.importe,
     facturaAdjunta: pdfBuffer || null
   });
@@ -87,12 +103,14 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
 };
 
 function obtenerSheetIdPorFormulario(formularioId) {
+  // 📌 ACTUALIZADO a 22, 39, 40, 41, 42 (mismos Spreadsheet IDs que antes)
+  // Si el último formulario también es 41 en tu instalación, cambia la clave '42' por '41'.
   const mapa = {
     '22': '1W-0N5kBYxNk_DoSNWDBK7AwkM66mcQIpDHQnPooDW6s',
-    '25': '1PbhRFdm1b1bR0g5wz5nz0ZWAcgsbkakJVEh0dz34lCM',
-    '28': '1EVcNTwE4nRNp4J_rZjiMGmojNO2F5TLZiwKY0AREmZE',
-    '31': '1IUZ2_bQXxEVC_RLxNAzPBql9huu34cpE7_MF4Mg6eTM',
-    '34': '1LGLEsQ_mGj-Hmkj1vjrRQpmSvIADZ1eMaTJoh3QBmQc'
+    '39': '1PbhRFdm1b1bR0g5wz5nz0ZWAcgsbkakJVEh0dz34lCM',
+    '40': '1EVcNTwE4nRNp4J_rZjiMGmojNO2F5TLZiwKY0AREmZE',
+    '41': '1IUZ2_bQXxEVC_RLxNAzPBql9huu34cpE7_MF4Mg6eTM',
+    '42': '1LGLEsQ_mGj-Hmkj1vjrRQpmSvIADZ1eMaTJoh3QBmQc'
   };
 
   const id = String(formularioId);

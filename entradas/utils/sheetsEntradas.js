@@ -214,8 +214,9 @@ async function marcarEntradaComoUsada(codigoEntrada, slugEvento) {
 
     console.log(`🎟️ Entrada ${codigo} VALIDADA en fila ${row1}`);
 
-    const nombreAsistente = filaEncontrada[0] || ''; // Columna A
-    const emailComprador  = filaEncontrada[1] || ''; // Columna B
+    // A = fecha (no es el nombre), B = comprador (email), C = código
+    const emailComprador  = filaEncontrada[1] || ''; // Columna B → email
+    const nombreAsistente = ''; // No está en la hoja con el esquema actual
 
     return { ok: true, emailComprador, nombreAsistente };
   } catch (err) {

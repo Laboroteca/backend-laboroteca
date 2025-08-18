@@ -66,8 +66,11 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
     });
 
     // 📂 NUEVA carpeta en GCS basada en descripcionProducto (no slugEvento)
-    const nombreArchivo = `entradas/${carpetaDescripcion}/${codigo}.pdf`;
-    await subirEntrada(nombreArchivo, pdfBufferEntrada);
+    const { normalizar } = require('../utils/codigos'); // ya lo tienes
+    const carpeta = normalizar(session.metadata.descripcionProducto || nombreActuacion);
+    const nombreArchivo = `entradas/${carpeta}/${codigo}.pdf`;
+
+    await subirEntrada(nombreArchivo, pdfBuffer);
 
     await guardarEntradaEnSheet({
       sheetId,

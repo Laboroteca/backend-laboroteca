@@ -72,6 +72,13 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
+// Assets públicos para el shortcode (sirve /public/contador-entradas.js)
+app.use('/assets', express.static(path.join(__dirname, 'public'), {
+  maxAge: process.env.NODE_ENV === 'production' ? '1d' : 0,
+  etag: true
+}));
+
+
 // ⚠️ Si NO tienes aún body parser global, añade uno que respete el webhook de Stripe:
 app.use((req, res, next) => {
   if (req.originalUrl === '/webhook' || req.originalUrl.startsWith('/stripe/webhook')) {
@@ -96,6 +103,8 @@ app.use('/regalos', require('./regalos/routes/crear-codigo-regalo'));
 
 app.use('/entradas/crear', require('./entradas/routes/crearEntrada'));
 app.use('/entradas/sesion', require('./entradas/routes/create-session-entrada'));
+app.use('/entradas', require('./entradas/routes/estadoEvento'));
+
 
 app.use('/', validarEntrada);
 

@@ -106,17 +106,21 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
 };
 
 function obtenerSheetIdPorFormulario(formularioId) {
-  // 📌 ACTUALIZADO a 22, 39, 40, 41, 42 (mismos Spreadsheet IDs que antes)
-  // Si el último formulario también es 41 en tu instalación, cambia la clave '42' por '41'.
+  const id = String(formularioId).trim();
+
+  // Permite override por variables de entorno y tiene fallback fijo
   const mapa = {
-    '22': '1W-0N5kBYxNk_DoSNWDBK7AwkM66mcQIpDHQnPooDW6s',
-    '39': '1PbhRFdm1b1bR0g5wz5nz0ZWAcgsbkakJVEh0dz34lCM',
-    '40': '1EVcNTwE4nRNp4J_rZjiMGmojNO2F5TLZiwKY0AREmZE',
-    '41': '1IUZ2_bQXxEVC_RLxNAzPBql9huu34cpE7_MF4Mg6eTM',
-    '42': '1LGLEsQ_mGj-Hmkj1vjrRQpmSvIADZ1eMaTJoh3QBmQc'
+    '22': process.env.SHEET_ID_FORM_22 || '1W-0N5kBYxNk_DoSNWDBK7AwkM66mcQIpDHQnPooDW6s',
+    '39': process.env.SHEET_ID_FORM_39 || '1PbhRFdm1b1bR0g5wz5nz0ZWAcgsbkakJVEh0dz34lCM',
+    '40': process.env.SHEET_ID_FORM_40 || '1EVcNTwE4nRNp4J_rZjiMGmojNO2F5TLZiwKY0AREmZE',
+    '41': process.env.SHEET_ID_FORM_41 || '1IUZ2_bQXxEVC_RLxNAzPBql9huu34cpE7_MF4Mg6eTM',
+    '42': process.env.SHEET_ID_FORM_42 || '1LGLEsQ_mGj-Hmkj1vjrRQpmSvIADZ1eMaTJoh3QBmQc'
   };
 
-  const id = String(formularioId);
-  if (!mapa[id]) throw new Error(`No se ha definido una hoja para el formularioId: ${formularioId}`);
-  return mapa[id];
+  const sheetId = mapa[id];
+  if (!sheetId) {
+    throw new Error(`No se ha definido una hoja para el formularioId: ${formularioId}`);
+  }
+  return sheetId;
 }
+

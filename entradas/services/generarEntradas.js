@@ -146,23 +146,46 @@ async function generarEntradas({
       console.error(`❌ Error registrando en Google Sheets entrada ${codigo}:`, err.message);
     }
 
-    // ───────── Registro en Firebase ─────────
-    try {
-      await firestore.collection('entradas').doc(codigo).set({
-        codigo,
-        email,
-        nombre: asistente.nombre,
-        apellidos: asistente.apellidos,
-        slugEvento,               // lo mantengo por compatibilidad
-        fechaEvento,
-        descripcionProducto,      // importante para trazabilidad de carpetas
-        nEntrada: i + 1,
-        usada: false,
-        timestamp: Date.now()
-      });
-    } catch (err) {
-      console.error(`❌ Error guardando en Firestore entrada ${codigo}:`, err.message);
-    }
+// ───────── Registro en Firestore (dos colecciones) ─────────
+try {
+  // 1) Colección principal (compat)
+  await firestore.collection('entradas').doc(codigo).set({
+    codigo,
+    email,                            // comprador
+    emailComprador: email,            // alias por compatibilidad
+    nombre: asistente.nombre || '',
+    apellidos: asistente.apellidos || '',
+    slugEvento,                       // ej. "presentacion-del-libro..."
+    nombreEvento: descripcionProducto || slugEvento || 'Evento',
+    descripcionProducto: descripcionProducto || '',
+    direccionEvento: direccionEvento || '',
+    fechaEvento: fechaEvento || '',   // formato "DD/MM/YYYY - HH:mm"
+    fechaActuacion: fechaEvento || '',// duplicado para búsquedas
+    nEntrada: i + 1,
+    usada: false,
+    fechaCompra: new Date().toISOString(),
+    timestamp: Date.now()
+  }, { merge: true });
+
+  // 2) Colección usada por “Mi cuenta”
+  await firestore.collection('entradasCompradas').doc(codigo).set({
+    codigo,
+    emailComprador: email,
+    // nombre del evento en todos los sabores
+    nombreEvento: descripcionProducto || slugEvento || 'Evento',
+    descripcionProducto: descripcionProducto || '',
+    slugEvento: slugEvento || '',
+    // localización/fecha (para mostrar/filtrar)
+    direccionEvento: direccionEvento || '',
+    fechaEvento: fechaEvento || '',
+    fechaActuacion: fechaEvento || '',
+    usado: false,
+    fechaCompra: new Date().toISOString()
+  }, { merge: true });
+
+} catch (err) {
+  console.error(`❌ Error guardando en Firestore entrada ${codigo}:`, err.message);
+}
 
     entradas.push({ codigo, nombreArchivo, buffer: pdfBuffer });
   }

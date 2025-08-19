@@ -130,17 +130,18 @@ async function generarEntradas({
 
     // ───────── Registro en Google Sheets ─────────
     try {
-      await sheets.spreadsheets.values.append({
-        spreadsheetId,
-        range: 'A2',
-        valueInputOption: 'RAW',
-        insertDataOption: 'INSERT_ROWS',
-        requestBody: {
-          values: [
-            [fechaVenta, nombreCompleto, i + 1, codigo, 'NO']
-          ]
-        }
-      });
+    await sheets.spreadsheets.values.append({
+      spreadsheetId,
+      range: 'A2',
+      valueInputOption: 'RAW',
+      insertDataOption: 'INSERT_ROWS',
+      requestBody: {
+        values: [
+          [fechaVenta, descripcionProducto, nombreCompleto, i + 1, codigo, 'NO']
+        ]
+      }
+    });
+
     } catch (err) {
       console.error(`❌ Error registrando en Google Sheets entrada ${codigo}:`, err.message);
     }

@@ -70,15 +70,17 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
     const carpeta = normalizar(session.metadata.descripcionProducto || nombreActuacion);
     const nombreArchivo = `entradas/${carpeta}/${codigo}.pdf`;
 
-    await subirEntrada(nombreArchivo, pdfBuffer);
+    await subirEntrada(nombreArchivo, pdfBufferEntrada);
 
     await guardarEntradaEnSheet({
       sheetId,
       codigo,
       comprador: emailComprador,
+      descripcionProducto: descripcionProd, // 👈 nuevo campo
       usado: 'NO',
       fecha: fechaGeneracion
     });
+
 
     await registrarEntradaFirestore({
       codigoEntrada: codigo,
@@ -123,4 +125,3 @@ function obtenerSheetIdPorFormulario(formularioId) {
   }
   return sheetId;
 }
-

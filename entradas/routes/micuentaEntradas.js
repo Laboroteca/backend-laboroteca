@@ -41,11 +41,12 @@ function parseFechaDMY(fecha) {
 }
 
 // agrupa por (desc+dir+fecha) y filtra futuros
+// agrupa por (desc+dir+fecha), SOLO futuros, y deduplica por código
 async function cargarEventosFuturos(email) {
   const ahora = new Date();
-  const grupos = new Map();
+  const grupos = new Map(); // key -> { descripcionProducto, direccionEvento, fechaEvento, codigos:Set }
 
-  function acumula(d) {
+  function acumula(id, d) {
     d = d || {};
     const desc  = d.descripcionProducto || d.nombreEvento || d.slugEvento || 'Evento';
     const dir   = d.direccionEvento || '';
@@ -53,37 +54,56 @@ async function cargarEventosFuturos(email) {
     const f = parseFechaDMY(fecha);
     if (!f || f < ahora) return;
 
+    // código único de la entrada (preferimos campo de datos; si no, doc.id)
+    const codigo = (d.codigo || d.codigoEntrada || '').toString().trim() || String(id || '').trim();
+    if (!codigo) return;
+
     const key = JSON.stringify({ desc, dir, fecha });
-    const item = grupos.get(key) || {
-      descripcionProducto: desc,
-      direccionEvento: dir,
-      fechaEvento: fecha,
-      cantidad: 0
-    };
-    item.cantidad += 1;
-    grupos.set(key, item);
+    let item = grupos.get(key);
+    if (!item) {
+      item = {
+        descripcionProducto: desc,
+        direccionEvento: dir,
+        fechaEvento: fecha,
+        codigos: new Set()
+      };
+      grupos.set(key, item);
+    }
+    // deduplicación: si ya está el código, no suma
+    item.codigos.add(codigo);
   }
 
   // 1) entradasCompradas
   const qA = await firestore.collection('entradasCompradas')
     .where('emailComprador', '==', email)
     .get();
-  qA.forEach(doc => acumula(doc.data()));
+  qA.forEach(doc => acumula(doc.id, doc.data()));
 
   // 2) entradas (email)
   const qB = await firestore.collection('entradas')
     .where('email', '==', email)
     .get();
-  qB.forEach(doc => acumula(doc.data()));
+  qB.forEach(doc => acumula(doc.id, doc.data()));
 
   // 3) entradas (emailComprador)
   const qC = await firestore.collection('entradas')
     .where('emailComprador', '==', email)
     .get();
-  qC.forEach(doc => acumula(doc.data()));
+  qC.forEach(doc => acumula(doc.id, doc.data()));
 
-  return Array.from(grupos.values());
+  // Convertimos a array con cantidad = nº de códigos únicos por grupo
+  const items = [];
+  for (const item of grupos.values()) {
+    items.push({
+      descripcionProducto: item.descripcionProducto,
+      direccionEvento: item.direccionEvento,
+      fechaEvento: item.fechaEvento,
+      cantidad: item.codigos.size
+    });
+  }
+  return items;
 }
+
 
 // ───────────────────────── Rutas lectura
 

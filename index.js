@@ -98,6 +98,8 @@ app.use('/regalos', require('./regalos/routes/crear-codigo-regalo'));
 app.use('/entradas/crear', require('./entradas/routes/crearEntrada'));
 app.use('/entradas/sesion', require('./entradas/routes/create-session-entrada'));
 
+app.use('/', require('./routes/micuentaEntradas'));
+
 app.use('/', validarEntrada);
 
 const pagoLimiter = rateLimit({

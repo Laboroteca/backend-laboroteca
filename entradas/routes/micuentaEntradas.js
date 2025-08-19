@@ -239,4 +239,95 @@ router.get('/entradas/reenviar', (_req, res) => {
   res.status(405).json({ error: 'Usa método POST con JSON' });
 });
 
+// ========== DISPONIBILIDAD ==========
+// GET /entradas/disponibilidad?descripcion=...&formId=39&maximo=120 (maximo opcional)
+// Cuenta códigos únicos y consulta config del evento en "events/<slug>"
+router.get('/entradas/disponibilidad', async (req, res) => {
+  try {
+    const descRaw = String(req.query.descripcion || '').trim();
+    const formId  = String(req.query.formId || '39').trim();
+    const maxFromQuery = req.query.maximo ? parseInt(String(req.query.maximo), 10) : null;
+
+    if (!descRaw) {
+      return res.status(400).json({ error: 'Falta descripcion' });
+    }
+    const desc = descRaw;
+    const slug = slugify(desc);
+
+    // 1) Config del evento (si existe)
+    let maximoEntradas = null;
+    let fechaActuacion = null;
+
+    const evDoc = await firestore.collection('events').doc(slug).get();
+    if (evDoc.exists) {
+      const ev = evDoc.data() || {};
+      if (typeof ev.maximoEntradas === 'number') maximoEntradas = ev.maximoEntradas;
+      if (ev.fechaActuacion) fechaActuacion = ev.fechaActuacion;
+    }
+    // Permite override por query mientras pueblas "events"
+    if (maxFromQuery && Number.isFinite(maxFromQuery)) {
+      maximoEntradas = maxFromQuery;
+    }
+
+    // 2) Reunir códigos únicos de ambas colecciones por descripcionProducto
+    const [qA, qB] = await Promise.all([
+      firestore.collection('entradas')
+        .where('descripcionProducto', '==', desc)
+        .get(),
+      firestore.collection('entradasCompradas')
+        .where('descripcionProducto', '==', desc)
+        .get()
+    ]);
+    const codigos = new Set();
+    qA.forEach(d => { const x = d.data(); if (x && x.codigo) codigos.add(x.codigo); });
+    qB.forEach(d => { const x = d.data(); if (x && x.codigo) codigos.add(x.codigo); });
+
+    const vendidos = codigos.size;
+
+    // 3) Cerrado por fecha
+    // Si no vino de events, intenta deducir del primer doc
+    function parseFechaDMY(fecha) {
+      if (!fecha) return null;
+      const m = String(fecha).match(/^(\d{2})\/(\d{2})\/(\d{4})\s*-\s*(\d{2}):(\d{2})$/);
+      if (m) {
+        const [_, dd, mm, yyyy, HH, MM] = m;
+        const d = new Date(Number(yyyy), Number(mm) - 1, Number(dd), Number(HH), Number(MM), 0);
+        return isNaN(d.getTime()) ? null : d;
+      }
+      const d = new Date(fecha);
+      return isNaN(d.getTime()) ? null : d;
+    }
+
+    if (!fechaActuacion) {
+      const anyDoc = qA.docs[0] || qB.docs[0];
+      if (anyDoc && anyDoc.exists) {
+        const x = anyDoc.data() || {};
+        fechaActuacion = x.fechaActuacion || x.fechaEvento || null;
+      }
+    }
+    let cerrado = false;
+    if (fechaActuacion) {
+      const d = parseFechaDMY(fechaActuacion);
+      if (d && d.getTime() < Date.now()) cerrado = true;
+    }
+
+    // 4) Agotado si tenemos maximoEntradas y vendidos >= maximo
+    const agotado = Number.isFinite(maximoEntradas) ? (vendidos >= maximoEntradas) : false;
+
+    return res.json({
+      ok: true,
+      formId,
+      descripcionProducto: desc,
+      fechaActuacion: fechaActuacion || null,
+      vendidos,
+      maximo: Number.isFinite(maximoEntradas) ? maximoEntradas : null,
+      agotado,
+      cerrado
+    });
+  } catch (e) {
+    console.error('❌ GET /entradas/disponibilidad', e);
+    return res.status(500).json({ error: 'Error calculando disponibilidad' });
+  }
+});
+
 module.exports = router;

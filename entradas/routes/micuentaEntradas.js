@@ -1,33 +1,38 @@
-// entradas/routes/micuentaEntradas.js
+const express = require('express');
+const router = express.Router();
+const admin = require('../../firebase');
+const firestore = admin.firestore();
+
+/**
+ * GET /cuenta/entradas-lite
+ * Devuelve listado simplificado de entradas para un email
+ */
 router.get('/cuenta/entradas-lite', async (req, res) => {
   try {
-    const email = String(req.query.email || '').trim().toLowerCase();
-    if (!email) return res.status(400).json({ ok: false, error: 'Falta email' });
+    const email = (req.query.email || '').toLowerCase().trim();
+    if (!email) {
+      return res.status(400).json({ ok: false, error: 'Falta email' });
+    }
 
-    const snap = await firestore.collection('entradasCompradas')
-      .where('emailComprador', '==', email)
-      .get();
+    const ref = firestore.collection('entradasCompradas').doc(email);
+    const snap = await ref.get();
 
-    if (snap.empty) return res.json({ ok: true, count: 0, items: [] });
+    if (!snap.exists) {
+      return res.json({ ok: true, count: 0, items: [] });
+    }
 
-    const ahora = dayjs().tz(TZ);
-    const items = [];
+    const data = snap.data();
+    const items = data?.items || [];
 
-    snap.forEach(doc => {
-      const d = doc.data();
-      const f = parseFechaMadrid(d.fechaActuacion || d.fechaEvento || '');
-      if (f && f.isAfter(ahora)) {
-        items.push({
-          descripcionProducto: d.descripcionProducto,
-          direccionEvento: d.direccionEvento || '',
-          fecha: f.format('DD/MM/YYYY HH:mm'),
-        });
-      }
+    res.json({
+      ok: true,
+      count: items.length,
+      items
     });
-
-    return res.json({ ok: true, count: items.length, items });
-  } catch (e) {
-    console.error('❌ /cuenta/entradas-lite', e);
-    return res.status(500).json({ ok: false, error: 'Error' });
+  } catch (err) {
+    console.error('❌ Error en /cuenta/entradas-lite:', err);
+    res.status(500).json({ ok: false, error: 'Error interno' });
   }
 });
+
+module.exports = router;

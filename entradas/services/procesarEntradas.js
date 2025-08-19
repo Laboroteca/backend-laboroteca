@@ -86,10 +86,13 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
       codigoEntrada: codigo,
       emailComprador,
       nombreAsistente: `${asistente.nombre} ${asistente.apellidos}`.trim(),
-      slugEvento,                 // lo mantenemos por compatibilidad
-      nombreEvento: nombreActuacion
-      // (si más adelante quieres guardar también descripcionProd, se añade aquí)
+      slugEvento,                       // compat
+      nombreEvento: nombreActuacion,    // compat
+      descripcionProducto: descripcionProd,
+      direccionEvento: session.metadata.direccionEvento || '',
+      fechaActuacion                    : fechaActuacion              // "DD/MM/YYYY - HH:mm"
     });
+
 
     archivosPDF.push({ buffer: pdfBufferEntrada });
   }

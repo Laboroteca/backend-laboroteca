@@ -1,35 +1,57 @@
-const admin = require('../../firebase');
+// services/registrarEntradaFirestore.js
+const admin = require('../firebase');
 const firestore = admin.firestore();
 
 /**
- * Guarda la entrada en Firestore al generarse tras compra
- * @param {Object} entrada
- * @param {string} entrada.codigoEntrada - Código único (ej. PRE-XW658)
- * @param {string} entrada.emailComprador
- * @param {string} entrada.nombreAsistente
- * @param {string} entrada.slugEvento - ej. 'evento-1'
- * @param {string} entrada.nombreEvento - ej. 'Evento 1 Madrid Octubre 2025'
+ * Registra una entrada en Firestore (colecciones: 'entradas' y 'entradasCompradas')
  */
 async function registrarEntradaFirestore({
   codigoEntrada,
   emailComprador,
-  nombreAsistente,
-  slugEvento,
-  nombreEvento
+  nombreAsistente = '',
+  slugEvento = '',
+  nombreEvento = '',
+  descripcionProducto = '',
+  direccionEvento = '',
+  fechaActuacion = '' // "DD/MM/YYYY - HH:mm"
 }) {
-  if (!codigoEntrada) throw new Error('Código de entrada no válido.');
+  if (!codigoEntrada || !emailComprador) {
+    throw new Error('registrarEntradaFirestore: faltan codigoEntrada o emailComprador');
+  }
 
-  const docRef = firestore.collection('entradasCompradas').doc(codigoEntrada);
-  await docRef.set({
-    emailComprador,
-    nombreAsistente,
-    slugEvento,
-    nombreEvento,
-    usado: false,
-    fechaCompra: new Date().toISOString()
-  });
+  const nowIso = new Date().toISOString();
 
-  console.log(`📥 Entrada registrada en Firestore: ${codigoEntrada}`);
+  // 1) Colección principal (compat)
+  await firestore.collection('entradas').doc(codigoEntrada).set({
+    codigo           : codigoEntrada,
+    email            : emailComprador,
+    emailComprador   : emailComprador,
+    nombre           : nombreAsistente.split(' ').slice(0, -1).join(' ') || '',
+    apellidos        : nombreAsistente.split(' ').slice(-1).join(' ') || '',
+    slugEvento       : slugEvento,
+    nombreEvento     : nombreEvento || descripcionProducto || slugEvento || 'Evento',
+    descripcionProducto: descripcionProducto || '',
+    direccionEvento  : direccionEvento || '',
+    fechaEvento      : fechaActuacion || '',
+    fechaActuacion   : fechaActuacion || '',
+    usada            : false,
+    fechaCompra      : nowIso,
+    timestamp        : Date.now()
+  }, { merge: true });
+
+  // 2) Colección usada por “Mi cuenta”
+  await firestore.collection('entradasCompradas').doc(codigoEntrada).set({
+    codigo              : codigoEntrada,
+    emailComprador      : emailComprador,
+    nombreEvento        : nombreEvento || descripcionProducto || slugEvento || 'Evento',
+    descripcionProducto : descripcionProducto || '',
+    slugEvento          : slugEvento || '',
+    direccionEvento     : direccionEvento || '',
+    fechaEvento         : fechaActuacion || '',
+    fechaActuacion      : fechaActuacion || '',
+    usado               : false,
+    fechaCompra         : nowIso
+  }, { merge: true });
 }
 
 module.exports = { registrarEntradaFirestore };

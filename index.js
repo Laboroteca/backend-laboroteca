@@ -73,20 +73,16 @@ app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
 
-// ⚠️ Si NO tienes aún body parser global, añade uno que respete el webhook de Stripe:
-app.use((req, res, next) => {
-  if (req.originalUrl === '/webhook' || req.originalUrl.startsWith('/stripe/webhook')) {
-    return next(); // deja el raw body para Stripe
-  }
-  return express.json({ limit: '1mb' })(req, res, next);
-});
+// ⚠️ WEBHOOK: SIEMPRE EL PRIMERO Y EN RAW
+app.use('/webhook', require('./routes/webhook'));
+
+app.use(express.json({ limit: '2mb' }));
+app.use(express.urlencoded({ extended: true }));
+
 
 // NUEVO: ruta para registrar consentimiento
 app.use(registrarConsentimiento);
 
-
-// ⚠️ WEBHOOK: SIEMPRE EL PRIMERO Y EN RAW
-app.use('/webhook', require('./routes/webhook'));
 
 // DESPUÉS DEL WEBHOOK, LOS BODY PARSERS
 app.use(require('./routes/solicitarEliminacionCuenta'));
@@ -99,6 +95,7 @@ app.use('/entradas/crear', require('./entradas/routes/crearEntrada'));
 app.use('/entradas/sesion', require('./entradas/routes/create-session-entrada'));
 
 app.use('/', require('./entradas/routes/micuentaEntradas'));
+app.use(require('./routes/micuentaFacturas'));
 
 app.use('/', validarEntrada);
 

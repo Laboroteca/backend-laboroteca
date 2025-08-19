@@ -18,7 +18,7 @@ const PRODUCTOS = {
     nombre: 'Entrada evento',
     slug: 'entrada-evento',
     descripcion: 'Entrada para evento presencial',
-    imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/07/ENTRADAS-LABOROTECA-scaled.webp'
+    imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/08/logo-entradas-laboroteca-scaled.webp'
   }
 
 };

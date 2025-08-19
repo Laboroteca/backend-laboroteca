@@ -22,7 +22,7 @@ async function generarEntradaPDF({
     ? imagenFondo
     : 'https://www.laboroteca.es/wp-content/uploads/2025/08/logo-entradas-laboroteca-qr-scaled.jpg';
 
-    
+
   let imagenHeight = 0;
   try {
     const response = await fetch(urlFondo);
@@ -147,7 +147,7 @@ for (let i = 0; i < tablaItems.length; i += 2) {
 }
 
 
-  // ✅ Imagen promocional
+  // ✅ Imagen promocional entradas
   const clubImgURL = 'https://www.laboroteca.es/wp-content/uploads/2025/08/CLUB-LABOROTECA-scaled.jpg';
 
   try {

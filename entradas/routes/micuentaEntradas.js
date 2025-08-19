@@ -2,59 +2,56 @@
 const express = require('express');
 const router = express.Router();
 
-// ✅ este router acepta JSON y form-urlencoded (para el formulario de WP)
-router.use(express.json({ limit: '1mb' }));
-router.use(express.urlencoded({ extended: true, limit: '1mb' }));
-
 const admin = require('../../firebase');
 const firestore = admin.firestore();
 
 const { Storage } = require('@google-cloud/storage');
 const { enviarEmailConEntradas } = require('../services/enviarEmailConEntradas');
 
-const dayjs = require('dayjs');
-const customParse = require('dayjs/plugin/customParseFormat');
-const utc = require('dayjs/plugin/utc');
-const tz = require('dayjs/plugin/timezone');
-dayjs.extend(customParse); dayjs.extend(utc); dayjs.extend(tz);
-
-const TZ = 'Europe/Madrid';
-
-// ───────── GCS
+// ───────────────────────── GCS
 const storage = new Storage({
   credentials: JSON.parse(
-    Buffer.from(process.env.GCP_CREDENTIALS_BASE64, 'base64').toString('utf8')
+    Buffer.from(process.env.GCP_CREDENTIALS_BASE64 || '', 'base64').toString('utf8')
   ),
 });
 const bucket = storage.bucket('laboroteca-facturas');
 
-// ───────── Utils
-function slugify(s = '') {
-  return String(s)
+// ───────────────────────── Utils
+function slugify(s) {
+  return String(s || '')
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-zA-Z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .toLowerCase();
 }
-function parseFechaMadrid(s = '') {
-  if (!s) return null;
-  const d1 = dayjs.tz(s, 'DD/MM/YYYY - HH:mm', TZ, true);
-  if (d1.isValid()) return d1;
-  const d2 = dayjs(s);
-  return d2.isValid() ? d2.tz(TZ) : null;
+
+// "30/10/2025 - 17:00" -> Date
+function parseFechaDMY(fecha) {
+  if (!fecha) return null;
+  const m = String(fecha).match(/^(\d{2})\/(\d{2})\/(\d{4})\s*-\s*(\d{2}):(\d{2})$/);
+  if (m) {
+    const [_, dd, mm, yyyy, HH, MM] = m;
+    // Interpretamos como hora local del servidor
+    const d = new Date(Number(yyyy), Number(mm) - 1, Number(dd), Number(HH), Number(MM), 0);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  // fallback genérico
+  const d = new Date(fecha);
+  return isNaN(d.getTime()) ? null : d;
 }
 
-// Agrupa docs por (desc+dir+fecha) y devuelve SOLO futuros
+// agrupa por (desc+dir+fecha) y filtra futuros
 async function cargarEventosFuturos(email) {
-  const ahora = dayjs().tz(TZ);
+  const ahora = new Date();
   const grupos = new Map();
 
   function acumula(d) {
+    d = d || {};
     const desc  = d.descripcionProducto || d.nombreEvento || d.slugEvento || 'Evento';
     const dir   = d.direccionEvento || '';
     const fecha = d.fechaActuacion || d.fechaEvento || '';
-    const f = parseFechaMadrid(fecha);
-    if (!f || f.isBefore(ahora)) return;
+    const f = parseFechaDMY(fecha);
+    if (!f || f < ahora) return;
 
     const key = JSON.stringify({ desc, dir, fecha });
     const item = grupos.get(key) || {
@@ -67,7 +64,7 @@ async function cargarEventosFuturos(email) {
     grupos.set(key, item);
   }
 
-  // 1) entradasCompradas (emailComprador)
+  // 1) entradasCompradas
   const qA = await firestore.collection('entradasCompradas')
     .where('emailComprador', '==', email)
     .get();
@@ -79,7 +76,7 @@ async function cargarEventosFuturos(email) {
     .get();
   qB.forEach(doc => acumula(doc.data()));
 
-  // 3) entradas (emailComprador) por compatibilidad
+  // 3) entradas (emailComprador)
   const qC = await firestore.collection('entradas')
     .where('emailComprador', '==', email)
     .get();
@@ -88,77 +85,96 @@ async function cargarEventosFuturos(email) {
   return Array.from(grupos.values());
 }
 
-/**
- * GET /cuenta/entradas?email=...
- * Devuelve grupos (solo FUTUROS) por descripcion+direccion+fecha con cantidad
- */
+// ───────────────────────── Rutas lectura
+
+// GET /cuenta/entradas?email=...
 router.get('/cuenta/entradas', async (req, res) => {
   try {
     const email = String(req.query.email || '').trim().toLowerCase();
     if (!email) return res.status(400).json({ error: 'Falta email' });
 
     const items = await cargarEventosFuturos(email);
-    return res.json({ ok: true, items });
+    res.json({ ok: true, items });
   } catch (e) {
     console.error('❌ GET /cuenta/entradas', e);
-    return res.status(500).json({ error: 'Error listando entradas' });
+    res.status(500).json({ error: 'Error listando entradas' });
   }
 });
 
-/**
- * GET /cuenta/entradas-lite?email=...
- * Resumen: total de entradas futuras y el primer evento (si existe)
- */
+// GET /cuenta/entradas-lite?email=...
 router.get('/cuenta/entradas-lite', async (req, res) => {
   try {
     const email = String(req.query.email || '').trim().toLowerCase();
     if (!email) return res.status(400).json({ error: 'Falta email' });
 
     const items = await cargarEventosFuturos(email);
-    const count = items.reduce((acc, it) => acc + (it.cantidad || 0), 0);
+    const count = items.reduce((acc, it) => acc + (Number(it.cantidad) || 0), 0);
 
-    // ordena por fecha asc si se puede parsear
+    // ordenar por fecha asc
     items.sort((a, b) => {
-      const fa = parseFechaMadrid(a.fechaEvento); const fb = parseFechaMadrid(b.fechaEvento);
-      if (!fa && !fb) return 0; if (!fa) return 1; if (!fb) return -1;
-      return fa.valueOf() - fb.valueOf();
+      const fa = parseFechaDMY(a.fechaEvento);
+      const fb = parseFechaDMY(b.fechaEvento);
+      if (!fa && !fb) return 0;
+      if (!fa) return 1;
+      if (!fb) return -1;
+      return fa.getTime() - fb.getTime();
     });
 
-    return res.json({
-      ok: true,
-      count,
-      items,
-      first: items[0] || null
-    });
+    res.json({ ok: true, count, items, first: items[0] || null });
   } catch (e) {
     console.error('❌ GET /cuenta/entradas-lite', e);
-    return res.status(500).json({ error: 'Error listando entradas' });
+    res.status(500).json({ error: 'Error listando entradas' });
   }
 });
 
-/**
- * POST /entradas/reenviar
- * Body (form o JSON):
- *   { emailDestino, emailComprador, descripcionProducto }
- * Reúne PDFs desde GCS por descripcionProducto y email, y los reenvía por email.
- */
+// ───────────────────────── Reenvío por email
+
+async function obtenerBuffersPdfsPorCodigos(descripcion, codigos) {
+  const entradasBuffers = [];
+  const unique = Array.from(new Set(codigos)).filter(Boolean);
+
+  // 1) carpeta por descripción
+  const carpeta = `entradas/${slugify(descripcion)}/`;
+  for (const codigo of unique) {
+    const file = bucket.file(`${carpeta}${codigo}.pdf`);
+    const [exists] = await file.exists();
+    if (exists) {
+      const [buf] = await file.download();
+      entradasBuffers.push({ buffer: buf });
+    }
+  }
+  if (entradasBuffers.length > 0) return entradasBuffers;
+
+  // 2) fallback: buscar {codigo}.pdf en cualquier subcarpeta de /entradas
+  const [allFiles] = await bucket.getFiles({ prefix: 'entradas/' });
+  const need = new Set(unique.map(c => `${c}.pdf`));
+
+  for (const f of allFiles) {
+    const name = f.name || '';
+    const last = name.split('/').pop();
+    if (last && need.has(last)) {
+      const [buf] = await bucket.file(name).download();
+      entradasBuffers.push({ buffer: buf });
+      need.delete(last);
+      if (need.size === 0) break;
+    }
+  }
+  return entradasBuffers;
+}
+
+// POST /entradas/reenviar
+// Body: { emailDestino, emailComprador, descripcionProducto }
 router.post('/entradas/reenviar', async (req, res) => {
   try {
-    const {
-      emailDestino = '',
-      emailComprador = '',
-      descripcionProducto = ''
-    } = req.body || {};
-
-    const to = String(emailDestino).trim().toLowerCase();
-    const comprador = String(emailComprador).trim().toLowerCase();
-    const desc = String(descripcionProducto).trim();
+    const body = req.body || {};
+    const to         = String(body.emailDestino || '').trim().toLowerCase();
+    const comprador  = String(body.emailComprador || '').trim().toLowerCase();
+    const desc       = String(body.descripcionProducto || '').trim();
 
     if (!to || !comprador || !desc) {
       return res.status(400).json({ error: 'Faltan campos: emailDestino, emailComprador, descripcionProducto' });
     }
 
-    // Busca códigos en ambas colecciones
     const [q1, q2] = await Promise.all([
       firestore.collection('entradasCompradas')
         .where('emailComprador', '==', comprador)
@@ -171,43 +187,36 @@ router.post('/entradas/reenviar', async (req, res) => {
     ]);
 
     const codigos = new Set();
-    q1.forEach(d => d.data().codigo && codigos.add(d.data().codigo));
-    q2.forEach(d => d.data().codigo && codigos.add(d.data().codigo));
+    q1.forEach(d => { const x = d.data(); if (x && x.codigo) codigos.add(x.codigo); });
+    q2.forEach(d => { const x = d.data(); if (x && x.codigo) codigos.add(x.codigo); });
 
     if (codigos.size === 0) {
       return res.status(404).json({ error: 'No se han encontrado entradas para ese evento' });
     }
 
-    const carpeta = `entradas/${slugify(desc)}/`;
-    const entradasBuffers = [];
-
-    // por seguridad, máximo 20 adjuntos
-    const MAX_ADJUNTOS = 20;
-    for (const codigo of Array.from(codigos).slice(0, MAX_ADJUNTOS)) {
-      const file = bucket.file(`${carpeta}${codigo}.pdf`);
-      const [exists] = await file.exists();
-      if (!exists) continue;
-      const [buf] = await file.download();
-      entradasBuffers.push({ buffer: buf });
-    }
-
-    if (entradasBuffers.length === 0) {
+    const buffers = await obtenerBuffersPdfsPorCodigos(desc, Array.from(codigos));
+    if (buffers.length === 0) {
       return res.status(404).json({ error: 'No se han encontrado PDFs en GCS para ese evento' });
     }
 
     await enviarEmailConEntradas({
       email: to,
       nombre: comprador,
-      entradas: entradasBuffers,
+      entradas: buffers,
       descripcionProducto: desc,
       importe: 0
     });
 
-    return res.json({ ok: true, reenviadas: entradasBuffers.length });
+    res.json({ ok: true, reenviadas: buffers.length });
   } catch (e) {
     console.error('❌ POST /entradas/reenviar', e);
-    return res.status(500).json({ error: 'Error reenviando entradas' });
+    res.status(500).json({ error: 'Error reenviando entradas' });
   }
+});
+
+// GET defensivo (no navegar al backend por error)
+router.get('/entradas/reenviar', (_req, res) => {
+  res.status(405).json({ error: 'Usa método POST con JSON' });
 });
 
 module.exports = router;

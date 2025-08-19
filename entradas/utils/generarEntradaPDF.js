@@ -20,8 +20,9 @@ async function generarEntradaPDF({
   // ✅ Imagen de fondo proporcional
   const urlFondo = imagenFondo?.startsWith('http')
     ? imagenFondo
-    : 'https://www.laboroteca.es/wp-content/uploads/2025/08/entradas-laboroteca-1.jpg';
+    : 'https://www.laboroteca.es/wp-content/uploads/2025/08/logo-entradas-laboroteca-qr-scaled.jpg';
 
+    
   let imagenHeight = 0;
   try {
     const response = await fetch(urlFondo);

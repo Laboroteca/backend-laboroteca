@@ -325,48 +325,6 @@ if (event.type === 'invoice.paid') {
       tipo: isAlta ? 'alta' : 'renovacion'
     });
 
-    // 📝 Además registrar todos los datos en colección "facturas"
-    try {
-      const facturaDocId = invoiceId || sessionId || `manual_${Date.now()}`;
-      await firestore.collection('facturas').doc(facturaDocId).set({
-        invoiceId: invoiceId || null,
-        idfactura: datosRenovacion?.idfactura || null,
-
-        email: email || null,
-        nombre: datosRenovacion?.nombre || null,
-        apellidos: datosRenovacion?.apellidos || null,
-        dni: datosRenovacion?.dni || null,
-        direccion: datosRenovacion?.direccion || null,
-        ciudad: datosRenovacion?.ciudad || null,
-        provincia: datosRenovacion?.provincia || null,
-        cp: datosRenovacion?.cp || null,
-
-        fechaISO: new Date().toISOString(),
-        fechaTexto: obtenerFechaHoy().replace(/-/g, '/'),
-
-        descripcionProducto: datosRenovacion?.descripcionProducto || datosCliente?.descripcionProducto || null,
-        nombreProducto: datosRenovacion?.nombreProducto || datosCliente?.nombreProducto || null,
-        tipoProducto: datosRenovacion?.tipoProducto || datosCliente?.tipoProducto || null,
-        producto: datosRenovacion?.producto || datosCliente?.producto || null,
-
-        importeTotalIVA: datosRenovacion?.importe || datosCliente?.importe || null,
-        importeBase: datosRenovacion?.importeBase || null,
-        cantidad: datosRenovacion?.cantidad || 1,
-        referencia: datosRenovacion?.referencia || null,
-
-        nombreArchivo: null,   // se podrá completar cuando subas a GCS
-        storagePath: null,
-        gcsUrl: null,
-
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
-      }, { merge: true });
-
-      console.log(`✅ Factura registrada en Firestore (facturas) para ${email}`);
-    } catch (err) {
-      console.warn('⚠️ No se pudo registrar factura en Firestore:', err?.message || err);
-    }
-
 
     console.log(`✅ Factura de ${isAlta ? 'ALTA' : 'RENOVACIÓN'} procesada para ${email}`);
   } catch (error) {

@@ -18,6 +18,102 @@ const { ensureOnce } = require('../utils/dedupe');
 const AXIOS_TIMEOUT = 10000; // 10s razonable
 const fcHeaders = { Token: FACTURACITY_API_KEY, 'Content-Type': 'application/x-www-form-urlencoded' };
 
+// ───────── Firestore (registro de facturas) ─────────
+const admin = require('../firebase');
+const firestore = admin.firestore();
+
+function pickNumeroFactura(doc) {
+  return (
+    doc?.numfactura ||
+    doc?.numero ||
+    doc?.numFactura ||
+    doc?.codigo ||
+    doc?.codigoFactura ||
+    null
+  );
+}
+
+function pickFechaFactura(doc) {
+  // intenta extraer fecha de la respuesta de FacturaCity; si no, usa "hoy"
+  const raw = doc?.fechafactura || doc?.fecha || null;
+  if (typeof raw === 'string') {
+    // admite "dd/mm/aaaa" o "aaaa-mm-dd" o "dd-mm-aaaa"
+    const m1 = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (m1) {
+      const [_, dd, mm, yyyy] = m1;
+      const d = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+      return {
+        iso: d.toISOString(),
+        texto: `${dd}/${mm}/${yyyy}`
+      };
+    }
+    const m2 = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (m2) {
+      const [_, yyyy, mm, dd] = m2;
+      const d = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+      return {
+        iso: d.toISOString(),
+        texto: `${dd}/${mm}/${yyyy}`
+      };
+    }
+    const m3 = raw.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+    if (m3) {
+      const [_, dd, mm, yyyy] = m3;
+      const d = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+      return {
+        iso: d.toISOString(),
+        texto: `${dd}/${mm}/${yyyy}`
+      };
+    }
+  }
+  // fallback: hoy
+  const hoy = new Date();
+  const dd = String(hoy.getDate()).padStart(2, '0');
+  const mm = String(hoy.getMonth() + 1).padStart(2, '0');
+  const yyyy = hoy.getFullYear();
+  return { iso: hoy.toISOString(), texto: `${dd}/${mm}/${yyyy}` };
+}
+
+async function registrarFacturaEnFirestore(payload) {
+  try {
+    // ── ID del documento robusto ──
+    const docId =
+      payload.invoiceId
+        ? `inv_${payload.invoiceId}`
+        : payload.idfactura
+          ? `fc_${payload.idfactura}`
+          : `tmp_${Date.now()}`;
+
+    // ── Normalización de fecha ──
+    const fechaObj = pickFechaFactura(payload);
+
+    // ── Escritura en colección 'facturas' ──
+    await firestore.collection('facturas').doc(docId).set({
+      // Claves fuertes
+      invoiceId: payload.invoiceId || null,
+      idfactura: payload.idfactura || null,
+      numeroFactura: payload.numeroFactura || null,
+
+      // Datos de control
+      email: payload.email || null,
+      tipo: payload.tipo || null, // alta o renovacion
+      fechaISO: fechaObj.iso,
+      fechaTexto: fechaObj.texto,
+
+      // Descripción e importes
+      descripcionProducto: payload.descripcionProducto || null,
+      importeTotalIVA: payload.importeTotalIVA ?? null,
+      moneda: payload.moneda || 'EUR',
+
+      // Timestamp de inserción
+      insertadoEn: new Date().toISOString()
+    }, { merge: true });
+  } catch (e) {
+    console.error('❌ Error al registrar factura en Firestore:', e);
+    // no romper el flujo, solo loguear
+  }
+}
+
 
 // Trunca a 4 decimales sin redondear (hacia abajo)
 function trunc4(n) {
@@ -167,6 +263,35 @@ async function crearFacturaEnFacturaCity(datosCliente) {
     const idfactura = facturaResp.data?.doc?.idfactura;
     if (!idfactura) throw new Error('❌ No se recibió idfactura');
     console.log(`✅ Factura emitida idfactura=${idfactura} invoiceId=${datosCliente.invoiceId || 'N/A'} email=${datosCliente.email}`);
+
+
+    // Nº de factura (legible si lo devuelve la API) y fecha
+    const numeroFactura = pickNumeroFactura(facturaResp.data?.doc) || String(idfactura);
+    const { iso: fechaISO, texto: fechaTexto } = pickFechaFactura(facturaResp.data?.doc);
+
+    // Registrar en Firestore (NO BLOQUEA)
+    await registrarFacturaEnFirestore({
+      invoiceId: datosCliente.invoiceId || null,
+      idfactura,
+      numeroFactura,
+
+      email: datosCliente.email,
+      nombre: datosCliente.nombre,
+      apellidos: datosCliente.apellidos,
+      dni: datosCliente.dni,
+
+      fechaISO,
+      fechaTexto,
+
+      descripcionProducto: (datosCliente.descripcionProducto || datosCliente.descripcion || datosCliente.producto || '').trim(),
+      nombreProducto: datosCliente.nombreProducto || null,
+      tipoProducto: datosCliente.tipoProducto || null,
+      importeTotalIVA: Number.parseFloat(String(datosCliente.importe).replace(',', '.')),
+      importeBase: Number(baseTotal.toFixed(4)),  // ya lo calculas arriba
+      cantidad,                                   // ya calculada arriba
+      referencia,                                 // ya calculada arriba
+    });
+
 
     const pdfUrl = `${API_BASE}/exportarFacturaCliente/${idfactura}?lang=es_ES`;
     const pdfResponse = await axios.get(pdfUrl, {

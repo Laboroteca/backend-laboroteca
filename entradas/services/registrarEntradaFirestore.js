@@ -1,5 +1,5 @@
 // services/registrarEntradaFirestore.js
-const admin = require('../firebase');
+const admin = require('../../firebase');
 const firestore = admin.firestore();
 
 /**

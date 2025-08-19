@@ -2,6 +2,10 @@
 const express = require('express');
 const router = express.Router();
 
+// ✅ este router acepta JSON y form-urlencoded (para el formulario de WP)
+router.use(express.json({ limit: '1mb' }));
+router.use(express.urlencoded({ extended: true, limit: '1mb' }));
+
 const admin = require('../../firebase');
 const firestore = admin.firestore();
 
@@ -24,7 +28,7 @@ const storage = new Storage({
 });
 const bucket = storage.bucket('laboroteca-facturas');
 
-// Utils
+// ───────── Utils
 function slugify(s = '') {
   return String(s)
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -134,7 +138,8 @@ router.get('/cuenta/entradas-lite', async (req, res) => {
 
 /**
  * POST /entradas/reenviar
- * Body: { emailDestino, emailComprador, descripcionProducto }
+ * Body (form o JSON):
+ *   { emailDestino, emailComprador, descripcionProducto }
  * Reúne PDFs desde GCS por descripcionProducto y email, y los reenvía por email.
  */
 router.post('/entradas/reenviar', async (req, res) => {
@@ -176,7 +181,9 @@ router.post('/entradas/reenviar', async (req, res) => {
     const carpeta = `entradas/${slugify(desc)}/`;
     const entradasBuffers = [];
 
-    for (const codigo of codigos) {
+    // por seguridad, máximo 20 adjuntos
+    const MAX_ADJUNTOS = 20;
+    for (const codigo of Array.from(codigos).slice(0, MAX_ADJUNTOS)) {
       const file = bucket.file(`${carpeta}${codigo}.pdf`);
       const [exists] = await file.exists();
       if (!exists) continue;

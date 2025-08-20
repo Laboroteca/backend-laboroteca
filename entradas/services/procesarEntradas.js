@@ -54,14 +54,43 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
   }
 
   // 2) Enviar SIEMPRE email al comprador con los PDFs (este es el hito incondicional)
-  await enviarEmailConEntradas({
-    email: emailComprador,
-    nombre: datosCliente.nombre,
-    entradas: archivosPDF,
-    descripcionProducto: descripcionProd,
-    importe: datosCliente.importe,
-    facturaAdjunta: pdfBuffer || null
-  });
+  try {
+    await enviarEmailConEntradas({
+      email: emailComprador,
+      nombre: datosCliente.nombre,
+      entradas: archivosPDF,
+      descripcionProducto: descripcionProd,
+      importe: datosCliente.importe,
+      facturaAdjunta: pdfBuffer || null
+    });
+  } catch (e) {
+    console.error('❌ Falló el envío con factura, reenviando solo entradas...', e.message || e);
+    await enviarEmailConEntradas({
+      email: emailComprador,
+      nombre: datosCliente.nombre,
+      entradas: archivosPDF,
+      descripcionProducto: descripcionProd,
+      importe: datosCliente.importe,
+      facturaAdjunta: null
+    });
+
+    // Avisar admin del fallo de factura
+    try {
+      const { enviarEmailPersonalizado } = require('../../services/email');
+      await enviarEmailPersonalizado({
+        to: 'laboroteca@gmail.com',
+        subject: '⚠️ Fallo al adjuntar factura en venta de entradas',
+        text: `El comprador ${emailComprador} ha pagado entradas pero la factura no se adjuntó.\nEvento: ${nombreActuacion} · ${descripcionProd}\nStripe session: ${session?.id || '-'}\n\nError: ${e.message || e}`,
+        html: `<p><strong>El comprador ${emailComprador} ha pagado entradas pero la factura no se adjuntó.</strong></p>
+              <p>Evento: ${nombreActuacion} · ${descripcionProd}</p>
+              <p>Stripe session: ${session?.id || '-'}</p>
+              <p>Error: ${e.message || e}</p>`
+      });
+    } catch (err) {
+      console.error('⚠️ No se pudo avisar al admin del fallo de factura:', err.message || err);
+    }
+  }
+
 
   // 3) Registrar best-effort en GCS / Sheets / Firestore (errores no bloquean)
   const errores = [];

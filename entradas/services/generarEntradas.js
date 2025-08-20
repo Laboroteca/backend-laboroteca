@@ -11,7 +11,9 @@ const firestore = admin.firestore();
 const { google } = require('googleapis');
 
 const storage = new Storage({
-  credentials: JSON.parse(Buffer.from(process.env.GCP_CREDENTIALS_BASE64, 'base64').toString('utf8'))
+  credentials: JSON.parse(
+    Buffer.from(process.env.GCP_CREDENTIALS_BASE64, 'base64').toString('utf8')
+  ),
 });
 
 // ───────────────────────── Helpers ─────────────────────────
@@ -39,7 +41,7 @@ function formatearFechaES() {
     month: '2-digit',
     year: 'numeric',
     hour: '2-digit',
-    minute: '2-digit'
+    minute: '2-digit',
   });
 }
 
@@ -49,7 +51,7 @@ const HOJAS_EVENTO = {
   '39': '1PbhRFdm1b1bR0g5wz5nz0ZWAcgsbkakJVEh0dz34lCM',
   '40': '1EVcNTwE4nRNp4J_rZjiMGmojNO2F5TLZiwKY0AREmZE',
   '41': '1IUZ2_bQXxEVC_RLxNAzPBql9huu34cpE7_MF4Mg6eTM',
-  '42': '1LGLEsQ_mGj-Hmkj1vjrRQpmSvIADZ1eMaTJoh3QBmQc'
+  '42': '1LGLEsQ_mGj-Hmkj1vjrRQpmSvIADZ1eMaTJoh3QBmQc',
 };
 
 async function generarEntradas({
@@ -63,7 +65,7 @@ async function generarEntradas({
   direccionEvento,
   descripcionProducto,
   imagenFondo,
-  idFormulario
+  idFormulario,
 }) {
   const bucket = storage.bucket('laboroteca-facturas-broken');
 
@@ -73,8 +75,10 @@ async function generarEntradas({
   }
 
   const auth = new google.auth.GoogleAuth({
-    credentials: JSON.parse(Buffer.from(process.env.GCP_CREDENTIALS_BASE64, 'base64').toString('utf8')),
-    scopes: ['https://www.googleapis.com/auth/spreadsheets']
+    credentials: JSON.parse(
+      Buffer.from(process.env.GCP_CREDENTIALS_BASE64, 'base64').toString('utf8')
+    ),
+    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
   });
   const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
 
@@ -99,7 +103,7 @@ async function generarEntradas({
 
     if (imagenFondo && imagenFondo.startsWith('http')) {
       try {
-        const fondoData = await fetch(imagenFondo).then(r => r.arrayBuffer());
+        const fondoData = await fetch(imagenFondo).then((r) => r.arrayBuffer());
         const fondoPath = path.join(__dirname, `../../temp_fondo_${codigo}.jpg`);
         await fs.writeFile(fondoPath, Buffer.from(fondoData));
         pdf.image(fondoPath, 0, 0, { width: 595.28, height: 841.89 });
@@ -117,7 +121,7 @@ async function generarEntradas({
     pdf.image(qrImage, 50, 260, { width: 120 });
     pdf.end();
 
-    const pdfBuffer = await new Promise(resolve =>
+    const pdfBuffer = await new Promise((resolve) =>
       pdf.on('end', () => resolve(Buffer.concat(buffers)))
     );
 
@@ -128,7 +132,12 @@ async function generarEntradas({
       console.log(`✅ Entrada subida a GCS: ${nombreArchivo}`);
     } catch (err) {
       console.error(`❌ Error GCS ${codigo}:`, err.message);
-      errores.push({ paso: 'GCS', codigo, detalle: err.message });
+      errores.push({
+        paso: 'GCS',
+        codigo,
+        detalle: err.message,
+        motivo: 'No se han subido las entradas en GCS',
+      });
     }
 
     // ───────── Registro en Google Sheets (opcional) ─────────
@@ -140,58 +149,86 @@ async function generarEntradas({
           valueInputOption: 'RAW',
           insertDataOption: 'INSERT_ROWS',
           requestBody: {
-            values: [
-              [fechaVenta, descripcionProducto, nombreCompleto, i + 1, codigo, 'NO']
-            ]
-          }
+            values: [[fechaVenta, descripcionProducto, nombreCompleto, i + 1, codigo, 'NO']],
+          },
         });
       } catch (err) {
         console.error(`❌ Error Sheets ${codigo}:`, err.message);
-        errores.push({ paso: 'SHEETS', codigo, detalle: err.message });
+        errores.push({
+          paso: 'SHEETS',
+          codigo,
+          detalle: err.message,
+          motivo: 'No se ha registrado la venta en Google Sheets',
+        });
       }
     }
 
     // ───────── Registro en Firestore (best-effort) ─────────
     try {
-      await firestore.collection('entradas').doc(codigo).set({
-        codigo,
-        email,                            // comprador
-        emailComprador: email,            // alias por compatibilidad
-        nombre: asistente.nombre || '',
-        apellidos: asistente.apellidos || '',
-        slugEvento,                       // ej. "presentacion-del-libro..."
-        nombreEvento: descripcionProducto || slugEvento || 'Evento',
-        descripcionProducto: descripcionProducto || '',
-        direccionEvento: direccionEvento || '',
-        fechaEvento: fechaEvento || '',   // formato "DD/MM/YYYY - HH:mm"
-        fechaActuacion: fechaEvento || '',// duplicado para búsquedas
-        nEntrada: i + 1,
-        usada: false,
-        fechaCompra: new Date().toISOString(),
-        timestamp: Date.now()
-      }, { merge: true });
+      await firestore.collection('entradas').doc(codigo).set(
+        {
+          codigo,
+          email, // comprador
+          emailComprador: email, // alias por compatibilidad
+          nombre: asistente.nombre || '',
+          apellidos: asistente.apellidos || '',
+          slugEvento, // ej. "presentacion-del-libro..."
+          nombreEvento: descripcionProducto || slugEvento || 'Evento',
+          descripcionProducto: descripcionProducto || '',
+          direccionEvento: direccionEvento || '',
+          fechaEvento: fechaEvento || '', // formato "DD/MM/YYYY - HH:mm"
+          fechaActuacion: fechaEvento || '', // duplicado para búsquedas
+          nEntrada: i + 1,
+          usada: false,
+          fechaCompra: new Date().toISOString(),
+          timestamp: Date.now(),
+        },
+        { merge: true }
+      );
 
-      await firestore.collection('entradasCompradas').doc(codigo).set({
-        codigo,
-        emailComprador: email,
-        nombreEvento: descripcionProducto || slugEvento || 'Evento',
-        descripcionProducto: descripcionProducto || '',
-        slugEvento: slugEvento || '',
-        direccionEvento: direccionEvento || '',
-        fechaEvento: fechaEvento || '',
-        fechaActuacion: fechaEvento || '',
-        usado: false,
-        fechaCompra: new Date().toISOString()
-      }, { merge: true });
+      await firestore.collection('entradasCompradas').doc(codigo).set(
+        {
+          codigo,
+          emailComprador: email,
+          nombreEvento: descripcionProducto || slugEvento || 'Evento',
+          descripcionProducto: descripcionProducto || '',
+          slugEvento: slugEvento || '',
+          direccionEvento: direccionEvento || '',
+          fechaEvento: fechaEvento || '',
+          fechaActuacion: fechaEvento || '',
+          usado: false,
+          fechaCompra: new Date().toISOString(),
+        },
+        { merge: true }
+      );
     } catch (err) {
       console.error(`❌ Error guardando en Firestore entrada ${codigo}:`, err.message);
-      errores.push({ paso: 'FIRESTORE', codigo, detalle: err.message });
+      errores.push({
+        paso: 'FIRESTORE',
+        codigo,
+        detalle: err.message,
+        motivo: 'No se ha registrado la venta en Firebase (Firestore)',
+      });
     }
 
     entradas.push({ codigo, nombreArchivo, buffer: pdfBuffer });
   }
 
-  return { entradas, errores };
+  // Contexto para emails de alerta (no rompe compat: los callers pueden ignorarlo)
+  const contexto = {
+    usuario: email,
+    formularioId: idFormulario || '',
+    evento: {
+      slugEvento: slugEvento || '',
+      descripcionProducto: descripcionProducto || '',
+      fechaActuacion: fechaEvento || '',
+      lugar: direccionEvento || '',
+      carpetaGCS: carpetaEvento,
+    },
+    codigos: entradas.map((e) => e.codigo),
+  };
+
+  return { entradas, errores, contexto };
 }
 
 module.exports = generarEntradas;

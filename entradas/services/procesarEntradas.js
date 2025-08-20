@@ -73,7 +73,11 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
     sheetId = obtenerSheetIdPorFormulario(formularioId);
   } catch (e) {
     console.warn('🟨 Sin sheetId para formularioId', formularioId, e?.message || e);
-    errores.push({ paso: 'SHEETS_CFG', detalle: `formularioId=${formularioId}`, error: e?.message || String(e) });
+    errores.push({
+      paso: 'SHEETS_CFG',
+      detalle: `formularioId=${formularioId}`,
+      motivo: 'Configuración inválida de Google Sheets (sheetId no resuelto)'
+    });
   }
 
   for (let i = 0; i < archivosPDF.length; i++) {
@@ -86,7 +90,12 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
       await subirEntrada(nombreArchivo, buf);
     } catch (e) {
       console.error('❌ GCS:', e.message || e);
-      errores.push({ paso: 'GCS', codigo, detalle: e?.message || String(e) });
+      errores.push({
+        paso: 'GCS',
+        codigo,
+        detalle: e?.message || String(e),
+        motivo: 'No se han subido las entradas en GCS'
+      });
     }
 
     // Sheets (best-effort; solo si tenemos sheetId)
@@ -102,7 +111,12 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
         });
       } catch (e) {
         console.error('❌ Sheets:', e.message || e);
-        errores.push({ paso: 'SHEETS', codigo, detalle: e?.message || String(e) });
+        errores.push({
+          paso: 'SHEETS',
+          codigo,
+          detalle: e?.message || String(e),
+          motivo: 'No se ha registrado la venta en Google Sheets'
+        });
       }
     }
 
@@ -120,7 +134,12 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
       });
     } catch (e) {
       console.error('❌ Firestore:', e.message || e);
-      errores.push({ paso: 'FIRESTORE', codigo, detalle: e?.message || String(e) });
+      errores.push({
+        paso: 'FIRESTORE',
+        codigo,
+        detalle: e?.message || String(e),
+        motivo: 'No se ha registrado en Firebase (Firestore)'
+      });
     }
   }
 
@@ -128,21 +147,67 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
   if (errores.length) {
     try {
       const { enviarEmailPersonalizado } = require('../../services/email');
+
+      // Resumen de motivos únicos
+      const motivosUnicos = Array.from(new Set(errores.map(e => e.motivo).filter(Boolean)));
+
+      const subject = '⚠️ Fallos durante la venta de Entradas';
+
+      const textoErrores = errores
+        .map(e => `- Paso: ${e.paso}${e.codigo ? ` | Código: ${e.codigo}` : ''} | Motivo: ${e.motivo || '-'} | Detalle: ${e.detalle}`)
+        .join('\n');
+
+      const text =
+`Ha ocurrido un fallo durante la venta de entradas.
+El usuario ha pagado las entradas y se le han mandado por email, pero se han producido los siguientes problemas:
+${motivosUnicos.length ? motivosUnicos.map(m => `- ${m}`).join('\n') : '- (sin motivo específico)'}
+
+Usuario afectado: ${emailComprador}
+Evento: ${nombreActuacion} · ${descripcionProd}
+Fecha del evento: ${fechaActuacion || '-'}
+Lugar del evento: ${direccionEvento || '-'}
+Formulario: ${formularioId || '-'}
+Stripe session: ${session?.id || '-'}
+Payment intent: ${session?.payment_intent || '-'}
+
+Entradas afectadas: ${codigos.length ? codigos.join(', ') : '(desconocido)'}
+
+Detalle de errores:
+${textoErrores}
+`;
+
+      const html = `
+        <p><strong>Ha ocurrido un fallo durante la venta de entradas.</strong></p>
+        <p>El usuario ha pagado las entradas y se le han mandado por email, pero se han producido los siguientes problemas:</p>
+        <ul>
+          ${motivosUnicos.length ? motivosUnicos.map(m => `<li>${m}</li>`).join('') : '<li>(sin motivo específico)</li>'}
+        </ul>
+
+        <h4>Contexto</h4>
+        <ul>
+          <li><strong>Usuario afectado:</strong> ${emailComprador}</li>
+          <li><strong>Evento:</strong> ${nombreActuacion} · ${descripcionProd}</li>
+          <li><strong>Fecha del evento:</strong> ${fechaActuacion || '-'}</li>
+          <li><strong>Lugar del evento:</strong> ${direccionEvento || '-'}</li>
+          <li><strong>Formulario:</strong> ${formularioId || '-'}</li>
+          <li><strong>Stripe session:</strong> ${session?.id || '-'}</li>
+          <li><strong>Payment intent:</strong> ${session?.payment_intent || '-'}</li>
+          <li><strong>Entradas afectadas:</strong> ${codigos.length ? codigos.join(', ') : '(desconocido)'}</li>
+        </ul>
+
+        <h4>Detalle de errores</h4>
+        <ul>
+          ${errores.map(e => `<li><strong>${e.paso}</strong>${e.codigo ? ` · Código: ${e.codigo}` : ''} · Motivo: ${e.motivo || '-'} · ${e.detalle}</li>`).join('')}
+        </ul>
+
+        <p style="margin-top:16px;color:#666">Este mensaje se ha generado automáticamente tras la entrega de entradas al comprador.</p>
+      `;
+
       await enviarEmailPersonalizado({
         to: 'laboroteca@gmail.com',
-        subject: `⚠️ Fallos post-pago en registro de entradas (${emailComprador})`,
-        text: JSON.stringify(
-          {
-            emailComprador,
-            descripcionProducto: descripcionProd,
-            fechaActuacion,
-            slugEvento,
-            formularioId,
-            errores
-          },
-          null,
-          2
-        )
+        subject,
+        html,
+        text
       });
     } catch (e) {
       console.error('⚠️ No se pudo avisar al admin:', e.message || e);

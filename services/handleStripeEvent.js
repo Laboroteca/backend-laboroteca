@@ -3,21 +3,18 @@ const firestore = admin.firestore();
 
 const { guardarEnGoogleSheets } = require('./googleSheets');
 const { crearFacturaEnFacturaCity } = require('./facturaCity');
-const { enviarFacturaPorEmail, enviarAvisoImpago, enviarAvisoCancelacion } = require('./email');
+const { enviarFacturaPorEmail, enviarAvisoImpago, enviarAvisoCancelacion, enviarEmailPersonalizado } = require('./email');
 const { subirFactura } = require('./gcs');
 const { activarMembresiaClub } = require('./activarMembresiaClub');
 const { syncMemberpressClub } = require('./syncMemberpressClub');
 const { syncMemberpressLibro } = require('./syncMemberpressLibro');
 const { registrarBajaClub } = require('./registrarBajaClub');
 const desactivarMembresiaClub = require('./desactivarMembresiaClub');
-const fs = require('fs').promises;
 const path = require('path');
 const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 const { ensureOnce } = require('../utils/dedupe');
 
-
-const RUTA_CUPONES = path.join(__dirname, '../data/cupones.json');
 
 function normalizarProducto(str) {
   return (str || '')
@@ -297,10 +294,32 @@ if (event.type === 'invoice.paid') {
       }
     }
 
-      } catch (e) {
-        console.error('❌ Error facturación invoice.paid:', e?.message || e);
-        // opcional: rethrow si quieres parar el flujo
+    } catch (e) {
+      console.error('❌ Error facturación invoice.paid:', e?.message || e);
+
+      // ✅ Registrar en Google Sheets AUNQUE falle FacturaCity
+      try {
+        await guardarEnGoogleSheets(datosRenovacion);
+      } catch (se) {
+        console.error('❌ Sheets (invoice.paid catch):', se?.message || se);
       }
+
+      // (Opcional) Aviso al admin muy conciso
+      try {
+        await enviarEmailPersonalizado({
+          to: 'laboroteca@gmail.com',
+          subject: '⚠️ Factura fallida en invoice.paid',
+          text: `Email: ${email}
+    Producto: ${datosRenovacion.nombreProducto}
+    Importe: ${datosRenovacion.importe.toFixed(2)} €
+    InvoiceId: ${invoiceId}
+    Error: ${e?.message || String(e)}`
+        });
+      } catch (ea) {
+        console.error('⚠️ Aviso admin (invoice.paid) falló:', ea?.message || ea);
+      }
+    }
+
     }
 
 
@@ -317,6 +336,40 @@ if (event.type === 'invoice.paid') {
     } else {
       console.warn(`❌ Email inválido en syncMemberpressClub: "${emailSeguro}"`);
     }
+
+    // 📧 Email de confirmación de activación (Club)
+    try {
+      const fechaISO = new Date().toISOString();
+      await enviarEmailPersonalizado({
+        to: email,
+        subject: '✅ Tu acceso al Club Laboroteca ya está activo',
+        html: `
+          <p>Hola ${nameFromStripe || 'cliente'},</p>
+          <p>Tu <strong>membresía del Club Laboroteca</strong> ha sido <strong>activada correctamente</strong>.</p>
+          <p><strong>Producto:</strong> ${isAlta ? 'Alta y primera cuota Club Laboroteca' : 'Renovación mensual Club Laboroteca'}<br>
+            <strong>Importe:</strong> ${((invoice.amount_paid ?? invoice.amount_due ?? 0)/100).toFixed(2).replace('.', ',')} €<br>
+            <strong>Fecha:</strong> ${fechaISO}</p>
+          <p>Puedes acceder a tu área:</p>
+          <p><a href="https://www.laboroteca.es/mi-cuenta/">https://www.laboroteca.es/mi-cuenta/</a></p>
+          <p>Gracias por confiar en Laboroteca.</p>
+        `,
+        text: `Hola ${nameFromStripe || 'cliente'},
+
+    Tu membresía del Club Laboroteca ha sido activada correctamente.
+
+    Producto: ${isAlta ? 'Alta y primera cuota Club Laboroteca' : 'Renovación mensual Club Laboroteca'}
+    Importe: ${((invoice.amount_paid ?? invoice.amount_due ?? 0)/100).toFixed(2)} €
+    Fecha: ${fechaISO}
+
+    Acceso: https://www.laboroteca.es/mi-cuenta/
+
+    Gracias por confiar en Laboroteca.`
+      });
+      console.log('✅ Email de confirmación de Club enviado');
+    } catch (e) {
+      console.error('❌ Error enviando email de confirmación de Club:', e?.message || e);
+    }
+
 
     await firestore.collection('facturasEmitidas').doc(invoiceId).set({
       procesada: true,
@@ -565,7 +618,6 @@ try {
 
       // 🔔 Aviso al admin del fallo de factura con TODOS los datos del formulario
       try {
-        const { enviarEmailPersonalizado } = require('./email');
         const fechaCompraISO = new Date().toISOString();
 
         const detallesTexto = `

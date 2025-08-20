@@ -551,6 +551,37 @@ if (event.type === 'invoice.paid') {
       console.error('❌ Error activando membresía (se registrará igualmente la compra):', e?.message || e);
     }
 
+    // 📧 Confirmación al usuario de compra + activación (independiente de la factura)
+try {
+  const productoLabel = datosCliente.nombreProducto || datosCliente.producto || 'Producto Laboroteca';
+  const ahoraISO = new Date().toISOString();
+  await enviarEmailPersonalizado({
+    to: email,
+    subject: '✅ Compra confirmada y acceso activado',
+    html: `
+      <p>Hola ${datosCliente.nombre || 'cliente'},</p>
+      <p>Tu compra de <strong>${productoLabel}</strong> se ha procesado correctamente y tu acceso ya está <strong>activado</strong>.</p>
+      <p><strong>Importe:</strong> ${datosCliente.importe.toFixed(2).replace('.', ',')} €<br>
+         <strong>Fecha:</strong> ${ahoraISO}</p>
+      <p>Puedes acceder a tu área:</p>
+      <p><a href="https://www.laboroteca.es/mi-cuenta/">https://www.laboroteca.es/mi-cuenta/</a></p>
+      
+    `,
+    text: `Hola ${datosCliente.nombre || 'cliente'},
+
+Tu compra de ${productoLabel} se ha procesado correctamente y tu acceso ya está activado.
+
+Importe: ${datosCliente.importe.toFixed(2)} €
+Fecha: ${ahoraISO}
+
+Área de cliente: https://www.laboroteca.es/mi-cuenta/
+`
+  });
+  console.log('✅ Email de confirmación de compra+activación enviado (checkout.session.completed)');
+} catch (e) {
+  console.error('❌ Error enviando email de confirmación de compra+activación:', e?.message || e);
+}
+
 
     let errorProcesando = false;
 let pdfBuffer = null; // ← movido fuera del try para que esté accesible en finally
@@ -571,11 +602,12 @@ try {
   } else {
     try {
       // 🧾 Intento de creación de factura (puede fallar sin cortar el flujo)
-      pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
+    pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
 
-      if (!pdfBuffer) {
-        console.warn('🟡 crearFacturaEnFacturaCity devolvió null (dedupe). No registro en Sheets ni subo a GCS.');
-      } else {
+    if (!pdfBuffer) {
+      console.warn('🟡 crearFacturaEnFacturaCity devolvió null (dedupe). Registro en Sheets pero NO subo a GCS ni envío factura.');
+      try { await guardarEnGoogleSheets(datosCliente); } catch (e) { console.error('❌ Sheets (dedupe):', e?.message || e); }
+    } else {
         // ✅ Solo si hay PDF real
         try {
           await guardarEnGoogleSheets(datosCliente);

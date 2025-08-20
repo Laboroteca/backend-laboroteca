@@ -9,12 +9,15 @@ const { Storage } = require('@google-cloud/storage');
 const { enviarEmailConEntradas } = require('../services/enviarEmailConEntradas');
 const crypto = require('crypto');
 
+
 // ───────────────────────── Config seguridad (rate limit + firma)
 const RESEND_LIMIT_COUNT = Number(process.env.RESEND_LIMIT_COUNT || 3);      // máx. reenvíos por ventana
 const RESEND_LIMIT_WINDOW_MS = Number(process.env.RESEND_LIMIT_WINDOW_MS || (60 * 60 * 1000)); // 1h
 const HMAC_SHARED_SECRET =
   process.env.LB_SHARED_SECRET ||
   process.env.VALIDADOR_ENTRADAS_TOKEN || '';
+const DEBUG_REENVIOS = process.env.DEBUG_REENVIOS === '1';
+
   
 // Bucket GCS
 const storage = new Storage({
@@ -240,9 +243,15 @@ router.post('/entradas/reenviar', async (req, res) => {
     // Ventana de 15 minutos
     const MAX_SKEW = 900;
     const now = Math.floor(Date.now() / 1000);
+    // Expirada
     if (Math.abs(now - ts) > MAX_SKEW) {
+      if (DEBUG_REENVIOS) {
+        console.warn('[REENVIO DEBUG] Firma expirada', { now, ts, skew: Math.abs(now - ts) });
+        return res.status(401).json({ error: 'Firma expirada', debug: { now, ts, skew: Math.abs(now - ts) } });
+      }
       return res.status(401).json({ error: 'Firma expirada' });
     }
+
     const compradorNorm = String(comprador).trim().toLowerCase();
     const descNorm = String(desc).trim();
     const base = `${compradorNorm}|${descNorm}|${ts}`;
@@ -258,9 +267,24 @@ router.post('/entradas/reenviar', async (req, res) => {
       } catch { return false; }
     })();
 
+    // Inválida
     if (!okSig) {
+      if (DEBUG_REENVIOS) {
+        console.warn('[REENVIO DEBUG] Firma inválida', {
+          base,
+          sig,
+          expected,
+          compradorNorm,
+          descNorm
+        });
+        return res.status(401).json({
+          error: 'Firma inválida',
+          debug: { base, sig, expected, compradorNorm, descNorm }
+        });
+      }
       return res.status(401).json({ error: 'Firma inválida' });
     }
+
 
     // ── Rate limit (anti-spam) por (emailComprador, descripcion)
     const quotaKey = `${compradorNorm}::${descNorm}`;

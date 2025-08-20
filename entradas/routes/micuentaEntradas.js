@@ -1,4 +1,4 @@
-// entradas/routes/micuentaEntradas.js
+// 📂 /entradas/routes/micuentaEntradas.js
 const express = require('express');
 const router = express.Router();
 
@@ -7,8 +7,14 @@ const firestore = admin.firestore();
 
 const { Storage } = require('@google-cloud/storage');
 const { enviarEmailConEntradas } = require('../services/enviarEmailConEntradas');
+const crypto = require('crypto');
 
-// ───────────────────────── GCS
+// ───────────────────────── Config seguridad (rate limit + firma)
+const RESEND_LIMIT_COUNT = Number(process.env.RESEND_LIMIT_COUNT || 3);      // máx. reenvíos por ventana
+const RESEND_LIMIT_WINDOW_MS = Number(process.env.RESEND_LIMIT_WINDOW_MS || (60 * 60 * 1000)); // 1h
+const HMAC_SHARED_SECRET = process.env.LB_SHARED_SECRET || '';               // clave compartida WP ↔ backend
+
+// Bucket GCS
 const storage = new Storage({
   credentials: JSON.parse(
     Buffer.from(process.env.GCP_CREDENTIALS_BASE64 || '', 'base64').toString('utf8')
@@ -40,7 +46,6 @@ function parseFechaDMY(fecha) {
   return isNaN(d.getTime()) ? null : d;
 }
 
-// agrupa por (desc+dir+fecha) y filtra futuros
 // agrupa por (desc+dir+fecha), SOLO futuros, y deduplica por código
 async function cargarEventosFuturos(email) {
   const ahora = new Date();
@@ -104,6 +109,29 @@ async function cargarEventosFuturos(email) {
   return items;
 }
 
+// ───────────────────────── Rate limit en memoria (usar Redis en multi instancia)
+const resendBuckets = new Map(); // key -> { count, resetAt }
+
+/**
+ * Controla cuota de reenvíos por clave.
+ * @param {string} key
+ * @param {number} limit
+ * @param {number} windowMs
+ * @returns {{ok:boolean, remaining?:number, retryAt?:number}}
+ */
+function checkResendQuota(key, limit = RESEND_LIMIT_COUNT, windowMs = RESEND_LIMIT_WINDOW_MS) {
+  const now = Date.now();
+  const item = resendBuckets.get(key);
+  if (!item || now >= item.resetAt) {
+    resendBuckets.set(key, { count: 1, resetAt: now + windowMs });
+    return { ok: true, remaining: limit - 1 };
+  }
+  if (item.count >= limit) {
+    return { ok: false, retryAt: item.resetAt };
+  }
+  item.count++;
+  return { ok: true, remaining: limit - item.count };
+}
 
 // ───────────────────────── Rutas lectura
 
@@ -183,9 +211,7 @@ async function obtenerBuffersPdfsPorCodigos(descripcion, codigos) {
 }
 
 // POST /entradas/reenviar
-// Body: { emailDestino, emailComprador, descripcionProducto }
-// POST /entradas/reenviar
-// Body: { emailDestino, emailComprador, descripcionProducto }
+// Body: { emailDestino, emailComprador, descripcionProducto, ts, sig }
 router.post('/entradas/reenviar', async (req, res) => {
   try {
     const body = req.body || {};
@@ -193,10 +219,49 @@ router.post('/entradas/reenviar', async (req, res) => {
     const comprador  = String(body.emailComprador || '').trim().toLowerCase();
     const desc       = String(body.descripcionProducto || '').trim();
 
+    // ── Validaciones mínimas de payload
     if (!to || !comprador || !desc) {
       return res.status(400).json({ error: 'Faltan campos: emailDestino, emailComprador, descripcionProducto' });
     }
 
+    // ── Verificación HMAC (prueba de propiedad desde WP)
+    if (!HMAC_SHARED_SECRET) {
+      console.warn('⚠️ LB_SHARED_SECRET no configurado; bloqueando por seguridad.');
+      return res.status(401).json({ error: 'Firma requerida' });
+    }
+    const ts  = Number(body.ts || 0);
+    const sig = String(body.sig || '');
+
+    if (!ts || !sig) {
+      return res.status(401).json({ error: 'Firma requerida' });
+    }
+    // Ventana de 5 minutos
+    const MAX_SKEW = 300;
+    const now = Math.floor(Date.now() / 1000);
+    if (Math.abs(now - ts) > MAX_SKEW) {
+      return res.status(401).json({ error: 'Firma expirada' });
+    }
+    const base = `${comprador}|${desc}|${ts}`;
+    const expected = crypto.createHmac('sha256', HMAC_SHARED_SECRET).update(base).digest('hex');
+    // Comparación constante
+    const okSig = (() => {
+      try {
+        return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
+      } catch { return false; }
+    })();
+    if (!okSig) {
+      return res.status(401).json({ error: 'Firma inválida' });
+    }
+
+    // ── Rate limit (anti-spam) por (emailComprador, descripcion)
+    const quotaKey = `${comprador}::${desc}`;
+    const q = checkResendQuota(quotaKey);
+    if (!q.ok) {
+      const secs = Math.ceil((q.retryAt - Date.now()) / 1000);
+      return res.status(429).json({ error: `Límite de reenvíos alcanzado. Inténtalo en ${secs}s.` });
+    }
+
+    // ── Buscar entradas del comprador para ese evento
     const [q1, q2] = await Promise.all([
       firestore.collection('entradasCompradas')
         .where('emailComprador', '==', comprador)
@@ -227,6 +292,7 @@ router.post('/entradas/reenviar', async (req, res) => {
       return res.status(404).json({ error: 'No se han encontrado entradas para ese evento' });
     }
 
+    // ── Descargar PDFs de GCS
     const buffers = await obtenerBuffersPdfsPorCodigos(desc, Array.from(codigos));
     if (buffers.length === 0) {
       return res.status(404).json({ error: 'No se han encontrado PDFs en GCS para ese evento' });
@@ -237,17 +303,34 @@ router.post('/entradas/reenviar', async (req, res) => {
       ? String(nombreComprador).trim()
       : (comprador.split('@')[0] || '');
 
+    // ── Enviar email con plantilla de reenvío
     await enviarEmailConEntradas({
       email: to,
       nombre: nombreMostrar,
       entradas: buffers,
       descripcionProducto: desc,
-      importe: 0,           // opcional en reenvío (se muestra como "importe original" si lo necesitas)
-      modo: 'reenvio',      // << usa plantilla de reenvío
-      fecha,                // opcional: si está, aparece en el email
-      direccion             // opcional: si está, aparece en el email
-      // subject, html: si algún día quieres sobreescribir, puedes pasarlos aquí
+      importe: 0,      // opcional en reenvío (se mostraría como importe original si quisieras)
+      modo: 'reenvio',
+      fecha,
+      direccion
+      // subject/html opcionales
     });
+
+    // ── Auditoría
+    try {
+      await firestore.collection('entradasReenvios').add({
+        emailComprador: comprador,
+        emailDestino: to,
+        descripcionProducto: desc,
+        cantidadAdjuntos: buffers.length,
+        fechaActuacion: fecha || null,
+        direccionEvento: direccion || null,
+        at: new Date().toISOString(),
+        ip: req.headers['x-forwarded-for'] || req.socket?.remoteAddress || ''
+      });
+    } catch (logErr) {
+      console.warn('⚠️ No se pudo registrar auditoría de reenvío:', logErr?.message || logErr);
+    }
 
     res.json({ ok: true, reenviadas: buffers.length });
   } catch (e) {
@@ -255,7 +338,6 @@ router.post('/entradas/reenviar', async (req, res) => {
     res.status(500).json({ error: 'Error reenviando entradas' });
   }
 });
-
 
 // GET defensivo (no navegar al backend por error)
 router.get('/entradas/reenviar', (_req, res) => {

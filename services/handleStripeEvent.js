@@ -551,23 +551,23 @@ if (event.type === 'invoice.paid') {
       console.error('❌ Error activando membresía (se registrará igualmente la compra):', e?.message || e);
     }
 
-    // 📧 Confirmación al usuario de compra + activación (independiente de la factura)
-try {
-  const productoLabel = datosCliente.nombreProducto || datosCliente.producto || 'Producto Laboroteca';
-  const ahoraISO = new Date().toISOString();
-  await enviarEmailPersonalizado({
-    to: email,
-    subject: '✅ Compra confirmada y acceso activado',
-    html: `
-      <p>Hola ${datosCliente.nombre || 'cliente'},</p>
-      <p>Tu compra de <strong>${productoLabel}</strong> se ha procesado correctamente y tu acceso ya está <strong>activado</strong>.</p>
-      <p><strong>Importe:</strong> ${datosCliente.importe.toFixed(2).replace('.', ',')} €<br>
-         <strong>Fecha:</strong> ${ahoraISO}</p>
-      <p>Puedes acceder a tu área:</p>
-      <p><a href="https://www.laboroteca.es/mi-cuenta/">https://www.laboroteca.es/mi-cuenta/</a></p>
-      
-    `,
-    text: `Hola ${datosCliente.nombre || 'cliente'},
+   // 📧 Confirmación al usuario de compra + activación (NO enviar si es venta de entradas)
+if (!esEntrada) {
+  try {
+    const productoLabel = datosCliente.nombreProducto || datosCliente.producto || 'Producto Laboroteca';
+    const ahoraISO = new Date().toISOString();
+    await enviarEmailPersonalizado({
+      to: email,
+      subject: '✅ Compra confirmada y acceso activado',
+      html: `
+        <p>Hola ${datosCliente.nombre || 'cliente'},</p>
+        <p>Tu compra de <strong>${productoLabel}</strong> se ha procesado correctamente y tu acceso ya está <strong>activado</strong>.</p>
+        <p><strong>Importe:</strong> ${datosCliente.importe.toFixed(2).replace('.', ',')} €<br>
+           <strong>Fecha:</strong> ${ahoraISO}</p>
+        <p>Puedes acceder a tu área:</p>
+        <p><a href="https://www.laboroteca.es/mi-cuenta/">https://www.laboroteca.es/mi-cuenta/</a></p>
+      `,
+      text: `Hola ${datosCliente.nombre || 'cliente'},
 
 Tu compra de ${productoLabel} se ha procesado correctamente y tu acceso ya está activado.
 
@@ -576,10 +576,13 @@ Fecha: ${ahoraISO}
 
 Área de cliente: https://www.laboroteca.es/mi-cuenta/
 `
-  });
-  console.log('✅ Email de confirmación de compra+activación enviado (checkout.session.completed)');
-} catch (e) {
-  console.error('❌ Error enviando email de confirmación de compra+activación:', e?.message || e);
+    });
+    console.log('✅ Email de confirmación de compra+activación enviado (checkout.session.completed)');
+  } catch (e) {
+    console.error('❌ Error enviando email de confirmación de compra+activación:', e?.message || e);
+  }
+} else {
+  console.log('ℹ️ Venta de entradas: NO se envía email de confirmación (se envía desde el flujo de entradas).');
 }
 
 

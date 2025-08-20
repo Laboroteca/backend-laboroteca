@@ -228,7 +228,7 @@ router.post('/entradas/reenviar', async (req, res) => {
 
     // ── Verificación HMAC (prueba de propiedad desde WP)
     if (!HMAC_SHARED_SECRET) {
-      console.warn('⚠️ LB_SHARED_SECRET no configurado; bloqueando por seguridad.');
+      console.warn('⚠️ HMAC_SHARED_SECRET no configurado (LB_SHARED_SECRET o VALIDADOR_ENTRADAS_TOKEN); bloqueando por seguridad.');
       return res.status(401).json({ error: 'Firma requerida' });
     }
     const ts  = Number(body.ts || 0);
@@ -237,26 +237,33 @@ router.post('/entradas/reenviar', async (req, res) => {
     if (!ts || !sig) {
       return res.status(401).json({ error: 'Firma requerida' });
     }
-    // Ventana de 5 minutos
-    const MAX_SKEW = 300;
+    // Ventana de 15 minutos
+    const MAX_SKEW = 900;
     const now = Math.floor(Date.now() / 1000);
     if (Math.abs(now - ts) > MAX_SKEW) {
       return res.status(401).json({ error: 'Firma expirada' });
     }
-    const base = `${comprador}|${desc}|${ts}`;
+    const compradorNorm = String(comprador).trim().toLowerCase();
+    const descNorm = String(desc).trim();
+    const base = `${compradorNorm}|${descNorm}|${ts}`;
+
     const expected = crypto.createHmac('sha256', HMAC_SHARED_SECRET).update(base).digest('hex');
     // Comparación constante
     const okSig = (() => {
       try {
-        return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
+        return crypto.timingSafeEqual(
+          Buffer.from(sig, 'hex'),
+          Buffer.from(expected, 'hex')
+        );
       } catch { return false; }
     })();
+
     if (!okSig) {
       return res.status(401).json({ error: 'Firma inválida' });
     }
 
     // ── Rate limit (anti-spam) por (emailComprador, descripcion)
-    const quotaKey = `${comprador}::${desc}`;
+    const quotaKey = `${compradorNorm}::${descNorm}`;
     const q = checkResendQuota(quotaKey);
     if (!q.ok) {
       const secs = Math.ceil((q.retryAt - Date.now()) / 1000);

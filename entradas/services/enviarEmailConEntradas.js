@@ -48,7 +48,6 @@ async function enviarEmailConEntradas({
 
   const formatEuros = (n) => {
     if (typeof n !== 'number' || !isFinite(n)) return null;
-    // Forzamos 2 decimales con punto, y cambiamos a coma en el HTML/text si te interesa
     const fixed = n.toFixed(2);
     return {
       html: fixed.replace('.', ','), // 12.50 -> 12,50
@@ -56,14 +55,15 @@ async function enviarEmailConEntradas({
     };
   };
 
+  // Solo calculamos euros si es compra
+  const euros = modo === 'compra' ? formatEuros(importe) : null;
+
   // Bloque evento opcional
   const bloqueEventoHTML = (fecha || direccion)
     ? `<p><strong>Fecha:</strong> ${fecha ? String(fecha) : '—'}<br><strong>Lugar:</strong> ${direccion ? String(direccion) : '—'}</p>`
     : '';
 
-  const euros = formatEuros(importe);
-
-  // Asunto por defecto según modo (si no viene subject override)
+  // Asunto por defecto según modo
   const defaultSubject =
     modo === 'reenvio'
       ? `Reenvío de entradas: «${descripcionProducto}»`
@@ -71,7 +71,7 @@ async function enviarEmailConEntradas({
 
   const finalSubject = subject || defaultSubject;
 
-  // Cuerpos por defecto (si no viene html override)
+  // Cuerpos por defecto
   const htmlPorDefecto =
     modo === 'reenvio'
       ? `
@@ -155,14 +155,13 @@ Laboroteca`;
     });
   }
 
-  // Envío (includeFooter por defecto = true en enviarEmailPersonalizado)
+  // Envío
   await enviarEmailPersonalizado({
     to: email,
     subject: finalSubject,
     html: html || htmlPorDefecto,
     text: textPorDefecto,
     attachments
-    // includeFooter: true
   });
 
   console.log(`📧 Email (${modo}) con ${numEntradas} entrada(s) enviado a ${email}`);

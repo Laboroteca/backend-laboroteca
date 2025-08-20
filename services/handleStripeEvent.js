@@ -317,31 +317,43 @@ if (invoicingDisabled) {
         console.error('❌ Sheets (invoice.paid catch):', se?.message || se);
       }
 
-      // (Opcional) Aviso al admin muy conciso
-      try {
+      
+    // (Opcional) Aviso al admin — versión completa
+    try {
+      const safe = v => (v === undefined || v === null || v === '') ? '-' : String(v);
+
       await enviarEmailPersonalizado({
         to: 'laboroteca@gmail.com',
         subject: '⚠️ Factura fallida en invoice.paid',
-        text: `Email: ${email}
-      Producto: ${datosRenovacion.nombreProducto}
-      Importe: ${datosRenovacion.importe.toFixed(2)} €
-      InvoiceId: ${invoiceId}
-      Error: ${e?.message || String(e)}`,
+        text: `Email: ${safe(email)}
+    Nombre: ${safe(nombre)} ${safe(apellidos)}
+    DNI: ${safe(dni)}
+    Dirección: ${safe(direccion)}, ${safe(cp)} ${safe(ciudad)} (${safe(provincia)})
+    Producto: ${safe(datosRenovacion.nombreProducto)}
+    Importe: ${Number(datosRenovacion.importe).toFixed(2)} €
+    InvoiceId: ${safe(invoiceId)}
+    Motivo (billing_reason): ${safe(billingReason)} ${isAlta ? '(ALTA)' : '(RENOVACIÓN)'}
+    Error: ${safe(e?.message || e)}`,
         html: `
-          <p><strong>Factura fallida en invoice.paid</strong></p>
+          <h3>Factura fallida en invoice.paid</h3>
           <ul>
-            <li><strong>Email:</strong> ${email}</li>
-            <li><strong>Producto:</strong> ${datosRenovacion.nombreProducto}</li>
-            <li><strong>Importe:</strong> ${datosRenovacion.importe.toFixed(2)} €</li>
-            <li><strong>InvoiceId:</strong> ${invoiceId}</li>
-            <li><strong>Error:</strong> ${e?.message ? String(e.message) : String(e)}</li>
+            <li><strong>Email:</strong> ${safe(email)}</li>
+            <li><strong>Nombre:</strong> ${safe(nombre)} ${safe(apellidos)}</li>
+            <li><strong>DNI:</strong> ${safe(dni)}</li>
+            <li><strong>Dirección:</strong> ${safe(direccion)}, ${safe(cp)} ${safe(ciudad)} (${safe(provincia)})</li>
+            <li><strong>Producto:</strong> ${safe(datosRenovacion.nombreProducto)}</li>
+            <li><strong>Importe:</strong> ${Number(datosRenovacion.importe).toFixed(2)} €</li>
+            <li><strong>InvoiceId (Stripe):</strong> ${safe(invoiceId)}</li>
+            <li><strong>Motivo (billing_reason):</strong> ${safe(billingReason)} ${isAlta ? '(ALTA)' : '(RENOVACIÓN)'}</li>
+            <li><strong>Error:</strong> ${safe(e?.message || e)}</li>
           </ul>
-        `.trim()
+          <pre style="white-space:pre-wrap">${safe(JSON.stringify(datosRenovacion, null, 2))}</pre>
+        `
       });
+    } catch (ea) {
+      console.error('⚠️ Aviso admin (invoice.paid) falló:', ea?.message || ea);
+    }
 
-      } catch (ea) {
-        console.error('⚠️ Aviso admin (invoice.paid) falló:', ea?.message || ea);
-      }
     }
 
     }
@@ -368,7 +380,7 @@ if (invoicingDisabled) {
         to: email,
         subject: '✅ Tu acceso al Club Laboroteca ya está activo',
         html: `
-          <p>Hola ${nameFromStripe || 'cliente'},</p>
+          <p>Hola ${nombre || 'cliente'},</p>
           <p>Tu <strong>membresía del Club Laboroteca</strong> ha sido <strong>activada correctamente</strong>.</p>
           <p><strong>Producto:</strong> ${isAlta ? 'Alta y primera cuota Club Laboroteca' : 'Renovación mensual Club Laboroteca'}<br>
             <strong>Importe:</strong> ${((invoice.amount_paid ?? invoice.amount_due ?? 0)/100).toFixed(2).replace('.', ',')} €<br>
@@ -377,7 +389,7 @@ if (invoicingDisabled) {
           <p><a href="https://www.laboroteca.es/mi-cuenta/">https://www.laboroteca.es/mi-cuenta/</a></p>
           <p>Gracias por confiar en Laboroteca.</p>
         `,
-        text: `Hola ${nameFromStripe || 'cliente'},
+        text: `Hola ${nombre || 'cliente'},
 
     Tu membresía del Club Laboroteca ha sido activada correctamente.
 

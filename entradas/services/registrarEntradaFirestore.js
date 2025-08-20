@@ -19,10 +19,11 @@ async function registrarEntradaFirestore({
     throw new Error('registrarEntradaFirestore: faltan codigoEntrada o emailComprador');
   }
 
-    // ❗ Test: forzar fallo controlado en Firestore
+    // ❗ Test: forzar fallo controlado en TODA la escritura Firestore
   if (process.env.FIRESTORE_FAIL_TEST === '1') {
     throw new Error('TEST Firestore: fallo forzado');
   }
+
 
   const nowIso = new Date().toISOString();
 

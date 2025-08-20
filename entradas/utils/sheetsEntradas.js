@@ -1,4 +1,3 @@
-// 📄 entradas/services/sheetsEntradas.js
 const { google } = require('googleapis');
 const { auth } = require('../google/sheetsAuth');
 
@@ -10,11 +9,6 @@ const SHEETS_EVENTOS = {
   'evento-4': '1IUZ2_bQXxEVC_RLxNAzPBql9huu34cpE7_MF4Mg6eTM',
   'evento-5': '1LGLEsQ_mGj-Hmkj1vjrRQpmSvIADZ1eMaTJoh3QBmQc'
 };
-
-// 🎨 Colores (RGB 0–1)
-const COLOR_VERDE = { red: 0.20, green: 0.66, blue: 0.33 };
-const COLOR_ROJO  = { red: 0.90, green: 0.13, blue: 0.13 };
-const TEXTO_BLANCO_BOLD = { foregroundColor: { red: 1, green: 1, blue: 1 }, bold: true };
 
 /** Fecha y hora actual en Madrid como: 14/08/2025 - 10:13h */
 function fechaCompraES(d = new Date()) {
@@ -36,44 +30,6 @@ async function getSheetsAndSheetId(spreadsheetId) {
   return { sheets, sheetIdNum };
 }
 
-/** Aplica valor y formato a una celda (fila 1-based, col 0-based) */
-async function setCellValueAndFormat({ sheets, spreadsheetId, sheetIdNum, row1, col0, value, bgColor }) {
-  const colLetter = String.fromCharCode('A'.charCodeAt(0) + col0);
-
-  // Valor
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: `${colLetter}${row1}`,
-    valueInputOption: 'USER_ENTERED',
-    requestBody: { values: [[value]] }
-  });
-
-  // Formato
-  await sheets.spreadsheets.batchUpdate({
-    spreadsheetId,
-    requestBody: {
-      requests: [{
-        repeatCell: {
-          range: {
-            sheetId: sheetIdNum,
-            startRowIndex: row1 - 1,
-            endRowIndex: row1,
-            startColumnIndex: col0,
-            endColumnIndex: col0 + 1
-          },
-          cell: {
-            userEnteredFormat: {
-              backgroundColor: bgColor,
-              textFormat: TEXTO_BLANCO_BOLD
-            }
-          },
-          fields: 'userEnteredFormat(backgroundColor,textFormat)'
-        }
-      }]
-    }
-  });
-}
-
 /** Busca la fila (1-based) por código en la columna D (índice 3) */
 async function findRowByCode({ sheets, spreadsheetId, codigo }) {
   const getRes = await sheets.spreadsheets.values.get({
@@ -92,14 +48,14 @@ async function findRowByCode({ sheets, spreadsheetId, codigo }) {
 
 /**
  * Guarda una entrada en la hoja del evento correspondiente.
- * A = fecha, B = descripcionProducto, C = comprador, D = código, E/F = "NO" (verde)
+ * A = fecha, B = descripcionProducto, C = comprador, D = código, E/F = "NO"
  */
 async function guardarEntradaEnSheet({ sheetId, comprador, descripcionProducto = '', codigo, fecha = null }) {
   try {
     const fechaVenta = fecha ? fechaCompraES(new Date(fecha)) : fechaCompraES();
     const fila = [fechaVenta, descripcionProducto, comprador, codigo, 'NO', 'NO'];
 
-    const { sheets, sheetIdNum } = await getSheetsAndSheetId(sheetId);
+    const { sheets } = await getSheetsAndSheetId(sheetId);
 
     const appendRes = await sheets.spreadsheets.values.append({
       spreadsheetId: sheetId,
@@ -109,49 +65,7 @@ async function guardarEntradaEnSheet({ sheetId, comprador, descripcionProducto =
       requestBody: { values: [fila] }
     });
 
-    // Intentar deducir la fila insertada
-    let row1 = -1;
-    const updatedRange = appendRes.data?.updates?.updatedRange || '';
-    const m = updatedRange.match(/!?[A-Za-zÀ-ÿ0-9 '._-]*!?([A-Z]+)(\d+):[A-Z]+(\d+)/);
-    if (m) row1 = parseInt(m[2], 10);
-    if (row1 <= 0) row1 = await findRowByCode({ sheets, spreadsheetId: sheetId, codigo });
-
-    if (row1 > 0) {
-      // Reafirmamos los valores “NO” por si el append no los dejó
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: sheetId,
-        range: `E${row1}:F${row1}`,
-        valueInputOption: 'USER_ENTERED',
-        requestBody: { values: [['NO', 'NO']] }
-      });
-
-      // Y aplicamos formato a E y F
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: sheetId,
-        requestBody: {
-          requests: [{
-            repeatCell: {
-              range: {
-                sheetId: sheetIdNum,
-                startRowIndex: row1 - 1,
-                endRowIndex: row1,
-                startColumnIndex: 4, // E
-                endColumnIndex: 6    // hasta F (exclusivo)
-              },
-              cell: {
-                userEnteredFormat: {
-                  backgroundColor: COLOR_VERDE,
-                  textFormat: TEXTO_BLANCO_BOLD
-                }
-              },
-              fields: 'userEnteredFormat(backgroundColor,textFormat)'
-            }
-          }]
-        }
-      });
-    }
-
-    console.log(`✅ Entrada registrada en hoja (${sheetId}) → fila ${row1} código ${codigo}`);
+    console.log(`✅ Entrada registrada en hoja (${sheetId}) código ${codigo}`);
   } catch (err) {
     console.error(`❌ Error al guardar entrada en hoja (${sheetId}):`, err.message);
     throw err;
@@ -160,7 +74,7 @@ async function guardarEntradaEnSheet({ sheetId, comprador, descripcionProducto =
 
 /**
  * VALIDAR ENTRADA (día del evento)
- * - Solo E = "SÍ" (rojo). ❌ NO tocar F.
+ * - Solo E = "SÍ". ❌ NO se toca F.
  * - Devuelve email (C) y descripcionProducto (B).
  */
 async function marcarEntradaComoUsada(codigoEntrada, slugEvento) {
@@ -173,49 +87,29 @@ async function marcarEntradaComoUsada(codigoEntrada, slugEvento) {
       try {
         const url = new URL(codigoEntrada);
         codigo = url.searchParams.get('codigo') || codigoEntrada;
-        console.log('🔍 Código extraído de URL:', codigo);
-      } catch {
-        console.warn('⚠️ No se pudo parsear la URL, se usa el valor original.');
-      }
+      } catch {}
     }
 
-    const { sheets, sheetIdNum } = await getSheetsAndSheetId(spreadsheetId);
+    const { sheets } = await getSheetsAndSheetId(spreadsheetId);
 
-    const getRes = await sheets.spreadsheets.values.get({
+    const row1 = await findRowByCode({ sheets, spreadsheetId, codigo });
+    if (row1 === -1) return { error: 'Código no encontrado en la hoja.' };
+
+    // E (index 4) → "SÍ" (sin formato especial)
+    await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: 'A:F'
-    });
-    const filas = getRes.data.values || [];
-
-    let row1 = -1;
-    let filaEncontrada = null;
-    for (let i = 1; i < filas.length; i++) {
-      if (filas[i][3] && String(filas[i][3]).trim() === codigo) { // Columna D
-        row1 = i + 1;
-        filaEncontrada = filas[i];
-        break;
-      }
-    }
-
-    if (row1 === -1 || !filaEncontrada) {
-      return { error: 'Código no encontrado en la hoja.' };
-    }
-
-    // E (index 4) → "SÍ" rojo
-    await setCellValueAndFormat({
-      sheets,
-      spreadsheetId,
-      sheetIdNum,
-      row1,
-      col0: 4,
-      value: 'SÍ',
-      bgColor: COLOR_ROJO
+      range: `E${row1}`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: [['SÍ']] }
     });
 
     console.log(`🎟️ Entrada ${codigo} VALIDADA en fila ${row1}`);
 
-    const emailComprador  = filaEncontrada[2] || ''; // Columna C → email
-    const descripcionProd = filaEncontrada[1] || ''; // Columna B → descripcionProducto
+    // obtener datos de la fila
+    const getRes = await sheets.spreadsheets.values.get({ spreadsheetId, range: `A${row1}:F${row1}` });
+    const fila = getRes.data.values?.[0] || [];
+    const emailComprador  = fila[2] || '';
+    const descripcionProd = fila[1] || '';
 
     return { ok: true, emailComprador, descripcionProd };
   } catch (err) {
@@ -226,7 +120,7 @@ async function marcarEntradaComoUsada(codigoEntrada, slugEvento) {
 
 /**
  * CANJEAR POR LIBRO (cuando entregas el libro):
- * - F = "SÍ" (rojo). E no se toca aquí.
+ * - F = "SÍ". E no se toca aquí.
  */
 async function marcarEntradaComoCanjeadaPorLibro(codigoEntrada, slugEvento) {
   try {
@@ -241,22 +135,17 @@ async function marcarEntradaComoCanjeadaPorLibro(codigoEntrada, slugEvento) {
       } catch {}
     }
 
-    const { sheets, sheetIdNum } = await getSheetsAndSheetId(spreadsheetId);
+    const { sheets } = await getSheetsAndSheetId(spreadsheetId);
 
     const row1 = await findRowByCode({ sheets, spreadsheetId, codigo });
-    if (row1 === -1) {
-      return { error: 'Código no encontrado en la hoja.' };
-    }
+    if (row1 === -1) return { error: 'Código no encontrado en la hoja.' };
 
-    // F (index 5) → "SÍ" rojo
-    await setCellValueAndFormat({
-      sheets,
+    // F (index 5) → "SÍ" (sin formato especial)
+    await sheets.spreadsheets.values.update({
       spreadsheetId,
-      sheetIdNum,
-      row1,
-      col0: 5,
-      value: 'SÍ',
-      bgColor: COLOR_ROJO
+      range: `F${row1}`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: [['SÍ']] }
     });
 
     console.log(`📕 Entrada ${codigo} CANJEADA POR LIBRO en fila ${row1}`);
@@ -269,7 +158,7 @@ async function marcarEntradaComoCanjeadaPorLibro(codigoEntrada, slugEvento) {
 
 module.exports = {
   guardarEntradaEnSheet,
-  marcarEntradaComoUsada,            // E = SÍ (rojo)
-  marcarEntradaComoCanjeadaPorLibro, // F = SÍ (rojo)
+  marcarEntradaComoUsada,            // E = SÍ
+  marcarEntradaComoCanjeadaPorLibro, // F = SÍ
   SHEETS_EVENTOS
 };

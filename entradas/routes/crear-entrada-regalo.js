@@ -46,51 +46,27 @@ function getEventoFromEnv(formId) {
   };
 }
 
-// ── Estilos: Columna G "REGALO"
-const COLOR_ROSA = { red: 1, green: 0.8, blue: 0.9 };
-const TEXTO_BOLD = { bold: true };
-
 function getSheetId(formularioId) {
   const id = String(formularioId || '').trim();
   return MAP_SHEETS[id] || FALLBACK_22;
 }
 
+/**
+ * Inserta fila en A:G con:
+ * A=fecha, B=desc, C=comprador, D=código, E="NO", F="NO", G="REGALO"
+ * Sin aplicar ningún formato (fondo blanco, letra normal por defecto).
+ */
 async function appendRegaloRow({ spreadsheetId, fecha, desc, comprador, codigo }) {
   const authClient = await auth();
   const sheets = google.sheets({ version: 'v4', auth: authClient });
 
-  const resp = await sheets.spreadsheets.values.append({
+  await sheets.spreadsheets.values.append({
     spreadsheetId,
     range: 'A:G',
     valueInputOption: 'USER_ENTERED',
     insertDataOption: 'INSERT_ROWS',
     requestBody: { values: [[fecha, desc, comprador, codigo, 'NO', 'NO', 'REGALO']] }
   });
-
-  const m = (resp.data?.updates?.updatedRange || '').match(/([A-Z]+)(\d+):/);
-  if (m) {
-    const row1 = parseInt(m[2], 10);
-    const meta = await sheets.spreadsheets.get({ spreadsheetId });
-    const sheetIdNum = meta.data.sheets?.[0]?.properties?.sheetId || 0;
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId,
-      requestBody: {
-        requests: [{
-          repeatCell: {
-            range: {
-              sheetId: sheetIdNum,
-              startRowIndex: row1 - 1,
-              endRowIndex: row1,
-              startColumnIndex: 6, // G
-              endColumnIndex: 7
-            },
-            cell: { userEnteredFormat: { backgroundColor: COLOR_ROSA, textFormat: TEXTO_BOLD } },
-            fields: 'userEnteredFormat(backgroundColor,textFormat)'
-          }
-        }]
-      }
-    });
-  }
 }
 
 /**
@@ -140,7 +116,7 @@ router.post('/crear-entrada-regalo', async (req, res) => {
 
     const sheetId = getSheetId(formularioId);
     const carpeta = normalizar(descripcionProducto);
-    const fechaCompra = dayjs().format('DD/MM/YYYY - HH:mm');
+    const fechaCompra = dayjs().utcOffset(120).format('DD/MM/YYYY - HH:mm') + 'h';
 
     const buffers = [];
     const codigos = [];
@@ -188,17 +164,16 @@ router.post('/crear-entrada-regalo', async (req, res) => {
     }
 
     await enviarEmailConEntradas({
-    email,
-    nombre: beneficiarioNombre,
-    entradas: buffers,
-    descripcionProducto,
-    importe: 0,
-    facturaAdjunta: null,
-    modo: 'regalo',
-    fecha: fechaActuacion,
-    direccion: direccionEvento
+      email,
+      nombre: beneficiarioNombre,
+      entradas: buffers,
+      descripcionProducto,
+      importe: 0,
+      facturaAdjunta: null,
+      modo: 'regalo',
+      fecha: fechaActuacion,
+      direccion: direccionEvento
     });
-
 
     res.status(201).json({ ok: true, enviados: buffers.length, codigos, sheetId, formularioId });
   } catch (err) {

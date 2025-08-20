@@ -92,7 +92,7 @@ async function enviarEmailConEntradas({
     modo === 'reenvio'
       ? `Reenvío de entradas: «${descripcionProducto}»`
       : modo === 'regalo'
-        ? `🎁 Has recibido entradas de regalo para «${descripcionProducto}»`
+        ? `Tus entradas de regalo para «${descripcionProducto}»`
         : `🎟️ Tus entradas para «${descripcionProducto}»`;
 
   const finalSubject = subject || defaultSubject;
@@ -117,7 +117,7 @@ async function enviarEmailConEntradas({
       : modo === 'regalo'
         ? `
       <p>Estimado ${escapeHtml(displayName)},</p>
-      <p>Te mando de forma <strong>TOTALMENTE GRATUITA</strong> tus entradas para: <strong>${escapeHtml(descripcionProducto)}</strong>.</p>
+      <p>Te mando de forma <strong>totalmente gratuita</strong> tus entradas para: <strong>${escapeHtml(descripcionProducto)}</strong>.</p>
       ${bloqueEventoHTML}
       <p>Cada entrada incluye un código QR único que se validará el día del evento. Puedes llevarlas en el móvil o impresas.</p>
       <p>
@@ -174,7 +174,7 @@ ${politicaTEXT || ''}`
       : modo === 'regalo'
         ? `Estimado ${displayName},
 
-Te mando de forma TOTALMENTE GRATUITA tus entradas para:
+Te mando de forma totalmente gratuita tus entradas para:
 - ${descripcionProducto}
 ${bloqueEventoTEXT}
 

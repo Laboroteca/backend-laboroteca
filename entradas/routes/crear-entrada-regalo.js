@@ -85,33 +85,43 @@ async function appendRegaloRow({ spreadsheetId, fecha, desc, comprador, codigo }
  */
 router.post('/crear-entrada-regalo', async (req, res) => {
   try {
+    // ⚠️ Respetar 100% los hidden del formulario
     const beneficiarioNombre = String(req.body?.beneficiarioNombre || '').trim();
-    const email = String(req.body?.beneficiarioEmail || '').trim().toLowerCase();
-    const cantidad = Math.max(1, parseInt(req.body?.cantidad, 10) || 1);
-    const formularioId = String(req.body?.formularioId || '22').trim();
+    const email              = String(req.body?.beneficiarioEmail || '').trim().toLowerCase();
+    const cantidad           = Math.max(1, parseInt(req.body?.cantidad, 10) || 1);
+    const formularioId       = String(req.body?.formularioId || '22').trim();
+
+    // 🟢 METADATOS DEL EVENTO → SOLO desde el formulario (sin defaults “Evento 3”)
+    const descripcionProducto = String(req.body?.descripcionProducto || '').trim();
+    const fechaActuacion      = String(req.body?.fechaActuacion || '').trim();
+    const direccionEvento     = String(req.body?.direccionEvento || '').trim();
+    const imagenEvento        = String(req.body?.imagenEvento || '').trim();
+    const nombreProducto      = String(req.body?.nombreProducto || descripcionProducto).trim();
 
     if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))
       return res.status(400).json({ ok: false, error: 'Email del beneficiario inválido' });
 
-    const cfg = EVENT_CONFIG[formularioId] || EVENT_CONFIG['22'];
-    const sheetId = getSheetId(formularioId);
-    const carpeta = normalizar(cfg.descripcionProducto || cfg.nombreProducto || 'evento');
+    if (!descripcionProducto)
+      return res.status(400).json({ ok: false, error: 'Falta descripcionProducto (hidden del formulario)' });
+
+    const sheetId = getSheetId(formularioId);                 // hoja según formulario
+    const carpeta = normalizar(descripcionProducto);          // carpeta GCS por descripción real
     const fechaCompra = dayjs().format('DD/MM/YYYY - HH:mm');
 
     const buffers = [];
     const codigos = [];
 
     for (let i = 0; i < cantidad; i++) {
-      const codigo = generarCodigoEntrada(normalizar(cfg.nombreProducto || cfg.descripcionProducto || 'EVT'));
+      const codigo = generarCodigoEntrada(normalizar(nombreProducto || descripcionProducto));
       const pdf = await generarEntradaPDF({
         nombre: beneficiarioNombre,
         apellidos: '',
         codigo,
-        nombreActuacion: cfg.nombreProducto || cfg.descripcionProducto,
-        fechaActuacion: cfg.fechaActuacion,
-        descripcionProducto: cfg.descripcionProducto,
-        direccionEvento: cfg.direccionEvento,
-        imagenFondo: cfg.imagenEvento
+        nombreActuacion: nombreProducto || descripcionProducto,
+        fechaActuacion,
+        descripcionProducto,            // ✅ se respeta el hidden
+        direccionEvento,                // ✅ se respeta el hidden
+        imagenFondo: imagenEvento       // ✅ se respeta el hidden
       });
       buffers.push({ buffer: pdf });
       codigos.push(codigo);
@@ -119,28 +129,28 @@ router.post('/crear-entrada-regalo', async (req, res) => {
       // GCS (best-effort)
       try { await subirEntrada(`entradas/${carpeta}/${codigo}.pdf`, pdf); } catch {}
 
-      // Sheets (G="REGALO")
+      // Sheets (col G = REGALO)
       try {
         await appendRegaloRow({
           spreadsheetId: sheetId,
           fecha: fechaCompra,
-          desc: cfg.descripcionProducto,
+          desc: descripcionProducto, // ✅ descripción real
           comprador: email,
           codigo
         });
       } catch {}
 
-      // Firestore
+      // Firestore (best-effort)
       try {
         await registrarEntradaFirestore({
           codigoEntrada: codigo,
           emailComprador: email,
           nombreAsistente: beneficiarioNombre,
-          slugEvento: normalizar(cfg.nombreProducto || cfg.descripcionProducto),
-          nombreEvento: cfg.nombreProducto || cfg.descripcionProducto,
-          descripcionProducto: cfg.descripcionProducto,
-          direccionEvento: cfg.direccionEvento,
-          fechaActuacion: cfg.fechaActuacion
+          slugEvento: normalizar(nombreProducto || descripcionProducto),
+          nombreEvento: nombreProducto || descripcionProducto,
+          descripcionProducto,     // ✅ descripción real
+          direccionEvento,         // ✅ dirección real
+          fechaActuacion           // ✅ fecha real
         });
       } catch {}
     }
@@ -150,7 +160,7 @@ router.post('/crear-entrada-regalo', async (req, res) => {
       email,
       nombre: beneficiarioNombre,
       entradas: buffers,
-      descripcionProducto: cfg.descripcionProducto,
+      descripcionProducto, // ✅ asunto/cuerpo con la descripción real
       importe: 0,
       facturaAdjunta: null
     });

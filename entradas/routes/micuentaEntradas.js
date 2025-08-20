@@ -184,6 +184,8 @@ async function obtenerBuffersPdfsPorCodigos(descripcion, codigos) {
 
 // POST /entradas/reenviar
 // Body: { emailDestino, emailComprador, descripcionProducto }
+// POST /entradas/reenviar
+// Body: { emailDestino, emailComprador, descripcionProducto }
 router.post('/entradas/reenviar', async (req, res) => {
   try {
     const body = req.body || {};
@@ -207,8 +209,19 @@ router.post('/entradas/reenviar', async (req, res) => {
     ]);
 
     const codigos = new Set();
-    q1.forEach(d => { const x = d.data(); if (x && x.codigo) codigos.add(x.codigo); });
-    q2.forEach(d => { const x = d.data(); if (x && x.codigo) codigos.add(x.codigo); });
+    let fecha = null;
+    let direccion = null;
+    let nombreComprador = null;
+
+    const pickMeta = (x) => {
+      if (!x) return;
+      if (!fecha)     fecha     = x.fechaActuacion || x.fechaEvento || null;
+      if (!direccion) direccion = x.direccionEvento || x.lugar || null;
+      if (!nombreComprador) nombreComprador = x.nombreComprador || x.nombre || null;
+    };
+
+    q1.forEach(d => { const x = d.data(); if (x?.codigo) codigos.add(x.codigo); pickMeta(x); });
+    q2.forEach(d => { const x = d.data(); if (x?.codigo) codigos.add(x.codigo); pickMeta(x); });
 
     if (codigos.size === 0) {
       return res.status(404).json({ error: 'No se han encontrado entradas para ese evento' });
@@ -219,12 +232,21 @@ router.post('/entradas/reenviar', async (req, res) => {
       return res.status(404).json({ error: 'No se han encontrado PDFs en GCS para ese evento' });
     }
 
+    // Nombre visible: nombre de Firestore si existe; si no, parte local del email
+    const nombreMostrar = (nombreComprador && String(nombreComprador).trim())
+      ? String(nombreComprador).trim()
+      : (comprador.split('@')[0] || '');
+
     await enviarEmailConEntradas({
       email: to,
-      nombre: comprador,
+      nombre: nombreMostrar,
       entradas: buffers,
       descripcionProducto: desc,
-      importe: 0
+      importe: 0,           // opcional en reenvío (se muestra como "importe original" si lo necesitas)
+      modo: 'reenvio',      // << usa plantilla de reenvío
+      fecha,                // opcional: si está, aparece en el email
+      direccion             // opcional: si está, aparece en el email
+      // subject, html: si algún día quieres sobreescribir, puedes pasarlos aquí
     });
 
     res.json({ ok: true, reenviadas: buffers.length });
@@ -233,6 +255,7 @@ router.post('/entradas/reenviar', async (req, res) => {
     res.status(500).json({ error: 'Error reenviando entradas' });
   }
 });
+
 
 // GET defensivo (no navegar al backend por error)
 router.get('/entradas/reenviar', (_req, res) => {

@@ -2,15 +2,21 @@
 const { enviarEmailPersonalizado } = require('../../services/email');
 
 /**
- * Envía un email al comprador con las entradas y factura (si procede)
- * 
+ * Envía un email con entradas (y factura opcional).
+ * Soporta modo "compra" (por defecto) o "reenvio".
+ *
  * @param {Object} opciones
- * @param {string} opciones.email - Email del comprador
- * @param {string} opciones.nombre - Nombre del comprador
- * @param {Array<{ buffer: Buffer }>} opciones.entradas - Entradas en PDF
- * @param {Buffer|null} opciones.facturaAdjunta - Factura en PDF (opcional)
+ * @param {string} opciones.email               - Destinatario
+ * @param {string} [opciones.nombre]            - Nombre del destinatario (fallback: parte local del email)
+ * @param {Array<{ buffer: Buffer }>} opciones.entradas - Entradas en PDF (mín. 1)
+ * @param {Buffer|null} [opciones.facturaAdjunta=null]  - Factura PDF (opcional, solo en compra normalmente)
  * @param {string} opciones.descripcionProducto - Nombre del evento
- * @param {number} opciones.importe - Importe total en €
+ * @param {number} [opciones.importe]           - Importe total en € (opcional en reenvío)
+ * @param {"compra"|"reenvio"} [opciones.modo="compra"] - Tipo de email
+ * @param {string} [opciones.fecha]             - Fecha del evento (texto tal cual, p.ej. "30/10/2025 - 17:00")
+ * @param {string} [opciones.direccion]         - Dirección/Lugar del evento
+ * @param {string} [opciones.subject]           - Sobrescribir asunto
+ * @param {string} [opciones.html]              - Sobrescribir HTML completo
  */
 async function enviarEmailConEntradas({
   email,
@@ -18,37 +24,110 @@ async function enviarEmailConEntradas({
   entradas,
   facturaAdjunta = null,
   descripcionProducto,
-  importe
+  importe,
+  modo = 'compra',
+  fecha,
+  direccion,
+  subject,
+  html
 }) {
+  // Validaciones mínimas
+  if (!email || typeof email !== 'string') {
+    throw new Error('Email de destino inválido.');
+  }
   if (!Array.isArray(entradas) || entradas.length === 0) {
     throw new Error('No hay entradas que enviar.');
   }
+  if (!descripcionProducto) {
+    throw new Error('Falta descripcionProducto.');
+  }
 
-  const subject = `🎟️ Tus entradas para ${descripcionProducto}`;
+  // Utilidades
+  const displayName = (nombre && String(nombre).trim()) || String(email).split('@')[0] || '';
+  const numEntradas = entradas.length;
 
-  // HTML con enlace en texto plano (sin <a>)
-  const html = `
-    <p>Hola ${nombre},</p>
-    <p>Gracias por tu compra. Te enviamos tus entradas para el siguiente evento:</p>
-    <p><strong>${descripcionProducto}</strong></p>
-    <p>Importe total: <strong>${importe.toFixed(2)} €</strong></p>
-    <p>Cada entrada incluye un código QR único que se validará el día del evento. Puedes llevarlas en el móvil o impresas.</p>
-    <p>
-      Una vez validada tu entrada en el evento, el código de la misma podrá canjearse por un libro digital gratuito desde:<br/>
-      https://www.laboroteca.es/canjear-codigo-regalo/<br/>
-      Si no asistes y tu entrada no es validada, no podrás realizar el canje.<br/>
-      Solo se validará una entrada por cada asistente.
-    </p>
-    <p>Un saludo,<br><strong>Ignacio Solsona</strong><br>Laboroteca</p>
-  `;
+  const formatEuros = (n) => {
+    if (typeof n !== 'number' || !isFinite(n)) return null;
+    // Forzamos 2 decimales con punto, y cambiamos a coma en el HTML/text si te interesa
+    const fixed = n.toFixed(2);
+    return {
+      html: fixed.replace('.', ','), // 12.50 -> 12,50
+      text: fixed.replace('.', ',')
+    };
+  };
 
-  // Texto plano
-  const text = `Hola ${nombre},
+  // Bloque evento opcional
+  const bloqueEventoHTML = (fecha || direccion)
+    ? `<p><strong>Fecha:</strong> ${fecha ? String(fecha) : '—'}<br><strong>Lugar:</strong> ${direccion ? String(direccion) : '—'}</p>`
+    : '';
 
-Gracias por tu compra. Te enviamos tus entradas para:
+  const euros = formatEuros(importe);
 
+  // Asunto por defecto según modo (si no viene subject override)
+  const defaultSubject =
+    modo === 'reenvio'
+      ? `Reenvío de entradas: «${descripcionProducto}»`
+      : `🎟️ Tus entradas para «${descripcionProducto}»`;
+
+  const finalSubject = subject || defaultSubject;
+
+  // Cuerpos por defecto (si no viene html override)
+  const htmlPorDefecto =
+    modo === 'reenvio'
+      ? `
+      <p>Hola ${escapeHtml(displayName)},</p>
+      <p>Te reenviamos tus <strong>${numEntradas}</strong> entrada(s) para <strong>«${escapeHtml(descripcionProducto)}»</strong>.</p>
+      ${bloqueEventoHTML}
+      ${euros ? `<p>Importe total de la compra original: <strong>${euros.html} €</strong></p>` : ''}
+      <p>Puedes presentar el <strong>PDF adjunto</strong> en tu móvil o impreso. Cada entrada incluye su <strong>código QR único</strong>.</p>
+      <p>
+        Una vez validada tu entrada en el evento, el código de la misma podrá canjearse por un libro digital gratuito desde:<br/>
+        https://www.laboroteca.es/canjear-codigo-regalo/<br/>
+        Si no asistes y tu entrada no es validada, no podrás realizar el canje.<br/>
+        Solo se validará una entrada por cada asistente.
+      </p>
+      <p>Un saludo,<br><strong>Ignacio Solsona</strong><br>Laboroteca</p>
+    `
+      : `
+      <p>Hola ${escapeHtml(displayName)},</p>
+      <p>Gracias por tu compra. Adjuntamos tus <strong>${numEntradas}</strong> entrada(s) para:</p>
+      <p><strong>${escapeHtml(descripcionProducto)}</strong></p>
+      ${bloqueEventoHTML}
+      ${euros ? `<p>Importe total: <strong>${euros.html} €</strong></p>` : ''}
+      <p>Cada entrada incluye un código QR único que se validará el día del evento. Puedes llevarlas en el móvil o impresas.</p>
+      <p>
+        Una vez validada tu entrada en el evento, el código de la misma podrá canjearse por un libro digital gratuito desde:<br/>
+        https://www.laboroteca.es/canjear-codigo-regalo/<br/>
+        Si no asistes y tu entrada no es validada, no podrás realizar el canje.<br/>
+        Solo se validará una entrada por cada asistente.
+      </p>
+      <p>Un saludo,<br><strong>Ignacio Solsona</strong><br>Laboroteca</p>
+    `;
+
+  const textPorDefecto =
+    modo === 'reenvio'
+      ? `Hola ${displayName},
+
+Te reenviamos tus ${numEntradas} entrada(s) para:
 - ${descripcionProducto}
-- Importe total: ${importe.toFixed(2)} €
+${fecha ? `- Fecha: ${fecha}\n` : ''}${direccion ? `- Lugar: ${direccion}\n` : ''}${euros ? `- Importe total de la compra original: ${euros.text} €\n` : ''}
+
+Cada entrada incluye un código QR único que se validará el día del evento.
+Puedes llevarlas en el móvil o impresas.
+
+Una vez validada tu entrada en el evento, el código de la misma podrá canjearse por un libro digital gratuito desde:
+https://www.laboroteca.es/canjear-codigo-regalo/
+Si no asistes y tu entrada no es validada, no podrás realizar el canje.
+Solo se validará una entrada por cada asistente.
+
+Un saludo,
+Ignacio Solsona
+Laboroteca`
+      : `Hola ${displayName},
+
+Gracias por tu compra. Adjuntamos tus ${numEntradas} entrada(s) para:
+- ${descripcionProducto}
+${fecha ? `- Fecha: ${fecha}\n` : ''}${direccion ? `- Lugar: ${direccion}\n` : ''}${euros ? `- Importe total: ${euros.text} €\n` : ''}
 
 Cada entrada incluye un código QR único que se validará el día del evento.
 Puedes llevarlas en el móvil o impresas.
@@ -62,14 +141,13 @@ Un saludo,
 Ignacio Solsona
 Laboroteca`;
 
-  // Adjuntar entradas
+  // Adjuntos (entradas + factura opcional)
   const attachments = entradas.map((entrada, i) => ({
     filename: `ENTRADA ${i + 1}.pdf`,
     fileblob: entrada.buffer.toString('base64'),
     mimetype: 'application/pdf'
   }));
 
-  // Adjuntar factura si hay
   if (facturaAdjunta && Buffer.isBuffer(facturaAdjunta)) {
     attachments.push({
       filename: 'Factura Laboroteca.pdf',
@@ -78,18 +156,27 @@ Laboroteca`;
     });
   }
 
-  // Enviar email
-  // Nota: enviarEmailPersonalizado añade el pie RGPD por defecto (includeFooter=true).
+  // Envío (includeFooter por defecto = true en enviarEmailPersonalizado)
   await enviarEmailPersonalizado({
     to: email,
-    subject,
-    html,
-    text,
+    subject: finalSubject,
+    html: html || htmlPorDefecto,
+    text: textPorDefecto,
     attachments
-    // includeFooter: true // (opcional, por claridad; por defecto ya es true)
+    // includeFooter: true
   });
 
-  console.log(`📧 Email con ${entradas.length} entradas enviado a ${email}`);
+  console.log(`📧 Email (${modo}) con ${numEntradas} entrada(s) enviado a ${email}`);
+}
+
+/** Escapa caracteres HTML básicos */
+function escapeHtml(s) {
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 module.exports = { enviarEmailConEntradas };

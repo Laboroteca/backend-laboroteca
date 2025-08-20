@@ -508,85 +508,138 @@ try {
     process.env.DISABLE_INVOICING === '1';
   // (eliminada la línea "let pdfBuffer = null;" de aquí)
 
-if (invoicingDisabled) {
-  console.warn('⛔ Facturación deshabilitada. Saltando crear/subir/email. Registrando SOLO en Sheets.');
-  try {
-    await guardarEnGoogleSheets(datosCliente);
-  } catch (e) {
-    console.error('❌ Sheets (kill-switch):', e?.message || e);
-  }
-} else {
-  try {
-    // 🧾 Intento de creación de factura (puede fallar sin cortar el flujo)
-    pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
+  if (invoicingDisabled) {
+    console.warn('⛔ Facturación deshabilitada. Saltando crear/subir/email. Registrando SOLO en Sheets.');
+    try {
+      await guardarEnGoogleSheets(datosCliente);
+    } catch (e) {
+      console.error('❌ Sheets (kill-switch):', e?.message || e);
+    }
+  } else {
+    try {
+      // 🧾 Intento de creación de factura (puede fallar sin cortar el flujo)
+      pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
 
-    if (!pdfBuffer) {
-      console.warn('🟡 crearFacturaEnFacturaCity devolvió null (dedupe). No registro en Sheets ni subo a GCS.');
-    } else {
-      // ✅ Solo si hay PDF real
+      if (!pdfBuffer) {
+        console.warn('🟡 crearFacturaEnFacturaCity devolvió null (dedupe). No registro en Sheets ni subo a GCS.');
+      } else {
+        // ✅ Solo si hay PDF real
+        try {
+          await guardarEnGoogleSheets(datosCliente);
+        } catch (e) {
+          console.warn('⚠️ Sheets falló (ignorado):', e?.message || e);
+        }
+
+        // 🔒 Gate para evitar IO duplicado
+        const baseName = (pi || sessionId || Date.now());
+        const kSend = `send:invoice:${baseName}`;
+        const firstSend = await ensureOnce('sendFactura', kSend);
+        if (!firstSend) {
+          console.warn(`🟡 Dedupe envío/Upload para ${kSend}. No repito subir/email.`);
+        } else {
+          const nombreArchivo = `facturas/${email}/${baseName}-${datosCliente.producto}.pdf`;
+          await subirFactura(nombreArchivo, pdfBuffer, {
+            email,
+            nombreProducto: datosCliente.nombreProducto || datosCliente.producto,
+            tipoProducto: datosCliente.tipoProducto,
+            importe: datosCliente.importe
+          });
+
+          if (!esEntrada) {
+            await enviarFacturaPorEmail(datosCliente, pdfBuffer);
+          }
+        }
+      }
+    } catch (errFactura) {
+      console.error('⛔ Error FacturaCity sin respuesta:', errFactura?.message || errFactura);
+
+      // ⚠️ Continuamos el flujo sin factura
+      pdfBuffer = null;
+
+      // 🧾 Aún así, registramos la compra en Sheets (pago confirmado)
       try {
         await guardarEnGoogleSheets(datosCliente);
       } catch (e) {
-        console.warn('⚠️ Sheets falló (ignorado):', e?.message || e);
+        console.error('❌ Sheets tras fallo de FacturaCity:', e?.message || e);
       }
 
-      // 🔒 Gate para evitar IO duplicado
-      const baseName = (pi || sessionId || Date.now());
-      const kSend = `send:invoice:${baseName}`;
-      const firstSend = await ensureOnce('sendFactura', kSend);
-      if (!firstSend) {
-        console.warn(`🟡 Dedupe envío/Upload para ${kSend}. No repito subir/email.`);
-      } else {
-        const nombreArchivo = `facturas/${email}/${baseName}-${datosCliente.producto}.pdf`;
-        await subirFactura(nombreArchivo, pdfBuffer, {
-          email,
-          nombreProducto: datosCliente.nombreProducto || datosCliente.producto,
-          tipoProducto: datosCliente.tipoProducto,
-          importe: datosCliente.importe
+      // 🔔 Aviso al admin del fallo de factura con TODOS los datos del formulario
+      try {
+        const { enviarEmailPersonalizado } = require('./email');
+        const fechaCompraISO = new Date().toISOString();
+
+        const detallesTexto = `
+  ==== DATOS DE LA COMPRA (FACTURA FALLIDA) ====
+  - Nombre: ${datosCliente.nombre || '-'}
+  - Apellidos: ${datosCliente.apellidos || '-'}
+  - DNI: ${datosCliente.dni || '-'}
+  - Email: ${email || datosCliente.email || '-'}
+  - Tipo de producto: ${datosCliente.tipoProducto || '-'}
+  - Nombre del producto: ${datosCliente.nombreProducto || datosCliente.producto || '-'}
+  - Descripción del producto: ${datosCliente.descripcionProducto || '-'}
+  - Importe (€): ${typeof datosCliente.importe === 'number' ? datosCliente.importe.toFixed(2) : '-'}
+  - Fecha de la compra (ISO): ${fechaCompraISO}
+
+  -- Dirección de facturación --
+  - Dirección: ${datosCliente.direccion || '-'}
+  - Ciudad: ${datosCliente.ciudad || '-'}
+  - CP: ${datosCliente.cp || '-'}
+  - Provincia: ${datosCliente.provincia || '-'}
+
+  -- Datos adicionales --
+  - Total asistentes (si aplica): ${datosCliente.totalAsistentes ?? '-'}
+  - Session ID: ${sessionId || '-'}
+  - Payment Intent: ${pi || '-'}
+  - Error FacturaCity: ${errFactura?.message || String(errFactura)}
+  `.trim();
+
+        const detallesHTML = `
+          <h3>Datos de la compra (factura fallida)</h3>
+          <ul>
+            <li><strong>Nombre:</strong> ${datosCliente.nombre || '-'}</li>
+            <li><strong>Apellidos:</strong> ${datosCliente.apellidos || '-'}</li>
+            <li><strong>DNI:</strong> ${datosCliente.dni || '-'}</li>
+            <li><strong>Email:</strong> ${email || datosCliente.email || '-'}</li>
+            <li><strong>Tipo de producto:</strong> ${datosCliente.tipoProducto || '-'}</li>
+            <li><strong>Nombre del producto:</strong> ${datosCliente.nombreProducto || datosCliente.producto || '-'}</li>
+            <li><strong>Descripción del producto:</strong> ${datosCliente.descripcionProducto || '-'}</li>
+            <li><strong>Importe (€):</strong> ${typeof datosCliente.importe === 'number' ? datosCliente.importe.toFixed(2) : '-'}</li>
+            <li><strong>Fecha de la compra (ISO):</strong> ${fechaCompraISO}</li>
+          </ul>
+          <h4>Dirección de facturación</h4>
+          <ul>
+            <li><strong>Dirección:</strong> ${datosCliente.direccion || '-'}</li>
+            <li><strong>Ciudad:</strong> ${datosCliente.ciudad || '-'}</li>
+            <li><strong>CP:</strong> ${datosCliente.cp || '-'}</li>
+            <li><strong>Provincia:</strong> ${datosCliente.provincia || '-'}</li>
+          </ul>
+          <h4>Datos adicionales</h4>
+          <ul>
+            <li><strong>Total asistentes (si aplica):</strong> ${datosCliente.totalAsistentes ?? '-'}</li>
+            <li><strong>Session ID:</strong> ${sessionId || '-'}</li>
+            <li><strong>Payment Intent:</strong> ${pi || '-'}</li>
+            <li><strong>Error FacturaCity:</strong> ${String(errFactura?.message || errFactura)}</li>
+          </ul>
+          <p>Nota: se continúa el flujo ${esEntrada ? 'enviando <strong>entradas</strong> sin factura' : 'sin enviar factura'}.</p>
+        `.trim();
+
+        await enviarEmailPersonalizado({
+          to: 'laboroteca@gmail.com',
+          subject: '⚠️ Fallo al generar factura (checkout.session.completed)',
+          text: detallesTexto,
+          html: detallesHTML
         });
-
-        if (!esEntrada) {
-          await enviarFacturaPorEmail(datosCliente, pdfBuffer);
-        }
+      } catch (eAviso) {
+        console.error('⚠️ No se pudo avisar al admin del fallo de factura:', eAviso?.message || eAviso);
       }
-    }
-  } catch (errFactura) {
-    console.error('⛔ Error FacturaCity sin respuesta:', errFactura?.message || errFactura);
-
-    // ⚠️ Continuamos el flujo sin factura
-    pdfBuffer = null;
-
-    // 🔔 Aviso al admin del fallo de factura (para cualquier producto)
-    try {
-      const { enviarEmailPersonalizado } = require('./email');
-      await enviarEmailPersonalizado({
-        to: 'laboroteca@gmail.com',
-        subject: '⚠️ Fallo al generar factura (checkout.session.completed)',
-        text: `Email: ${email}
-Producto: ${datosCliente.nombreProducto || datosCliente.producto}
-PI/Session: ${pi || sessionId}
-Error: ${errFactura?.message || errFactura}
-Nota: se continúa el flujo ${esEntrada ? 'enviando ENTRADAS sin factura' : 'sin enviar factura'}.`,
-        html: `<p><strong>Fallo al generar factura</strong></p>
-               <ul>
-                 <li><strong>Email:</strong> ${email}</li>
-                 <li><strong>Producto:</strong> ${datosCliente.nombreProducto || datosCliente.producto}</li>
-                 <li><strong>PI/Session:</strong> ${pi || sessionId}</li>
-               </ul>
-               <p><strong>Error:</strong> ${String(errFactura?.message || errFactura)}</p>
-               <p>Se continúa el flujo ${esEntrada ? 'enviando <strong>entradas</strong> sin factura' : 'sin enviar factura'}.</p>`
-      });
-    } catch (eAviso) {
-      console.error('⚠️ No se pudo avisar al admin del fallo de factura:', eAviso?.message || eAviso);
     }
   }
-}
 
-// 🎫 Procesar ENTRADAS SIEMPRE (aunque falle FacturaCity o DISABLE_INVOICING sea true)
-if (esEntrada) {
-  const procesarEntradas = require('../entradas/services/procesarEntradas');
-  await procesarEntradas({ session, datosCliente, pdfBuffer }); // pdfBuffer puede ser null
-}
+  // 🎫 Procesar ENTRADAS SIEMPRE (aunque falle FacturaCity o DISABLE_INVOICING sea true)
+  if (esEntrada) {
+    const procesarEntradas = require('../entradas/services/procesarEntradas');
+    await procesarEntradas({ session, datosCliente, pdfBuffer }); // pdfBuffer puede ser null
+  }
 
 
   // 🛡️ Guardar datos fiscales si están completos

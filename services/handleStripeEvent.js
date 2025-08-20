@@ -202,44 +202,63 @@ if (!email || !email.includes('@')) {
   return;
 }
 
-// 🔎 Carga/crea ficha fiscal (para usar como fallback)
-const docRef = firestore.collection('datosFiscalesPorEmail').doc(email);
-const snap = await docRef.get();
-const base = snap.exists ? (snap.data() || {}) : {};
-
-const addr = invoice.customer_address || invoice.customer_details?.address || {};
-const nameFromStripe = invoice.customer_details?.name || '';
-const dniFromStripe  = invoice.customer_tax_ids?.[0]?.value || '';
-
 // Etiqueta ALTA vs RENOVACIÓN
 const isAlta = billingReason === 'subscription_create';
 
-// 🧠 Precedencia:
-//  - ALTA: usar primero los datos de la INVOICE (formulario Stripe) y caer a Firestore.
-//  - RENOVACIÓN: usar primero Firestore y caer a los datos de la INVOICE.
-const nombre    = isAlta ? (nameFromStripe || base.nombre || 'Cliente Laboroteca')
-                         : (base.nombre || nameFromStripe || 'Cliente Laboroteca');
-const apellidos = base.apellidos || '';
-const dni       = isAlta ? (dniFromStripe || base.dni || '')
-                         : (base.dni || dniFromStripe || '');
-const direccion = isAlta ? (addr.line1 || base.direccion || '')
-                         : (base.direccion || addr.line1 || '');
-const ciudad    = isAlta ? (addr.city || base.ciudad || '')
-                         : (base.ciudad || addr.city || '');
-const provincia = isAlta ? (addr.state || base.provincia || '')
-                         : (base.provincia || addr.state || '');
-const cp        = isAlta ? (addr.postal_code || base.cp || '')
-                         : (base.cp || addr.postal_code || '');
+// 1) Si es ALTA, leer primero la metadata de la SUSCRIPCIÓN (copiada en checkout.session.completed)
+let subMeta = {};
+try {
+  if (invoice.subscription) {
+    const subObj = await stripe.subscriptions.retrieve(invoice.subscription);
+    subMeta = subObj?.metadata || {};
+  }
+} catch (e) {
+  console.warn('⚠️ No se pudo recuperar la suscripción para leer metadata FF:', e?.message || e);
+}
 
-// Si no existía ficha, la persistimos para futuras renovaciones
-if (!snap.exists) {
+// 2) Cargamos posible ficha Firestore (fallback general y para renovaciones)
+const docRef = firestore.collection('datosFiscalesPorEmail').doc(email);
+const snap   = await docRef.get();
+const base   = snap.exists ? (snap.data() || {}) : {};
+
+// 3) Datos que puedan venir del invoice/customer de Stripe
+const addr           = invoice.customer_address || invoice.customer_details?.address || {};
+const nameFromStripe = invoice.customer_details?.name || '';
+const dniFromStripe  = invoice.customer_tax_ids?.[0]?.value || '';
+
+// 4) Selección de fuente según ALTA/RENOVACIÓN
+let nombre, apellidos, dni, direccion, ciudad, provincia, cp;
+
+if (isAlta) {
+  // ✅ ALTA: prioridad a datos de Fluent Forms guardados en subscription.metadata
+  nombre    = (subMeta.nombre    || nameFromStripe || 'Cliente Laboroteca');
+  apellidos = (subMeta.apellidos || '');
+  dni       = (subMeta.dni       || dniFromStripe  || '');
+  direccion = (subMeta.direccion || addr.line1     || '');
+  ciudad    = (subMeta.ciudad    || addr.city      || '');
+  provincia = (subMeta.provincia || addr.state     || '');
+  cp        = (subMeta.cp        || addr.postal_code || '');
+} else {
+  // 🔁 RENOVACIÓN: mantenemos tu comportamiento actual (Firestore -> Stripe)
+  nombre    = (base.nombre    || nameFromStripe || 'Cliente Laboroteca');
+  apellidos = (base.apellidos || '');
+  dni       = (base.dni       || dniFromStripe  || '');
+  direccion = (base.direccion || addr.line1     || '');
+  ciudad    = (base.ciudad    || addr.city      || '');
+  provincia = (base.provincia || addr.state     || '');
+  cp        = (base.cp        || addr.postal_code || '');
+}
+
+// 5) Si en ALTA no existía ficha, la guardamos *desde la fuente FF* para futuras renovaciones
+if (isAlta && !snap.exists) {
   await docRef.set({
     nombre, apellidos, dni, direccion, ciudad, provincia, cp, email,
-    origen: 'invoice.paid',
+    origen: 'subscription.metadata@invoice.paid',
     fecha: new Date().toISOString()
   }, { merge: true });
-  console.log(`ℹ️ Datos fiscales creados desde invoice.paid para ${email}`);
+  console.log(`ℹ️ (ALTA) Datos fiscales guardados desde subscription.metadata para ${email}`);
 }
+
 
 // Construcción de datos para Factura/Sheets
 const datosRenovacion = {
@@ -448,10 +467,79 @@ if (invoicingDisabled) {
 
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
-    if (session.mode === 'subscription') {
-      console.log('[checkout.session.completed] Suscripción: se factura en invoice.paid. Ignorado aquí.');
-      return { ignored_subscription: true };
+  if (session.mode === 'subscription') {
+    // Persistimos los datos del formulario (Fluent Forms) en Firestore
+    const m = session.metadata || {};
+    const emailFF = (
+      (m.email && m.email.includes('@') && m.email) ||
+      (session.customer_details?.email && session.customer_details.email) ||
+      (session.customer_email && session.customer_email)
+    )?.toLowerCase().trim();
+
+    if (emailFF && emailFF.includes('@')) {
+      const payload = {
+        nombre:     m.nombre     || session.customer_details?.name || '',
+        apellidos:  m.apellidos  || '',
+        dni:        m.dni        || m.nif || '',
+        direccion:  m.direccion  || '',
+        ciudad:     m.ciudad     || '',
+        provincia:  m.provincia  || '',
+        cp:         m.cp         || m.codigo_postal || '',
+        email:      emailFF,
+        origen:     'fluentforms@checkout.session.completed',
+        fecha:      new Date().toISOString()
+      };
+      await firestore.collection('datosFiscalesPorEmail').doc(emailFF).set(payload, { merge: true });
+          // 💾 Copiamos los datos fiscales de Fluent Forms a la SUSCRIPCIÓN de Stripe
+    try {
+      const subId = session.subscription;
+      if (subId) {
+        await stripe.subscriptions.update(subId, {
+          metadata: {
+            email:     emailFF || '',
+            nombre:    (m.nombre || session.customer_details?.name || '').trim(),
+            apellidos: (m.apellidos || '').trim(),
+            dni:       (m.dni || m.nif || '').trim(),
+            direccion: (m.direccion || '').trim(),
+            ciudad:    (m.ciudad || '').trim(),
+            provincia: (m.provincia || '').trim(),
+            cp:        (m.cp || m.codigo_postal || '').trim(),
+            fuente:    'fluentforms'
+          }
+        });
+      }
+    } catch (e) {
+      console.warn('⚠️ No se pudo actualizar metadata de la suscripción con datos FF:', e?.message || e);
     }
+
+    // (Opcional recomendado) Actualizar también el Customer con la dirección
+    try {
+      const custId = session.customer;
+      if (custId) {
+        await stripe.customers.update(custId, {
+          address: {
+            line1: (m.direccion || '') || undefined,
+            city: (m.ciudad || '') || undefined,
+            postal_code: (m.cp || m.codigo_postal || '') || undefined,
+            state: (m.provincia || '') || undefined,
+            country: 'ES'
+          },
+          name: ((m.nombre || '') + ' ' + (m.apellidos || '')).trim() || undefined
+        });
+      }
+    } catch (e) {
+      console.warn('⚠️ No se pudo actualizar el Customer con dirección FF:', e?.message || e);
+    }
+
+      console.log(`✅ Datos fiscales (FF) guardados para suscripción: ${emailFF}`);
+    } else {
+      console.warn('⚠️ Suscripción: no se pudo determinar email para guardar datos FF.');
+    }
+
+    // Seguimos sin facturar aquí (la factura se hace en invoice.paid)
+    return { noted_subscription_metadata: true };
+  }
+
 
     if (session.payment_status !== 'paid') return { ignored: true };
 

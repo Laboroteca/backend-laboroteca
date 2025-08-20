@@ -93,7 +93,7 @@ app.use('/regalos', require('./regalos/routes/crear-codigo-regalo'));
 
 app.use('/entradas/crear', require('./entradas/routes/crearEntrada'));
 app.use('/entradas/sesion', require('./entradas/routes/create-session-entrada'));
-
+app.use('/entradas', require('./entradas/routes/crear-entrada-regalo'));
 app.use('/', require('./entradas/routes/micuentaEntradas'));
 
 app.use('/', validarEntrada);

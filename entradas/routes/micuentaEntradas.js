@@ -12,8 +12,10 @@ const crypto = require('crypto');
 // ───────────────────────── Config seguridad (rate limit + firma)
 const RESEND_LIMIT_COUNT = Number(process.env.RESEND_LIMIT_COUNT || 3);      // máx. reenvíos por ventana
 const RESEND_LIMIT_WINDOW_MS = Number(process.env.RESEND_LIMIT_WINDOW_MS || (60 * 60 * 1000)); // 1h
-const HMAC_SHARED_SECRET = process.env.LB_SHARED_SECRET || '';               // clave compartida WP ↔ backend
-
+const HMAC_SHARED_SECRET =
+  process.env.LB_SHARED_SECRET ||
+  process.env.VALIDADOR_ENTRADAS_TOKEN || '';
+  
 // Bucket GCS
 const storage = new Storage({
   credentials: JSON.parse(

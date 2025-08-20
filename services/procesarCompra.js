@@ -236,6 +236,7 @@ const invoicingDisabled =
   process.env.DISABLE_INVOICING === '1';
 
 let pdfBuffer;
+let facturaId = null;
 
 if (invoicingDisabled) {
   console.warn('⛔ Facturación deshabilitada en procesarCompra. Saltando creación/subida/email.');
@@ -249,17 +250,28 @@ if (invoicingDisabled) {
   }
 
 } else {
-  // 1) Crear factura
-  try {
-    console.log('🧾 → Generando factura...');
-    pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
-    if (!pdfBuffer) {
-    console.warn('🟡 FacturaCity devolvió null (posible duplicado). No se sube ni se envía.');
-  } else {
-    console.log(`✅ Factura PDF generada (${pdfBuffer.length} bytes)`);
-  }
+// 1) Crear factura
+    try {
+      console.log('🧾 → Generando factura...');
+      const resFactura = await crearFacturaEnFacturaCity(datosCliente);
+      pdfBuffer = resFactura?.pdfBuffer || resFactura || null;
+      facturaId = resFactura?.facturaId || resFactura?.numeroFactura || null;
 
-  } catch (err) {
+      if (!pdfBuffer) {
+        console.warn('🟡 FacturaCity devolvió null (posible dedupe). No se sube ni se envía.');
+      } else {
+        console.log(`✅ Factura PDF generada (${pdfBuffer.length} bytes)`);
+
+        // 📝 Registrar la FACTURA en Sheets con ID fiscal si existe (SIN dedupe)
+        const datosSheets = { ...datosCliente };
+        if (facturaId) datosSheets.invoiceId = String(facturaId);
+        try {
+          await guardarEnGoogleSheets(datosSheets);
+        } catch (e) {
+          console.error('❌ Error registrando FACTURA en Sheets:', e?.message || e);
+        }
+      }
+    } catch (err) {
       console.error('❌ Error al crear factura:', err);
       pdfBuffer = null; // 👈 continuamos sin factura
 
@@ -301,7 +313,8 @@ if (invoicingDisabled) {
   // 2) Subir a GCS
   try {
     if (pdfBuffer) {
-      const nombreArchivo = `facturas/${email}/${datos.invoiceId || Date.now()}-${claveNormalizada}.pdf`;
+      const base = (facturaId || datos.invoiceId || Date.now());
+      const nombreArchivo = `facturas/${email}/${base}-${claveNormalizada}.pdf`;
       console.log('☁️ → Subiendo a GCS:', nombreArchivo);
       await subirFactura(nombreArchivo, pdfBuffer, {
         email,
@@ -317,9 +330,11 @@ if (invoicingDisabled) {
 
   // 3) Enviar por email
   try {
-    if (pdfBuffer) {
-      console.log('📧 → Enviando email con factura...');
-      const resultado = await enviarFacturaPorEmail(datosCliente, pdfBuffer);
+  if (pdfBuffer) {
+    console.log('📧 → Enviando email con factura...');
+    const datosSheets = { ...datosCliente };
+    if (facturaId) datosSheets.invoiceId = String(facturaId);
+    const resultado = await enviarFacturaPorEmail(datosSheets, pdfBuffer);
       if (resultado === 'OK') {
         console.log('✅ Email enviado');
       } else {
@@ -331,18 +346,14 @@ if (invoicingDisabled) {
   }
 
 
-// 4) Registrar en Google Sheets SIEMPRE (pago confirmado), aunque no haya factura
+// 4) Registrar en Google Sheets SIEMPRE si NO hay factura (compra)
 try {
-  const kSheet = `sheet:${dedupeKey || compraId}`;
-  const firstSheet = await ensureOnce('sheetOnce', kSheet);
-  if (!firstSheet) {
-    console.warn(`🟡 Dedupe Sheets ignorado: ${kSheet}`);
-  } else {
-    console.log('📝 → Registrando en Google Sheets...');
+  if (!pdfBuffer) {
+    console.log('📝 → Registrando COMPRA en Google Sheets (sin PDF)...');
     await guardarEnGoogleSheets(datosCliente);
   }
 } catch (err) {
-  console.error('❌ Error en Google Sheets (registro incondicional):', err?.message || err);
+  console.error('❌ Error registrando COMPRA en Sheets:', err?.message || err);
 }
 
 

@@ -6,7 +6,7 @@ const storage = new Storage({
   )
 });
 
-const bucket = storage.bucket('laboroteca-facturas');
+const bucket = storage.bucket('laboroteca-facturas-broken');
 
 /**
  * Sube una entrada en PDF a Google Cloud Storage

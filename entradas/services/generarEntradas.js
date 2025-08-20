@@ -44,14 +44,12 @@ function formatearFechaES() {
 }
 
 // ───────────────────────── Mapear formulario→Sheet ─────────────────────────
-// Mantienes el 22 y cambias el resto a 39, 40, 41, (y el último lo pongo como 42).
-// Si realmente el último también es 41, sustituye '42' por el ID correcto.
 const HOJAS_EVENTO = {
-  '22': '1W-0N5kBYxNk_DoSNWDBK7AwkM66mcQIpDHQnPooDW6s', // Formulario 1 (ID 22)
-  '39': '1PbhRFdm1b1bR0g5wz5nz0ZWAcgsbkakJVEh0dz34lCM', // antes 25
-  '40': '1EVcNTwE4nRNp4J_rZjiMGmojNO2F5TLZiwKY0AREmZE', // antes 28
-  '41': '1IUZ2_bQXxEVC_RLxNAzPBql9huu34cpE7_MF4Mg6eTM', // antes 31
-  '42': '1LGLEsQ_mGj-Hmkj1vjrRQpmSvIADZ1eMaTJoh3QBmQc'  // antes 34  ← cámbialo si el último ID es 41 también
+  '22': '1W-0N5kBYxNk_DoSNWDBK7AwkM66mcQIpDHQnPooDW6s',
+  '39': '1PbhRFdm1b1bR0g5wz5nz0ZWAcgsbkakJVEh0dz34lCM',
+  '40': '1EVcNTwE4nRNp4J_rZjiMGmojNO2F5TLZiwKY0AREmZE',
+  '41': '1IUZ2_bQXxEVC_RLxNAzPBql9huu34cpE7_MF4Mg6eTM',
+  '42': '1LGLEsQ_mGj-Hmkj1vjrRQpmSvIADZ1eMaTJoh3QBmQc'
 };
 
 async function generarEntradas({
@@ -69,21 +67,21 @@ async function generarEntradas({
 }) {
   const bucket = storage.bucket('laboroteca-facturas');
 
-  const spreadsheetId = HOJAS_EVENTO[idFormulario?.toString()];
+  const spreadsheetId = HOJAS_EVENTO[idFormulario?.toString()] || null;
   if (!spreadsheetId) {
-    throw new Error('🟥 No se reconoce el ID del formulario para asociar hoja');
+    console.warn('🟨 Sin spreadsheetId: se omite registro en Sheets para', idFormulario);
   }
 
   const auth = new google.auth.GoogleAuth({
     credentials: JSON.parse(Buffer.from(process.env.GCP_CREDENTIALS_BASE64, 'base64').toString('utf8')),
     scopes: ['https://www.googleapis.com/auth/spreadsheets']
   });
-
   const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
+
   const entradas = [];
+  const errores = [];
 
   // Carpeta de GCS basada en descripciónProducto (no en nombre/slug del evento)
-  // Ej.: entradas/jornadas-madrid-18-10-2025/ABC-123.pdf
   const carpetaEvento = slugify(descripcionProducto || slugEvento || 'evento');
 
   for (let i = 0; i < numEntradas; i++) {
@@ -123,74 +121,77 @@ async function generarEntradas({
       pdf.on('end', () => resolve(Buffer.concat(buffers)))
     );
 
-    // ───────── Subida a GCS (usa descripcionProducto como carpeta) ─────────
+    // ───────── Subida a GCS ─────────
     const nombreArchivo = `entradas/${carpetaEvento}/${codigo}.pdf`;
-    await bucket.file(nombreArchivo).save(pdfBuffer);
-    console.log(`✅ Entrada subida a GCS: ${nombreArchivo}`);
-
-    // ───────── Registro en Google Sheets ─────────
     try {
-    await sheets.spreadsheets.values.append({
-      spreadsheetId,
-      range: 'A2',
-      valueInputOption: 'RAW',
-      insertDataOption: 'INSERT_ROWS',
-      requestBody: {
-        values: [
-          [fechaVenta, descripcionProducto, nombreCompleto, i + 1, codigo, 'NO']
-        ]
-      }
-    });
-
+      await bucket.file(nombreArchivo).save(pdfBuffer);
+      console.log(`✅ Entrada subida a GCS: ${nombreArchivo}`);
     } catch (err) {
-      console.error(`❌ Error registrando en Google Sheets entrada ${codigo}:`, err.message);
+      console.error(`❌ Error GCS ${codigo}:`, err.message);
+      errores.push({ paso: 'GCS', codigo, detalle: err.message });
     }
 
-// ───────── Registro en Firestore (dos colecciones) ─────────
-try {
-  // 1) Colección principal (compat)
-  await firestore.collection('entradas').doc(codigo).set({
-    codigo,
-    email,                            // comprador
-    emailComprador: email,            // alias por compatibilidad
-    nombre: asistente.nombre || '',
-    apellidos: asistente.apellidos || '',
-    slugEvento,                       // ej. "presentacion-del-libro..."
-    nombreEvento: descripcionProducto || slugEvento || 'Evento',
-    descripcionProducto: descripcionProducto || '',
-    direccionEvento: direccionEvento || '',
-    fechaEvento: fechaEvento || '',   // formato "DD/MM/YYYY - HH:mm"
-    fechaActuacion: fechaEvento || '',// duplicado para búsquedas
-    nEntrada: i + 1,
-    usada: false,
-    fechaCompra: new Date().toISOString(),
-    timestamp: Date.now()
-  }, { merge: true });
+    // ───────── Registro en Google Sheets (opcional) ─────────
+    if (spreadsheetId) {
+      try {
+        await sheets.spreadsheets.values.append({
+          spreadsheetId,
+          range: 'A2',
+          valueInputOption: 'RAW',
+          insertDataOption: 'INSERT_ROWS',
+          requestBody: {
+            values: [
+              [fechaVenta, descripcionProducto, nombreCompleto, i + 1, codigo, 'NO']
+            ]
+          }
+        });
+      } catch (err) {
+        console.error(`❌ Error Sheets ${codigo}:`, err.message);
+        errores.push({ paso: 'SHEETS', codigo, detalle: err.message });
+      }
+    }
 
-  // 2) Colección usada por “Mi cuenta”
-  await firestore.collection('entradasCompradas').doc(codigo).set({
-    codigo,
-    emailComprador: email,
-    // nombre del evento en todos los sabores
-    nombreEvento: descripcionProducto || slugEvento || 'Evento',
-    descripcionProducto: descripcionProducto || '',
-    slugEvento: slugEvento || '',
-    // localización/fecha (para mostrar/filtrar)
-    direccionEvento: direccionEvento || '',
-    fechaEvento: fechaEvento || '',
-    fechaActuacion: fechaEvento || '',
-    usado: false,
-    fechaCompra: new Date().toISOString()
-  }, { merge: true });
+    // ───────── Registro en Firestore (best-effort) ─────────
+    try {
+      await firestore.collection('entradas').doc(codigo).set({
+        codigo,
+        email,                            // comprador
+        emailComprador: email,            // alias por compatibilidad
+        nombre: asistente.nombre || '',
+        apellidos: asistente.apellidos || '',
+        slugEvento,                       // ej. "presentacion-del-libro..."
+        nombreEvento: descripcionProducto || slugEvento || 'Evento',
+        descripcionProducto: descripcionProducto || '',
+        direccionEvento: direccionEvento || '',
+        fechaEvento: fechaEvento || '',   // formato "DD/MM/YYYY - HH:mm"
+        fechaActuacion: fechaEvento || '',// duplicado para búsquedas
+        nEntrada: i + 1,
+        usada: false,
+        fechaCompra: new Date().toISOString(),
+        timestamp: Date.now()
+      }, { merge: true });
 
-} catch (err) {
-  console.error(`❌ Error guardando en Firestore entrada ${codigo}:`, err.message);
-}
+      await firestore.collection('entradasCompradas').doc(codigo).set({
+        codigo,
+        emailComprador: email,
+        nombreEvento: descripcionProducto || slugEvento || 'Evento',
+        descripcionProducto: descripcionProducto || '',
+        slugEvento: slugEvento || '',
+        direccionEvento: direccionEvento || '',
+        fechaEvento: fechaEvento || '',
+        fechaActuacion: fechaEvento || '',
+        usado: false,
+        fechaCompra: new Date().toISOString()
+      }, { merge: true });
+    } catch (err) {
+      console.error(`❌ Error guardando en Firestore entrada ${codigo}:`, err.message);
+      errores.push({ paso: 'FIRESTORE', codigo, detalle: err.message });
+    }
 
     entradas.push({ codigo, nombreArchivo, buffer: pdfBuffer });
   }
 
-  return entradas;
+  return { entradas, errores };
 }
 
 module.exports = generarEntradas;

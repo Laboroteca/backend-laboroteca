@@ -1,24 +1,17 @@
+// entradas/services/procesarEntradas.js
 const path = require('path');
 const fs = require('fs').promises;
 const dayjs = require('dayjs');
 
-const { generarCodigoEntrada } = require('../utils/codigos');
+const { generarCodigoEntrada, normalizar } = require('../utils/codigos');
 const { generarEntradaPDF } = require('../utils/generarEntradaPDF');
 const { subirEntrada } = require('../utils/gcsEntradas');
 const { guardarEntradaEnSheet } = require('../utils/sheetsEntradas');
 const { enviarEmailConEntradas } = require('./enviarEmailConEntradas');
 const { registrarEntradaFirestore } = require('./registrarEntradaFirestore');
 
-/**
- * Procesa la compra de entradas: genera PDFs, guarda en Sheets, Firestore y envía email con adjuntos.
- * 
- * @param {Object} params
- * @param {Object} params.session - Sesión de Stripe
- * @param {Object} params.datosCliente - Datos del comprador
- * @param {Buffer|null} [params.pdfBuffer] - Factura en PDF (opcional, solo si se ha generado antes)
- */
 module.exports = async function procesarEntradas({ session, datosCliente, pdfBuffer = null }) {
-  const emailComprador  = datosCliente.email;
+  const emailComprador = datosCliente.email;
 
   // ⚙️ Datos del evento (preferimos descripcionProducto para carpeta/etiquetas)
   const nombreActuacion = session.metadata.nombreProducto || 'Evento Laboroteca';
@@ -27,6 +20,7 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
   const imagenFondo     = session.metadata.imagenEvento || null;
   const formularioId    = session.metadata.formularioId;
   const total           = parseInt(session.metadata.totalAsistentes || 0, 10);
+  const direccionEvento = session.metadata.direccionEvento || '';
 
   if (!formularioId) throw new Error('Falta el formularioId en metadata');
   if (!total || total <= 0) throw new Error('Falta totalAsistentes válido');
@@ -34,70 +28,32 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
   // slug del evento para el código (seguimos usando el “nombreActuacion” como antes)
   const slugEvento = nombreActuacion.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 
-  // carpeta basada en la descripción (Madrid/Barcelona → carpetas distintas)
-  const carpetaDescripcion = descripcionProd
-    .toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
+  // Carpeta basada en la descripción (Madrid/Barcelona → carpetas distintas)
+  const carpetaDescripcion = normalizar(descripcionProd);
 
-  const asistentes = Array.from({ length: total }, () => ({
-    nombre: '',
-    apellidos: ''
-  }));
+  // 1) Generar TODOS los PDFs en memoria (sin subir/registrar aún)
+  const asistentes = Array.from({ length: total }, () => ({ nombre: '', apellidos: '' }));
+  const archivosPDF = []; // [{ buffer }]
+  const codigos = [];     // códigos por entrada (mismo índice que archivosPDF)
 
-  const archivosPDF = [];
-  const fechaGeneracion = dayjs().format('YYYY-MM-DD HH:mm:ss');
-  const sheetId = obtenerSheetIdPorFormulario(formularioId);
-
-  for (const [index, asistente] of asistentes.entries()) {
-    // Prefijo del código se sigue generando con el slug del evento (sin cambio)
+  for (let i = 0; i < asistentes.length; i++) {
     const codigo = generarCodigoEntrada(slugEvento);
-
     const pdfBufferEntrada = await generarEntradaPDF({
-      nombre: asistente.nombre,
-      apellidos: asistente.apellidos,
+      nombre: asistentes[i].nombre,
+      apellidos: asistentes[i].apellidos,
       codigo,
-      nombreActuacion,                         // se muestra en el PDF
+      nombreActuacion,
       fechaActuacion,
-      descripcionProducto: descripcionProd,    // también disponible para el PDF
-      direccionEvento: session.metadata.direccionEvento || '',
+      descripcionProducto: descripcionProd,
+      direccionEvento,
       imagenFondo
     });
 
-    // 📂 NUEVA carpeta en GCS basada en descripcionProducto (no slugEvento)
-    const { normalizar } = require('../utils/codigos'); // ya lo tienes
-    const carpeta = normalizar(session.metadata.descripcionProducto || nombreActuacion);
-    const nombreArchivo = `entradas/${carpeta}/${codigo}.pdf`;
-
-    await subirEntrada(nombreArchivo, pdfBufferEntrada);
-
-    await guardarEntradaEnSheet({
-      sheetId,
-      codigo,
-      comprador: emailComprador,
-      descripcionProducto: descripcionProd, // 👈 nuevo campo
-      usado: 'NO',
-      fecha: fechaGeneracion
-    });
-
-
-    await registrarEntradaFirestore({
-      codigoEntrada: codigo,
-      emailComprador,
-      nombreAsistente: `${asistente.nombre} ${asistente.apellidos}`.trim(),
-      slugEvento,                       // compat
-      nombreEvento: nombreActuacion,    // compat
-      descripcionProducto: descripcionProd,
-      direccionEvento: session.metadata.direccionEvento || '',
-      fechaActuacion                    : fechaActuacion              // "DD/MM/YYYY - HH:mm"
-    });
-
-
     archivosPDF.push({ buffer: pdfBufferEntrada });
+    codigos.push(codigo);
   }
 
-  // ✉️ En el email ponemos la descripción (así coincide con la carpeta y el asunto)
+  // 2) Enviar SIEMPRE email al comprador con los PDFs (este es el hito incondicional)
   await enviarEmailConEntradas({
     email: emailComprador,
     nombre: datosCliente.nombre,
@@ -107,7 +63,93 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
     facturaAdjunta: pdfBuffer || null
   });
 
-  console.log(`✅ Entradas generadas para ${emailComprador}: ${asistentes.length}`);
+  // 3) Registrar best-effort en GCS / Sheets / Firestore (errores no bloquean)
+  const errores = [];
+  const fechaGeneracion = dayjs().format('YYYY-MM-DD HH:mm:ss');
+
+  // Intentar resolver sheetId, pero no bloquear si falla
+  let sheetId = null;
+  try {
+    sheetId = obtenerSheetIdPorFormulario(formularioId);
+  } catch (e) {
+    console.warn('🟨 Sin sheetId para formularioId', formularioId, e?.message || e);
+    errores.push({ paso: 'SHEETS_CFG', detalle: `formularioId=${formularioId}`, error: e?.message || String(e) });
+  }
+
+  for (let i = 0; i < archivosPDF.length; i++) {
+    const codigo = codigos[i];
+    const buf = archivosPDF[i].buffer;
+
+    // GCS (best-effort)
+    try {
+      const nombreArchivo = `entradas/${carpetaDescripcion}/${codigo}.pdf`;
+      await subirEntrada(nombreArchivo, buf);
+    } catch (e) {
+      console.error('❌ GCS:', e.message || e);
+      errores.push({ paso: 'GCS', codigo, detalle: e?.message || String(e) });
+    }
+
+    // Sheets (best-effort; solo si tenemos sheetId)
+    if (sheetId) {
+      try {
+        await guardarEntradaEnSheet({
+          sheetId,
+          codigo,
+          comprador: emailComprador,
+          descripcionProducto: descripcionProd,
+          usado: 'NO',
+          fecha: fechaGeneracion
+        });
+      } catch (e) {
+        console.error('❌ Sheets:', e.message || e);
+        errores.push({ paso: 'SHEETS', codigo, detalle: e?.message || String(e) });
+      }
+    }
+
+    // Firestore (best-effort)
+    try {
+      await registrarEntradaFirestore({
+        codigoEntrada: codigo,
+        emailComprador,
+        nombreAsistente: '',            // no tenemos nombres por entrada aquí
+        slugEvento,
+        nombreEvento: nombreActuacion,
+        descripcionProducto: descripcionProd,
+        direccionEvento,
+        fechaActuacion                  // "DD/MM/YYYY - HH:mm"
+      });
+    } catch (e) {
+      console.error('❌ Firestore:', e.message || e);
+      errores.push({ paso: 'FIRESTORE', codigo, detalle: e?.message || String(e) });
+    }
+  }
+
+  // 4) Aviso a admin si hubo fallos en cualquiera de los pasos post-email (no bloquea)
+  if (errores.length) {
+    try {
+      const { enviarEmailPersonalizado } = require('../../services/email');
+      await enviarEmailPersonalizado({
+        to: 'laboroteca@gmail.com',
+        subject: `⚠️ Fallos post-pago en registro de entradas (${emailComprador})`,
+        text: JSON.stringify(
+          {
+            emailComprador,
+            descripcionProducto: descripcionProd,
+            fechaActuacion,
+            slugEvento,
+            formularioId,
+            errores
+          },
+          null,
+          2
+        )
+      });
+    } catch (e) {
+      console.error('⚠️ No se pudo avisar al admin:', e.message || e);
+    }
+  }
+
+  console.log(`✅ Entradas generadas y enviadas a ${emailComprador}: ${archivosPDF.length}`);
 };
 
 function obtenerSheetIdPorFormulario(formularioId) {

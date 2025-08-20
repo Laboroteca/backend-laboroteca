@@ -2,8 +2,6 @@
 
 const express = require('express');
 const router = express.Router();
-const admin = require('../../firebase');
-const firestore = admin.firestore();
 
 const generarEntradas = require('../services/generarEntradas');
 const { enviarEmailConEntradas } = require('../services/enviarEmailConEntradas');
@@ -24,7 +22,7 @@ router.post('/', async (req, res) => {
   const nombre = (datos.nombre || '').trim();
   const apellidos = (datos.apellidos || '').trim();
   const asistentes = Array.isArray(datos.asistentes) ? datos.asistentes : []; // [{nombre, apellidos}]
-  const numEntradas = parseInt(datos.numeroEntradas || asistentes.length || 1);
+  const numEntradas = parseInt(datos.numeroEntradas || asistentes.length || 1, 10);
   const imagenFondo = (datos.imagenFondoPDF || '').trim();
   const slugEvento = (datos.nombreProducto || datos.slugEvento || '').trim();
   const fechaEvento = (datos.fechaEvento || '').trim();
@@ -47,7 +45,8 @@ router.post('/', async (req, res) => {
   processed.add(hashUnico);
 
   try {
-    const entradasGeneradas = await generarEntradas({
+    // 1) Generar entradas (devuelve { entradas, errores })
+    const { entradas, errores } = await generarEntradas({
       email,
       nombre,
       apellidos,
@@ -61,20 +60,51 @@ router.post('/', async (req, res) => {
       idFormulario
     });
 
-    await enviarEmailConEntradas({
-      email,
-      nombre,
-      entradas: entradasGeneradas,
-      facturaAdjunta: datos.facturaPdfBuffer,
-      descripcionProducto,
-      importe
-    });
+    // 2) Enviar SIEMPRE email con entradas (si falla, abortamos con 500)
+    try {
+      await enviarEmailConEntradas({
+        email,
+        nombre,
+        entradas, // [{ buffer }]
+        facturaAdjunta: datos.facturaPdfBuffer || null,
+        descripcionProducto,
+        importe
+      });
+    } catch (e) {
+      console.error('❌ Error enviando email de entradas:', e.message || e);
+      return res.status(500).json({ error: 'No se pudo enviar el email con entradas.' });
+    }
+
+    // 3) Aviso a admin si hubo errores post-email (no bloquea la respuesta al cliente)
+    if (errores && errores.length) {
+      try {
+        const { enviarEmailPersonalizado } = require('../../services/email');
+        await enviarEmailPersonalizado({
+          to: 'laboroteca@gmail.com',
+          subject: `⚠️ Fallos post-pago en registro de entradas (${email})`,
+          text: JSON.stringify(
+            {
+              email,
+              descripcionProducto,
+              fechaEvento,
+              slugEvento,
+              idFormulario,
+              errores
+            },
+            null,
+            2
+          )
+        });
+      } catch (e) {
+        console.error('⚠️ No se pudo avisar al admin:', e.message || e);
+      }
+    }
 
     console.log(`✅ Entradas generadas y enviadas a ${email} (${numEntradas})`);
     return res.status(200).json({ ok: true, mensaje: 'Entradas generadas y enviadas' });
   } catch (err) {
     console.error('❌ Error en /entradas/crear:', err.message || err);
-    return res.status(500).json({ error: 'Error generando o enviando entradas' });
+    return res.status(500).json({ error: 'Error generando entradas' });
   }
 });
 

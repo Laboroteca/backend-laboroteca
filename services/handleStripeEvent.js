@@ -10,7 +10,6 @@ const { syncMemberpressClub } = require('./syncMemberpressClub');
 const { syncMemberpressLibro } = require('./syncMemberpressLibro');
 const { registrarBajaClub } = require('./registrarBajaClub');
 const desactivarMembresiaClub = require('./desactivarMembresiaClub');
-const path = require('path');
 const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 const { ensureOnce } = require('../utils/dedupe');
@@ -205,16 +204,42 @@ if (!email || !email.includes('@')) {
 // Etiqueta ALTA vs RENOVACIÓN
 const isAlta = billingReason === 'subscription_create';
 
-// 1) Si es ALTA, leer primero la metadata de la SUSCRIPCIÓN (copiada en checkout.session.completed)
-let subMeta = {};
-try {
-  if (invoice.subscription) {
-    const subObj = await stripe.subscriptions.retrieve(invoice.subscription);
-    subMeta = subObj?.metadata || {};
+    // 1) ALTA: intentar leer PRIMERO metadata embebida en la invoice (Stripe la incluye)
+let subMeta = invoice.subscription_details?.metadata || {};
+
+// Si sigue vacío, recuperamos la suscripción como plan B
+if (isAlta && (!subMeta || Object.keys(subMeta).length === 0)) {
+  try {
+    if (invoice.subscription) {
+      const subObj = await stripe.subscriptions.retrieve(invoice.subscription);
+      subMeta = subObj?.metadata || {};
+    }
+  } catch (e) {
+    console.warn('⚠️ No se pudo recuperar la suscripción para leer metadata FF:', e?.message || e);
   }
-} catch (e) {
-  console.warn('⚠️ No se pudo recuperar la suscripción para leer metadata FF:', e?.message || e);
 }
+
+// Helper para coger la primera key válida
+const pick = (obj, ...keys) => {
+  for (const k of keys) {
+    const v = obj?.[k];
+    if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
+  }
+  return '';
+};
+
+// Normalizamos posibles nombres de campos que puede mandar FF
+const subNombre     = pick(subMeta, 'nombre', 'first_name', 'Nombre', 'billing_first_name');
+const subApellidos  = pick(subMeta, 'apellidos', 'last_name', 'Apellidos', 'billing_last_name');
+const subDni        = pick(subMeta, 'dni', 'nif', 'NIF', 'DNI', 'vat', 'vat_number');
+const subDireccion  = pick(subMeta, 'direccion', 'address', 'billing_address_1', 'billing_address');
+const subCiudad     = pick(subMeta, 'ciudad', 'city', 'billing_city');
+const subProvincia  = pick(subMeta, 'provincia', 'state', 'region', 'billing_state');
+const subCp         = pick(subMeta, 'cp', 'codigo_postal', 'postal_code', 'zip', 'billing_postcode');
+
+console.log('🧾 invoice.paid • isAlta=', isAlta, '• subscription_details.metadata keys=', Object.keys(invoice.subscription_details?.metadata || {}));
+console.log('🧾 invoice.paid • subMeta keys (final)=', Object.keys(subMeta || {}));
+
 
 // 2) Cargamos posible ficha Firestore (fallback general y para renovaciones)
 const docRef = firestore.collection('datosFiscalesPorEmail').doc(email);
@@ -230,14 +255,14 @@ const dniFromStripe  = invoice.customer_tax_ids?.[0]?.value || '';
 let nombre, apellidos, dni, direccion, ciudad, provincia, cp;
 
 if (isAlta) {
-  // ✅ ALTA: prioridad a datos de Fluent Forms guardados en subscription.metadata
-  nombre    = (subMeta.nombre    || nameFromStripe || 'Cliente Laboroteca');
-  apellidos = (subMeta.apellidos || '');
-  dni       = (subMeta.dni       || dniFromStripe  || '');
-  direccion = (subMeta.direccion || addr.line1     || '');
-  ciudad    = (subMeta.ciudad    || addr.city      || '');
-  provincia = (subMeta.provincia || addr.state     || '');
-  cp        = (subMeta.cp        || addr.postal_code || '');
+  // ✅ ALTA: prioridad a datos de Fluent Forms (con mapeo de claves)
+  nombre    = subNombre    || nameFromStripe || 'Cliente Laboroteca';
+  apellidos = subApellidos || '';
+  dni       = subDni       || dniFromStripe  || '';
+  direccion = subDireccion || addr.line1     || '';
+  ciudad    = subCiudad    || addr.city      || '';
+  provincia = subProvincia || addr.state     || '';
+  cp        = subCp        || addr.postal_code || '';
 } else {
   // 🔁 RENOVACIÓN: mantenemos tu comportamiento actual (Firestore -> Stripe)
   nombre    = (base.nombre    || nameFromStripe || 'Cliente Laboroteca');
@@ -248,6 +273,7 @@ if (isAlta) {
   provincia = (base.provincia || addr.state     || '');
   cp        = (base.cp        || addr.postal_code || '');
 }
+
 
 // 5) Si en ALTA no existía ficha, la guardamos *desde la fuente FF* para futuras renovaciones
 if (isAlta && !snap.exists) {
@@ -385,7 +411,7 @@ if (invoicingDisabled) {
       await syncMemberpressClub({
         email: emailSeguro,
         accion: 'activar',
-        membership_id: 10663,
+        membership_id: MEMBERPRESS_IDS['el club laboroteca'],
         importe: (invoice.amount_paid || 999) / 100
       });
     } else {
@@ -467,6 +493,8 @@ if (invoicingDisabled) {
 
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
+    
+
   if (session.mode === 'subscription') {
     // Persistimos los datos del formulario (Fluent Forms) en Firestore
     const m = session.metadata || {};
@@ -475,6 +503,7 @@ if (invoicingDisabled) {
       (session.customer_details?.email && session.customer_details.email) ||
       (session.customer_email && session.customer_email)
     )?.toLowerCase().trim();
+    
 
     if (emailFF && emailFF.includes('@')) {
       const payload = {
@@ -511,6 +540,28 @@ if (invoicingDisabled) {
     } catch (e) {
       console.warn('⚠️ No se pudo actualizar metadata de la suscripción con datos FF:', e?.message || e);
     }
+
+    // Además, replicamos metadata en el Customer como backup
+try {
+  const custId = session.customer;
+  if (custId) {
+    await stripe.customers.update(custId, {
+      metadata: {
+        email: emailFF || '',
+        nombre: (m.nombre || session.customer_details?.name || '').trim(),
+        apellidos: (m.apellidos || '').trim(),
+        dni: (m.dni || m.nif || '').trim(),
+        direccion: (m.direccion || '').trim(),
+        ciudad: (m.ciudad || '').trim(),
+        provincia: (m.provincia || '').trim(),
+        cp: (m.cp || m.codigo_postal || '').trim(),
+        fuente: 'fluentforms'
+      }
+    });
+  }
+} catch (e) {
+  console.warn('⚠️ No se pudo actualizar metadata del Customer con datos FF:', e?.message || e);
+}
 
     // (Opcional recomendado) Actualizar también el Customer con la dirección
     try {

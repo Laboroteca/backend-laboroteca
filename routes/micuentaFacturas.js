@@ -7,8 +7,14 @@ const firestore = admin.firestore();
 
 const { Storage } = require('@google-cloud/storage');
 const axios = require('axios');
+const crypto = require('crypto');
+const rateLimit = require('express-rate-limit');
 
-// ========= Config FacturaCity (para fallback si no hay PDF en GCS)
+// ========= Config seguridad (firma HMAC entre WP y backend)
+const SHARED_SECRET = (process.env.ACCOUNT_API_SECRET || '').trim();
+const HMAC_WINDOW_SECONDS = 5 * 60; // 5 min
+
+// ========= Config FacturaCity (fallback PDF si no hay en GCS)
 const FACTURACITY_API_KEY = (process.env.FACTURACITY_API_KEY || '').trim().replace(/"/g, '');
 const FACTURACITY_API_URL = process.env.FACTURACITY_API_URL || '';
 const AXIOS_TIMEOUT = 10000;
@@ -39,6 +45,68 @@ function slugify(s) {
     .replace(/^-+|-+$/g, '')
     .toLowerCase();
 }
+function timingSafeEqualHex(aHex, bHex) {
+  try {
+    const a = Buffer.from(String(aHex || ''), 'hex');
+    const b = Buffer.from(String(bHex || ''), 'hex');
+    if (a.length !== b.length) return false;
+    return crypto.timingSafeEqual(a, b);
+  } catch { return false; }
+}
+function signHmac(str) {
+  if (!SHARED_SECRET) return '';
+  return crypto.createHmac('sha256', SHARED_SECRET).update(str).digest('hex');
+}
+function signDocId(id, email) {
+  if (!SHARED_SECRET) return '';
+  return signHmac(`${email}|${id}`);
+}
+
+// -------- Middleware de autenticación con compatibilidad legada --------
+function requireSignedUser(req, res, next) {
+  // Si hay secreto → exige firma
+  if (SHARED_SECRET) {
+    const ts = String(req.headers['x-lab-ts'] || req.query.ts || '');
+    const token = String(req.headers['x-lab-token'] || req.query.token || '');
+    const emailFromReq = (
+      req.query.email ||
+      req.body.emailUsuario ||
+      req.body.emailDestino ||
+      ''
+    ).toString().trim().toLowerCase();
+
+    if (!emailFromReq || !ts || !token) {
+      return res.status(401).json({ error: 'Falta autenticación' });
+    }
+    const tsNum = Number(ts);
+    if (!Number.isFinite(tsNum)) {
+      return res.status(401).json({ error: 'Token inválido' });
+    }
+    const skew = Math.abs(Date.now() - tsNum * 1000);
+    if (skew > HMAC_WINDOW_SECONDS * 1000) {
+      return res.status(401).json({ error: 'Token expirado' });
+    }
+    const expected = signHmac(`${emailFromReq}|${ts}`);
+    if (!timingSafeEqualHex(expected, token)) {
+      return res.status(401).json({ error: 'Firma inválida' });
+    }
+    req.userEmail = emailFromReq;
+    return next();
+  }
+
+  // Modo compat (sin secreto): NO SEGURO, pero no rompe mientras ajustas WP
+  const legacyEmail = (
+    req.query.email ||
+    req.body.emailUsuario ||
+    ''
+  ).toString().trim().toLowerCase();
+  if (!legacyEmail) {
+    return res.status(401).json({ error: 'Email requerido' });
+  }
+  console.warn('⚠️ ACCOUNT_API_SECRET no configurado. Ruta en modo compat (menor seguridad).');
+  req.userEmail = legacyEmail;
+  return next();
+}
 
 // Descargar fichero si existe
 async function downloadIfExists(path) {
@@ -67,14 +135,12 @@ async function findBestPdfInFolder({ email, invoiceId, numeroFactura, idfactura,
     const name = full.split('/').pop() || '';
     const low  = name.toLowerCase();
 
-    // señales (coincidencias)
     const hasInvoice = invoiceId && low.includes(String(invoiceId).toLowerCase());
     const hasNumero  = numeroFactura && low.includes(String(numeroFactura).toLowerCase());
     const hasSlug    = slug && low.includes(`-${slug}.pdf`);
 
     if (!(hasInvoice || hasNumero || hasSlug)) continue;
 
-    // pondera por distancia de timestamp inicial si es numérico
     let score = 0;
     const lead = low.split('-')[0];
     const ts = /^\d{12,}$/.test(lead) ? parseInt(lead, 10) : NaN;
@@ -103,9 +169,8 @@ async function exportFromFacturaCity(idfactura, numeroFactura) {
   return { buffer: resp.data, filename: `factura-${numeroFactura || idfactura}.pdf` };
 }
 
-// ---------- Obtiene el PDF de una factura (GCS con varios patrones → fallback FacturaCity)
+// Obtiene el PDF de una factura (GCS con varios patrones → fallback FacturaCity)
 async function obtenerPdfFactura({ email, storagePath, invoiceId, numeroFactura, idfactura, descripcionProducto, fechaISO, docId }) {
-  // 0) Si viene un storagePath explícito, úsalo
   if (storagePath) {
     const buf = await downloadIfExists(storagePath);
     if (buf) {
@@ -114,7 +179,6 @@ async function obtenerPdfFactura({ email, storagePath, invoiceId, numeroFactura,
     }
   }
 
-  // 1) Candidatos directos comunes
   const prefix = `facturas/${email}/`;
   const directCandidates = [
     invoiceId && `${prefix}${invoiceId}.pdf`,
@@ -128,22 +192,23 @@ async function obtenerPdfFactura({ email, storagePath, invoiceId, numeroFactura,
     if (buf) return { buffer: buf, filename: c.split('/').pop() };
   }
 
-  // 2) Buscar “mejor match” dentro de la carpeta del email
   const best = await findBestPdfInFolder({ email, invoiceId, numeroFactura, idfactura, descripcionProducto, fechaISO });
   if (best) return best;
 
-  // 3) Fallback: exportar desde FacturaCity
   const fromFc = await exportFromFacturaCity(idfactura, numeroFactura);
   if (fromFc) return fromFc;
 
   return null;
 }
 
+// ========= Rate limit básico para estas rutas
+const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 120 });
+
 // =================== LISTADO ===================
 // GET /cuenta/facturas?email=...&pageSize=15&cursor=...
-router.get('/cuenta/facturas', async (req, res) => {
+router.get('/cuenta/facturas', limiter, requireSignedUser, async (req, res) => {
   try {
-    const email = String(req.query.email || '').trim().toLowerCase();
+    const email = String(req.userEmail || '').trim().toLowerCase();
     if (!email) return res.status(400).json({ error: 'Falta email' });
 
     const pageSize = Math.min(Math.max(parseInt(String(req.query.pageSize || '15'), 10) || 15, 1), 50);
@@ -168,6 +233,7 @@ router.get('/cuenta/facturas', async (req, res) => {
       const d = doc.data() || {};
       items.push({
         docId: doc.id,
+        sig: signDocId(doc.id, email), // firma por elemento (si hay secreto)
         fechaISO: d.fechaISO || null,
         fecha: d.fechaTexto || (d.fechaISO ? new Date(d.fechaISO).toLocaleDateString('es-ES') : ''),
         numeroFactura: d.numeroFactura || d.idfactura || d.invoiceId || '',
@@ -175,8 +241,7 @@ router.get('/cuenta/facturas', async (req, res) => {
         importeConIVA: (typeof d.importeTotalIVA === 'number') ? d.importeTotalIVA : null,
         idfactura: d.idfactura || null,
         invoiceId: d.invoiceId || null,
-        storagePath: d.storagePath || d.nombreArchivo || null, // por si guardaste nombreArchivo
-        email: (d.email || '').toLowerCase().trim(),
+        storagePath: d.storagePath || d.nombreArchivo || null
       });
     });
 
@@ -199,20 +264,39 @@ router.get('/cuenta/facturas', async (req, res) => {
 // =================== REENVÍO ===================
 // POST /facturas/reenviar
 // Body:
-// { emailDestino: "...", emailUsuario: "...", ids: ["<docId>", ...] }
-router.post('/facturas/reenviar', async (req, res) => {
+//   { emailDestino: "...", ids: [ "<docId>" | {id:"...", sig:"..."} , ... ] }
+router.post('/facturas/reenviar', limiter, requireSignedUser, async (req, res) => {
   try {
     const body = req.body || {};
     const to = String(body.emailDestino || '').trim().toLowerCase();
-    const owner = String(body.emailUsuario || '').trim().toLowerCase();
-    const ids = Array.isArray(body.ids) ? body.ids.filter(Boolean) : [];
+    const owner = String(req.userEmail || '').trim().toLowerCase();
 
-    if (!to || !owner || ids.length === 0) {
-      return res.status(400).json({ error: 'Faltan campos: emailDestino, emailUsuario, ids[]' });
+    const rawIds = Array.isArray(body.ids) ? body.ids : [];
+    const pairs = rawIds.map(v => {
+      if (v && typeof v === 'object' && v.id) return { id: String(v.id), sig: String(v.sig || '') };
+      return { id: String(v || ''), sig: '' };
+    }).filter(p => p.id);
+
+    if (!to || !owner || pairs.length === 0) {
+      return res.status(400).json({ error: 'Faltan campos: emailDestino, ids[]' });
+    }
+
+    // Si hay secreto → exigir firma por elemento
+    let verifiedIds = [];
+    if (SHARED_SECRET) {
+      verifiedIds = pairs
+        .filter(p => p.sig && timingSafeEqualHex(signDocId(p.id, owner), p.sig))
+        .map(p => p.id);
+      if (verifiedIds.length === 0) {
+        return res.status(400).json({ error: 'Selección inválida' });
+      }
+    } else {
+      console.warn('⚠️ ACCOUNT_API_SECRET no configurado. Reenvío sin verificación de firma de items.');
+      verifiedIds = pairs.map(p => p.id);
     }
 
     // Seguridad: todas las facturas deben pertenecer al owner
-    const reads = await Promise.all(ids.map(id => firestore.collection('facturas').doc(id).get()));
+    const reads = await Promise.all(verifiedIds.map(id => firestore.collection('facturas').doc(id).get()));
     const validDocs = reads
       .filter(s => s.exists)
       .map(s => ({ id: s.id, ...(s.data() || {}) }))
@@ -226,7 +310,7 @@ router.post('/facturas/reenviar', async (req, res) => {
     const adjuntos = [];
     for (const d of validDocs) {
       const pdf = await obtenerPdfFactura({
-        email: (d.email || owner).toLowerCase().trim(),
+        email: owner,
         storagePath: d.storagePath || d.nombreArchivo || null,
         invoiceId: d.invoiceId || null,
         numeroFactura: d.numeroFactura || null,

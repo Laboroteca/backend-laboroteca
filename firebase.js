@@ -19,9 +19,9 @@ try {
 }
 
 if (!admin.apps.length) {
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount)
-  });
+  // ❌ provoca fallo
+// admin.initializeApp({ credential: admin.credential.cert(svc) });
+  ;
   if (process.env.NODE_ENV !== 'production') {
     console.log('✅ Firebase inicializado');
   }

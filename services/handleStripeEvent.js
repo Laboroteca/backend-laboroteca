@@ -265,34 +265,42 @@ if (event.type === 'invoice.paid') {
       try { await guardarEnGoogleSheets(datosRenovacion); } catch (e) { console.error('❌ Sheets (kill-switch):', e?.message || e); }
     } else {
       try {
-        pdfBuffer = await crearFacturaEnFacturaCity(datosRenovacion);
-        if (!pdfBuffer) {
-          console.warn(`🟡 crearFacturaEnFacturaCity devolvió null (dedupe). No se sube ni se envía email. Registrando en Sheets.`);
-          try { await guardarEnGoogleSheets(datosRenovacion); } catch (e) { console.error('❌ Sheets (dedupe):', e?.message || e); }
+        const resFactura = await crearFacturaEnFacturaCity(datosRenovacion);
+pdfBuffer = resFactura?.pdfBuffer || resFactura || null;
+const facturaId = resFactura?.facturaId || resFactura?.numeroFactura || null;
 
-          } else {
-      // Segunda compuerta: no repetir subida/envío aunque hubiese doble PDF
-      const kSend = `send:invoice:${invoiceId}`;
-      const firstSend = await ensureOnce('sendFactura', kSend);
-      if (!firstSend) {
-        console.warn(`🟡 Dedupe envío/Upload para ${kSend}. No repito subir/email.`);
-      } else {
-        const nombreArchivoGCS = `facturas/${email}/${invoiceId}.pdf`;
-        await subirFactura(nombreArchivoGCS, pdfBuffer, {
-          email,
-          nombreProducto: datosRenovacion.nombreProducto,
-          tipoProducto: datosRenovacion.tipoProducto,
-          importe: datosRenovacion.importe
-        });
-        try {
-  await guardarEnGoogleSheets(datosRenovacion);
+if (!pdfBuffer) {
+  console.warn(`🟡 crearFacturaEnFacturaCity devolvió null (dedupe). No se sube ni se envía email. Registrando en Sheets.`);
+  try { await guardarEnGoogleSheets(datosRenovacion); } catch (e) { console.error('❌ Sheets (dedupe):', e?.message || e); }
+
+} else {
+  // ✅ Registrar en Sheets la FACTURA usando el ID real si existe (antes del gate)
+  const datosSheets = { ...datosRenovacion };
+  if (facturaId) datosSheets.invoiceId = String(facturaId);
+
+  try {
+    await guardarEnGoogleSheets(datosSheets);
   } catch (e) {
     console.warn('⚠️ Sheets (invoice.paid) falló (ignorado):', e?.message || e);
   }
-  await enviarFacturaPorEmail(datosRenovacion, pdfBuffer);
 
-      }
-    }
+  // Segunda compuerta: no repetir subida/envío aunque hubiese doble PDF
+  const kSend = `send:invoice:${invoiceId}`;
+  const firstSend = await ensureOnce('sendFactura', kSend);
+  if (!firstSend) {
+    console.warn(`🟡 Dedupe envío/Upload para ${kSend}. No repito subir/email.`);
+  } else {
+    const nombreArchivoGCS = `facturas/${email}/${invoiceId}.pdf`;
+    await subirFactura(nombreArchivoGCS, pdfBuffer, {
+      email,
+      nombreProducto: datosRenovacion.nombreProducto,
+      tipoProducto: datosRenovacion.tipoProducto,
+      importe: datosRenovacion.importe
+    });
+    await enviarFacturaPorEmail(datosSheets, pdfBuffer);
+  }
+}
+
 
     } catch (e) {
       console.error('❌ Error facturación invoice.paid:', e?.message || e);
@@ -605,39 +613,45 @@ try {
   } else {
     try {
       // 🧾 Intento de creación de factura (puede fallar sin cortar el flujo)
-    pdfBuffer = await crearFacturaEnFacturaCity(datosCliente);
+    const resFactura = await crearFacturaEnFacturaCity(datosCliente);
+pdfBuffer = resFactura?.pdfBuffer || resFactura || null;
+const facturaId = resFactura?.facturaId || resFactura?.numeroFactura || null;
 
-    if (!pdfBuffer) {
-      console.warn('🟡 crearFacturaEnFacturaCity devolvió null (dedupe). Registro en Sheets pero NO subo a GCS ni envío factura.');
-      try { await guardarEnGoogleSheets(datosCliente); } catch (e) { console.error('❌ Sheets (dedupe):', e?.message || e); }
-    } else {
-        // ✅ Solo si hay PDF real
-        try {
-          await guardarEnGoogleSheets(datosCliente);
-        } catch (e) {
-          console.warn('⚠️ Sheets falló (ignorado):', e?.message || e);
-        }
+if (!pdfBuffer) {
+  console.warn('🟡 crearFacturaEnFacturaCity devolvió null (dedupe). Registro en Sheets pero NO subo a GCS ni envío factura.');
+  try { await guardarEnGoogleSheets(datosCliente); } catch (e) { console.error('❌ Sheets (dedupe):', e?.message || e); }
+} else {
+  // ✅ Registrar en Sheets la FACTURA usando el ID real si existe
+  const datosSheets = { ...datosCliente };
+  if (facturaId) datosSheets.invoiceId = String(facturaId);
 
-        // 🔒 Gate para evitar IO duplicado
-        const baseName = (pi || sessionId || Date.now());
-        const kSend = `send:invoice:${baseName}`;
-        const firstSend = await ensureOnce('sendFactura', kSend);
-        if (!firstSend) {
-          console.warn(`🟡 Dedupe envío/Upload para ${kSend}. No repito subir/email.`);
-        } else {
-          const nombreArchivo = `facturas/${email}/${baseName}-${datosCliente.producto}.pdf`;
-          await subirFactura(nombreArchivo, pdfBuffer, {
-            email,
-            nombreProducto: datosCliente.nombreProducto || datosCliente.producto,
-            tipoProducto: datosCliente.tipoProducto,
-            importe: datosCliente.importe
-          });
+  try {
+    await guardarEnGoogleSheets(datosSheets);
+  } catch (e) {
+    console.warn('⚠️ Sheets falló (ignorado):', e?.message || e);
+  }
 
-          if (!esEntrada) {
-            await enviarFacturaPorEmail(datosCliente, pdfBuffer);
-          }
-        }
-      }
+  // 🔒 Gate para evitar IO duplicado
+  const baseName = (pi || sessionId || Date.now());
+  const kSend = `send:invoice:${baseName}`;
+  const firstSend = await ensureOnce('sendFactura', kSend);
+  if (!firstSend) {
+    console.warn(`🟡 Dedupe envío/Upload para ${kSend}. No repito subir/email.`);
+  } else {
+    const nombreArchivo = `facturas/${email}/${baseName}-${datosCliente.producto}.pdf`;
+    await subirFactura(nombreArchivo, pdfBuffer, {
+      email,
+      nombreProducto: datosCliente.nombreProducto || datosCliente.producto,
+      tipoProducto: datosCliente.tipoProducto,
+      importe: datosCliente.importe
+    });
+
+    if (!esEntrada) {
+      await enviarFacturaPorEmail(datosSheets, pdfBuffer);
+    }
+  }
+}
+
     } catch (errFactura) {
       console.error('⛔ Error FacturaCity sin respuesta:', errFactura?.message || errFactura);
 

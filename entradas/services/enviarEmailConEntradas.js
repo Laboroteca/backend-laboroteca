@@ -1,9 +1,25 @@
 // 📂 /entradas/services/enviarEmailConEntradas.js
 const { enviarEmailPersonalizado } = require('../../services/email');
 
+/** Carga segura de la política RGPD usada en los emails de compra (si existe) */
+function getPoliticaHTML() {
+  try {
+    const mod = require('../../services/politica');
+    if (mod && typeof mod.politicaHTML === 'string') return mod.politicaHTML;
+  } catch (_) {}
+  return '';
+}
+function getPoliticaTEXT() {
+  try {
+    const mod = require('../../services/politica');
+    if (mod && typeof mod.politicaTEXT === 'string') return mod.politicaTEXT;
+  } catch (_) {}
+  return '';
+}
+
 /**
  * Envía un email con entradas (y factura opcional).
- * Soporta modo "compra" (por defecto) o "reenvio".
+ * Soporta modo "compra" (por defecto), "reenvio" y "regalo".
  *
  * @param {Object} opciones
  * @param {string} opciones.email               - Destinatario
@@ -11,8 +27,8 @@ const { enviarEmailPersonalizado } = require('../../services/email');
  * @param {Array<{ buffer: Buffer }>} opciones.entradas - Entradas en PDF (mín. 1)
  * @param {Buffer|null} [opciones.facturaAdjunta=null]  - Factura PDF (opcional, solo en compra normalmente)
  * @param {string} opciones.descripcionProducto - Nombre del evento
- * @param {number} [opciones.importe]           - Importe total en € (opcional en reenvío)
- * @param {"compra"|"reenvio"} [opciones.modo="compra"] - Tipo de email
+ * @param {number} [opciones.importe]           - Importe total en € (solo en compra)
+ * @param {"compra"|"reenvio"|"regalo"} [opciones.modo="compra"] - Tipo de email
  * @param {string} [opciones.fecha]             - Fecha del evento (texto tal cual, p.ej. "30/10/2025 - 17:00")
  * @param {string} [opciones.direccion]         - Dirección/Lugar del evento
  * @param {string} [opciones.subject]           - Sobrescribir asunto
@@ -63,15 +79,25 @@ async function enviarEmailConEntradas({
     ? `<p><strong>Fecha:</strong> ${fecha ? String(fecha) : '—'}<br><strong>Lugar:</strong> ${direccion ? String(direccion) : '—'}</p>`
     : '';
 
+  const bloqueEventoTEXT = (fecha || direccion)
+    ? `${fecha ? `- Fecha: ${fecha}\n` : ''}${direccion ? `- Lugar: ${direccion}\n` : ''}`
+    : '';
+
+  // Política (si existe en el proyecto, se añade al final)
+  const politicaHTML = getPoliticaHTML();
+  const politicaTEXT = getPoliticaTEXT();
+
   // Asunto por defecto según modo
   const defaultSubject =
     modo === 'reenvio'
       ? `Reenvío de entradas: «${descripcionProducto}»`
-      : `🎟️ Tus entradas para «${descripcionProducto}»`;
+      : modo === 'regalo'
+        ? `🎁 Has recibido entradas de regalo para «${descripcionProducto}»`
+        : `🎟️ Tus entradas para «${descripcionProducto}»`;
 
   const finalSubject = subject || defaultSubject;
 
-  // Cuerpos por defecto
+  // Cuerpos por defecto (HTML)
   const htmlPorDefecto =
     modo === 'reenvio'
       ? `
@@ -81,13 +107,33 @@ async function enviarEmailConEntradas({
       <p>Puedes presentar el <strong>PDF adjunto</strong> en tu móvil o impreso. Cada entrada incluye su <strong>código QR único</strong>.</p>
       <p>
         Una vez validada tu entrada en el evento, el código de la misma podrá canjearse por un libro digital gratuito desde:<br/>
-        https://www.laboroteca.es/canjear-codigo-regalo/<br/>
+        <a href="https://www.laboroteca.es/canjear-codigo-regalo/">https://www.laboroteca.es/canjear-codigo-regalo/</a><br/>
         Si no asistes y tu entrada no es validada, no podrás realizar el canje.<br/>
         Solo se validará una entrada por cada asistente.
       </p>
       <p>Un saludo,<br><strong>Ignacio Solsona</strong><br>Laboroteca</p>
+      ${politicaHTML || ''}
     `
-      : `
+      : modo === 'regalo'
+        ? `
+      <p>Estimado ${escapeHtml(displayName)},</p>
+      <p>Te mando de forma <strong>TOTALMENTE GRATUITA</strong> tus entradas para: <strong>${escapeHtml(descripcionProducto)}</strong>.</p>
+      ${bloqueEventoHTML}
+      <p>Cada entrada incluye un código QR único que se validará el día del evento. Puedes llevarlas en el móvil o impresas.</p>
+      <p>
+        Una vez validada tu entrada en el evento, el código de la misma podrá canjearse por un libro digital gratuito desde:<br/>
+        <a href="https://www.laboroteca.es/canjear-codigo-regalo/">https://www.laboroteca.es/canjear-codigo-regalo/</a><br/>
+        Si no asistes y tu entrada no es validada, no podrás realizar el canje.<br/>
+        Solo se validará una entrada por cada asistente.
+      </p>
+      <p>Un saludo,<br>
+        <strong>Ignacio Solsona</strong><br>
+        Abogado
+      </p>
+      <hr/>
+      ${politicaHTML || ''}
+    `
+        : `
       <p>Hola ${escapeHtml(displayName)},</p>
       <p>Gracias por tu compra. Adjuntamos tus <strong>${numEntradas}</strong> entrada(s) para:</p>
       <p><strong>${escapeHtml(descripcionProducto)}</strong></p>
@@ -96,20 +142,22 @@ async function enviarEmailConEntradas({
       <p>Cada entrada incluye un código QR único que se validará el día del evento. Puedes llevarlas en el móvil o impresas.</p>
       <p>
         Una vez validada tu entrada en el evento, el código de la misma podrá canjearse por un libro digital gratuito desde:<br/>
-        https://www.laboroteca.es/canjear-codigo-regalo/<br/>
+        <a href="https://www.laboroteca.es/canjear-codigo-regalo/">https://www.laboroteca.es/canjear-codigo-regalo/</a><br/>
         Si no asistes y tu entrada no es validada, no podrás realizar el canje.<br/>
         Solo se validará una entrada por cada asistente.
       </p>
       <p>Un saludo,<br><strong>Ignacio Solsona</strong><br>Laboroteca</p>
+      ${politicaHTML || ''}
     `;
 
+  // Cuerpos por defecto (Texto plano)
   const textPorDefecto =
     modo === 'reenvio'
       ? `Hola ${displayName},
 
 Te reenviamos tus ${numEntradas} entrada(s) para:
 - ${descripcionProducto}
-${fecha ? `- Fecha: ${fecha}\n` : ''}${direccion ? `- Lugar: ${direccion}\n` : ''}
+${bloqueEventoTEXT}
 
 Cada entrada incluye un código QR único que se validará el día del evento.
 Puedes llevarlas en el móvil o impresas.
@@ -121,12 +169,32 @@ Solo se validará una entrada por cada asistente.
 
 Un saludo,
 Ignacio Solsona
-Laboroteca`
-      : `Hola ${displayName},
+Laboroteca
+${politicaTEXT || ''}`
+      : modo === 'regalo'
+        ? `Estimado ${displayName},
+
+Te mando de forma TOTALMENTE GRATUITA tus entradas para:
+- ${descripcionProducto}
+${bloqueEventoTEXT}
+
+Cada entrada incluye un código QR único que se validará el día del evento.
+Puedes llevarlas en el móvil o impresas.
+
+Una vez validada tu entrada en el evento, el código de la misma podrá canjearse por un libro digital gratuito desde:
+https://www.laboroteca.es/canjear-codigo-regalo/
+Si no asistes y tu entrada no es validada, no podrás realizar el canje.
+Solo se validará una entrada por cada asistente.
+
+Un saludo,
+Ignacio Solsona
+Abogado
+${politicaTEXT || ''}`
+        : `Hola ${displayName},
 
 Gracias por tu compra. Adjuntamos tus ${numEntradas} entrada(s) para:
 - ${descripcionProducto}
-${fecha ? `- Fecha: ${fecha}\n` : ''}${direccion ? `- Lugar: ${direccion}\n` : ''}${euros ? `- Importe total: ${euros.text} €\n` : ''}
+${bloqueEventoTEXT}${euros ? `- Importe total: ${euros.text} €\n` : ''}
 
 Cada entrada incluye un código QR único que se validará el día del evento.
 Puedes llevarlas en el móvil o impresas.
@@ -138,7 +206,8 @@ Solo se validará una entrada por cada asistente.
 
 Un saludo,
 Ignacio Solsona
-Laboroteca`;
+Laboroteca
+${politicaTEXT || ''}`;
 
   // Adjuntos (entradas + factura opcional)
   const attachments = entradas.map((entrada, i) => ({

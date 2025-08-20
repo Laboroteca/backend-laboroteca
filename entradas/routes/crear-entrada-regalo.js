@@ -188,13 +188,17 @@ router.post('/crear-entrada-regalo', async (req, res) => {
     }
 
     await enviarEmailConEntradas({
-      email,
-      nombre: beneficiarioNombre,
-      entradas: buffers,
-      descripcionProducto,
-      importe: 0,
-      facturaAdjunta: null
+    email,
+    nombre: beneficiarioNombre,
+    entradas: buffers,
+    descripcionProducto,
+    importe: 0,
+    facturaAdjunta: null,
+    modo: 'regalo',
+    fecha: fechaActuacion,
+    direccion: direccionEvento
     });
+
 
     res.status(201).json({ ok: true, enviados: buffers.length, codigos, sheetId, formularioId });
   } catch (err) {

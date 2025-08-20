@@ -7,14 +7,13 @@ const firestore = admin.firestore();
 
 const { Storage } = require('@google-cloud/storage');
 const axios = require('axios');
-const qs = require('qs');
 
-// ====== Config externa FacturaCity (para fallback de PDF si no está en GCS)
-const FACTURACITY_API_KEY = process.env.FACTURACITY_API_KEY?.trim().replace(/"/g, '');
-const API_BASE = process.env.FACTURACITY_API_URL;
+// ========= Config FacturaCity (para fallback si no hay PDF en GCS)
+const FACTURACITY_API_KEY = (process.env.FACTURACITY_API_KEY || '').trim().replace(/"/g, '');
+const FACTURACITY_API_URL = process.env.FACTURACITY_API_URL || '';
 const AXIOS_TIMEOUT = 10000;
 
-// ====== GCS
+// ========= GCS
 const storage = new Storage({
   credentials: JSON.parse(
     Buffer.from(process.env.GCP_CREDENTIALS_BASE64 || '', 'base64').toString('utf8')
@@ -22,10 +21,10 @@ const storage = new Storage({
 });
 const bucket = storage.bucket('laboroteca-facturas');
 
-// ====== Email (nuevo servicio para enviar varias facturas adjuntas)
+// ========= Email (servicio propio que adjunta varios PDFs)
 const { enviarEmailConFacturas } = require('../services/enviarEmailConFacturas');
 
-// ---------- Utils de paginación ----------
+// -------------------------------- Utils --------------------------------
 function encodeCursor(obj) {
   return Buffer.from(JSON.stringify(obj), 'utf8').toString('base64url');
 }
@@ -33,33 +32,115 @@ function decodeCursor(s) {
   try { return JSON.parse(Buffer.from(String(s || ''), 'base64url').toString('utf8')); }
   catch { return null; }
 }
+function slugify(s) {
+  return String(s || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .toLowerCase();
+}
 
-// ---------- Descarga de PDF (GCS o fallback FacturaCity) ----------
-async function descargarFacturaPdf({ storagePath, idfactura, numeroFactura }) {
-  // 1) Si tenemos storagePath en GCS, lo usamos
+// Descargar fichero si existe
+async function downloadIfExists(path) {
+  const f = bucket.file(path);
+  const [exists] = await f.exists();
+  if (!exists) return null;
+  const [buf] = await f.download();
+  return buf;
+}
+
+// Selección “mejor coincidencia” dentro de una carpeta de email
+async function findBestPdfInFolder({ email, invoiceId, numeroFactura, idfactura, descripcionProducto, fechaISO }) {
+  const prefix = `facturas/${email}/`;
+  const [files] = await bucket.getFiles({ prefix });
+
+  if (!files || files.length === 0) return null;
+
+  const slug = slugify(descripcionProducto || '');
+  const targetTs = fechaISO ? new Date(fechaISO).getTime() : 0;
+
+  let best = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (const f of files) {
+    const full = f.name || '';
+    const name = full.split('/').pop() || '';
+    const low  = name.toLowerCase();
+
+    // señales (coincidencias)
+    const hasInvoice = invoiceId && low.includes(String(invoiceId).toLowerCase());
+    const hasNumero  = numeroFactura && low.includes(String(numeroFactura).toLowerCase());
+    const hasSlug    = slug && low.includes(`-${slug}.pdf`);
+
+    if (!(hasInvoice || hasNumero || hasSlug)) continue;
+
+    // pondera por distancia de timestamp inicial si es numérico
+    let score = 0;
+    const lead = low.split('-')[0];
+    const ts = /^\d{12,}$/.test(lead) ? parseInt(lead, 10) : NaN;
+    if (Number.isFinite(ts) && targetTs) score = Math.abs(ts - targetTs);
+
+    if (score < bestScore) {
+      best = f;
+      bestScore = score;
+    }
+  }
+
+  if (!best) return null;
+  const [buf] = await best.download();
+  return { buffer: buf, filename: best.name.split('/').pop() };
+}
+
+// Exportar desde FacturaCity si tenemos idfactura
+async function exportFromFacturaCity(idfactura, numeroFactura) {
+  if (!idfactura || !FACTURACITY_API_KEY || !FACTURACITY_API_URL) return null;
+  const url = `${FACTURACITY_API_URL}/exportarFacturaCliente/${idfactura}?lang=es_ES`;
+  const resp = await axios.get(url, {
+    headers: { Token: FACTURACITY_API_KEY },
+    responseType: 'arraybuffer',
+    timeout: AXIOS_TIMEOUT
+  });
+  return { buffer: resp.data, filename: `factura-${numeroFactura || idfactura}.pdf` };
+}
+
+// ---------- Obtiene el PDF de una factura (GCS con varios patrones → fallback FacturaCity)
+async function obtenerPdfFactura({ email, storagePath, invoiceId, numeroFactura, idfactura, descripcionProducto, fechaISO, docId }) {
+  // 0) Si viene un storagePath explícito, úsalo
   if (storagePath) {
-    const [exists] = await bucket.file(storagePath).exists();
-    if (exists) {
-      const [buf] = await bucket.file(storagePath).download();
-      const filename = (storagePath.split('/').pop()) || `factura-${numeroFactura || idfactura || Date.now()}.pdf`;
+    const buf = await downloadIfExists(storagePath);
+    if (buf) {
+      const filename = storagePath.split('/').pop() || `factura-${numeroFactura || idfactura || docId}.pdf`;
       return { buffer: buf, filename };
     }
   }
-  // 2) Fallback: exportar desde FacturaCity (requiere idfactura)
-  if (idfactura && API_BASE && FACTURACITY_API_KEY) {
-    const url = `${API_BASE}/exportarFacturaCliente/${idfactura}?lang=es_ES`;
-    const resp = await axios.get(url, {
-      headers: { Token: FACTURACITY_API_KEY },
-      responseType: 'arraybuffer',
-      timeout: AXIOS_TIMEOUT
-    });
-    const filename = `factura-${numeroFactura || idfactura}.pdf`;
-    return { buffer: resp.data, filename };
+
+  // 1) Candidatos directos comunes
+  const prefix = `facturas/${email}/`;
+  const directCandidates = [
+    invoiceId && `${prefix}${invoiceId}.pdf`,
+    numeroFactura && `${prefix}${numeroFactura}.pdf`,
+    idfactura && `${prefix}${idfactura}.pdf`,
+    docId && `${prefix}${docId}.pdf`,
+  ].filter(Boolean);
+
+  for (const c of directCandidates) {
+    const buf = await downloadIfExists(c);
+    if (buf) return { buffer: buf, filename: c.split('/').pop() };
   }
+
+  // 2) Buscar “mejor match” dentro de la carpeta del email
+  const best = await findBestPdfInFolder({ email, invoiceId, numeroFactura, idfactura, descripcionProducto, fechaISO });
+  if (best) return best;
+
+  // 3) Fallback: exportar desde FacturaCity
+  const fromFc = await exportFromFacturaCity(idfactura, numeroFactura);
+  if (fromFc) return fromFc;
+
   return null;
 }
 
-// ========== LISTADO: GET /cuenta/facturas?email=...&pageSize=15&cursor=... ==========
+// =================== LISTADO ===================
+// GET /cuenta/facturas?email=...&pageSize=15&cursor=...
 router.get('/cuenta/facturas', async (req, res) => {
   try {
     const email = String(req.query.email || '').trim().toLowerCase();
@@ -68,7 +149,7 @@ router.get('/cuenta/facturas', async (req, res) => {
     const pageSize = Math.min(Math.max(parseInt(String(req.query.pageSize || '15'), 10) || 15, 1), 50);
     const cursorRaw = req.query.cursor ? decodeCursor(req.query.cursor) : null;
 
-    // Paginación robusta: orderBy(fechaISO desc, __name__ desc)
+    // where + orderBy compuesto → requiere índice: (email ==), fechaISO desc, __name__ desc
     let q = firestore
       .collection('facturas')
       .where('email', '==', email)
@@ -93,7 +174,9 @@ router.get('/cuenta/facturas', async (req, res) => {
         descripcionProducto: d.descripcionProducto || d.nombreProducto || '',
         importeConIVA: (typeof d.importeTotalIVA === 'number') ? d.importeTotalIVA : null,
         idfactura: d.idfactura || null,
-        storagePath: d.storagePath || null
+        invoiceId: d.invoiceId || null,
+        storagePath: d.storagePath || d.nombreArchivo || null, // por si guardaste nombreArchivo
+        email: (d.email || '').toLowerCase().trim(),
       });
     });
 
@@ -113,15 +196,10 @@ router.get('/cuenta/facturas', async (req, res) => {
   }
 });
 
-// ========== REENVÍO: POST /facturas/reenviar ==========
-/*
-Body JSON:
-{
-  "emailDestino": "destino@ejemplo.com",
-  "emailUsuario": "dueño@ejemplo.com",
-  "ids": ["docId1", "docId2", ...]     // docIds de colección 'facturas'
-}
-*/
+// =================== REENVÍO ===================
+// POST /facturas/reenviar
+// Body:
+// { emailDestino: "...", emailUsuario: "...", ids: ["<docId>", ...] }
 router.post('/facturas/reenviar', async (req, res) => {
   try {
     const body = req.body || {};
@@ -133,29 +211,33 @@ router.post('/facturas/reenviar', async (req, res) => {
       return res.status(400).json({ error: 'Faltan campos: emailDestino, emailUsuario, ids[]' });
     }
 
-    // Seguridad básica: sólo permite reenviar facturas del owner
+    // Seguridad: todas las facturas deben pertenecer al owner
     const reads = await Promise.all(ids.map(id => firestore.collection('facturas').doc(id).get()));
     const validDocs = reads
       .filter(s => s.exists)
-      .map(s => ({ id: s.id, ...s.data() }))
-      .filter(d => (d.email || '').toLowerCase() === owner);
+      .map(s => ({ id: s.id, ...(s.data() || {}) }))
+      .filter(d => (d.email || '').toLowerCase().trim() === owner);
 
     if (validDocs.length === 0) {
       return res.status(404).json({ error: 'No se han encontrado facturas del usuario' });
     }
 
-    // Cargar buffers (GCS → fallback FacturaCity)
+    // Obtener PDFs (GCS → fallback FC)
     const adjuntos = [];
     for (const d of validDocs) {
-      const pdf = await descargarFacturaPdf({
+      const pdf = await obtenerPdfFactura({
+        email: (d.email || owner).toLowerCase().trim(),
         storagePath: d.storagePath || d.nombreArchivo || null,
+        invoiceId: d.invoiceId || null,
+        numeroFactura: d.numeroFactura || null,
         idfactura: d.idfactura || null,
-        numeroFactura: d.numeroFactura || null
+        descripcionProducto: d.descripcionProducto || d.nombreProducto || '',
+        fechaISO: d.fechaISO || null,
+        docId: d.id
       });
-      if (pdf && pdf.buffer?.length) {
-        adjuntos.push(pdf);
-      }
+      if (pdf && pdf.buffer?.length) adjuntos.push(pdf);
     }
+
     if (adjuntos.length === 0) {
       return res.status(404).json({ error: 'No se pudieron localizar PDFs de las facturas seleccionadas' });
     }
@@ -163,7 +245,7 @@ router.post('/facturas/reenviar', async (req, res) => {
     await enviarEmailConFacturas({
       email: to,
       nombre: owner,
-      facturas: adjuntos, // [{buffer, filename}]
+      facturas: adjuntos, // [{ buffer, filename }]
       count: adjuntos.length
     });
 
@@ -174,7 +256,7 @@ router.post('/facturas/reenviar', async (req, res) => {
   }
 });
 
-// GET defensivo
+// GET defensivo para no navegar por error
 router.get('/facturas/reenviar', (_req, res) => {
   res.status(405).json({ error: 'Usa método POST con JSON' });
 });

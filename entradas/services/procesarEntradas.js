@@ -179,9 +179,12 @@ ${textoErrores}
       const html = `
         <p><strong>Ha ocurrido un fallo durante la venta de entradas.</strong></p>
         <p>El usuario ha pagado las entradas y se le han mandado por email, pero se han producido los siguientes problemas:</p>
-        <ul>
-          ${motivosUnicos.length ? motivosUnicos.map(m => `<li>${m}</li>`).join('') : '<li>(sin motivo específico)</li>'}
+        <ul style="margin:0 0 12px 18px">
+          ${motivosUnicos.length
+            ? motivosUnicos.map(m => `<li><span style="font-size:16px"><strong>${m}</strong></span></li>`).join('')
+            : '<li><span style="font-size:16px"><strong>(sin motivo específico)</strong></span></li>'}
         </ul>
+
 
         <h4>Contexto</h4>
         <ul>
@@ -225,7 +228,7 @@ function obtenerSheetIdPorFormulario(formularioId) {
     '22': process.env.SHEET_ID_FORM_22 || '1W-0N5kBYxNk_DoSNWDBK7AwkM66mcQIpDHQnPooDW6s',
     '39': process.env.SHEET_ID_FORM_39 || '1PbhRFdm1b1bR0g5wz5nz0ZWAcgsbkakJVEh0dz34lCM',
     '40': process.env.SHEET_ID_FORM_40 || '1EVcNTwE4nRNp4J_rZjiMGmojNO2F5TLZiwKY0AREmZE',
-    '41': process.env.SHEET_ID_FORM_41 || '1IUZ2_bQXxEVC_RLxNAzPBql9huu34cpE7_MF4Mg6eTM',
+    '41': process.env.SHEET_ID_FORM_41 || '1IUZ2_bQXxEVC_RLxNAzPBql9huu34cpE7_MF4Mg6eT',
     '42': process.env.SHEET_ID_FORM_42 || '1LGLEsQ_mGj-Hmkj1vjrRQpmSvIADZ1eMaTJoh3QBmQc'
   };
 

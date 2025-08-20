@@ -67,7 +67,7 @@ async function generarEntradas({
   imagenFondo,
   idFormulario,
 }) {
-  const bucket = storage.bucket('laboroteca-facturas-broken');
+  const bucket = storage.bucket('laboroteca-facturas');
 
   const spreadsheetId = HOJAS_EVENTO[idFormulario?.toString()] || null;
   if (!spreadsheetId) {

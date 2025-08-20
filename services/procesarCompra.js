@@ -2,13 +2,20 @@ const admin = require('../firebase');
 const firestore = admin.firestore();
 
 const { crearFacturaEnFacturaCity } = require('./facturaCity');
-const { enviarFacturaPorEmail } = require('./email');
+const { enviarFacturaPorEmail, enviarEmailPersonalizado } = require('./email');
 const { subirFactura } = require('./gcs');
 const { guardarEnGoogleSheets } = require('./googleSheets');
 const { activarMembresiaClub } = require('./activarMembresiaClub');
 const { syncMemberpressClub } = require('./syncMemberpressClub');
 const { normalizarProducto, MEMBERPRESS_IDS } = require('../utils/productos');
 const { ensureOnce } = require('../utils/dedupe');
+
+// --- helper global ---
+function escapeHtml(s) {
+  return String(s || '')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
 
 
 module.exports = async function procesarCompra(datos) {
@@ -148,6 +155,80 @@ module.exports = async function procesarCompra(datos) {
     console.time(`🕒 Compra ${email}`);
     console.log('📦 [procesarCompra] Datos facturación finales:\n', JSON.stringify(datosCliente, null, 2));
 
+    const membership_id = MEMBERPRESS_IDS[claveNormalizada];
+
+if (membership_id) { // ← robusto: activa CLUB por mapeo del producto, no por texto "club"
+  try {
+    console.log(`🔓 → Activando membresía CLUB con ID ${membership_id} para ${email}`);
+    await activarMembresiaClub(email);
+    await syncMemberpressClub({ email, accion: 'activar', membership_id, importe });
+    console.log('✅ Membresía del CLUB activada correctamente');
+  } catch (err) {
+    console.error('❌ Error activando membresía del CLUB:', err.message || err);
+  }
+} else if (tipoProducto.toLowerCase() === 'libro') {
+  try {
+    const { syncMemberpressLibro } = require('./syncMemberpressLibro');
+    console.log(`📘 → Activando membresía LIBRO para ${email}`);
+    await syncMemberpressLibro({ email, accion: 'activar', importe });
+    console.log('✅ Membresía del LIBRO activada correctamente');
+  } catch (err) {
+    console.error('❌ Error activando membresía del LIBRO:', err.message || err);
+  }
+}
+
+  // 📧 Email de confirmación al usuario (libro/club)
+  try {
+    const asunto =
+      membership_id
+        ? '✅ Tu acceso al Club Laboroteca ya está activo'
+        : (tipoProducto.toLowerCase() === 'libro'
+            ? '📘 Acceso activado: tu libro en Laboroteca'
+            : `✅ Compra confirmada: ${nombreProducto}`);
+
+    const fechaCompra = new Date().toISOString();
+
+    const htmlConf = `
+      <p>Hola ${datosCliente.nombre || ''},</p>
+      <p>Tu ${membership_id ? '<strong>membresía del <em>Club Laboroteca</em></strong>' : (tipoProducto.toLowerCase() === 'libro' ? '<strong>acceso al libro</strong>' : '<strong>compra</strong>')} ha sido <strong>activada correctamente</strong>.</p>
+      <p><strong>Producto:</strong> ${escapeHtml(nombreProducto)}<br>
+        <strong>Descripción:</strong> ${escapeHtml(descripcionProducto)}<br>
+        <strong>Importe:</strong> ${importe.toFixed(2).replace('.', ',')} €<br>
+        <strong>Fecha:</strong> ${fechaCompra}</p>
+      <p>Puedes acceder desde tu área de cliente:</p>
+      <p><a href="https://www.laboroteca.es/mi-cuenta/">https://www.laboroteca.es/mi-cuenta/</a></p>
+      <p>Gracias por confiar en Laboroteca.</p>
+    `;
+
+    const textConf =
+  `Hola ${datosCliente.nombre || ''},
+
+  Tu ${membership_id ? 'membresía del Club Laboroteca' : (tipoProducto.toLowerCase() === 'libro' ? 'acceso al libro' : 'compra')} ha sido activada correctamente.
+
+  Producto: ${nombreProducto}
+  Descripción: ${descripcionProducto}
+  Importe: ${importe.toFixed(2)} €
+  Fecha: ${fechaCompra}
+
+  Acceso: https://www.laboroteca.es/mi-cuenta/
+
+  Gracias por confiar en Laboroteca.`;
+
+    await enviarEmailPersonalizado({
+      to: email,
+      subject: asunto,
+      html: htmlConf,
+      text: textConf
+    });
+
+    console.log('✅ Email de confirmación enviado al usuario');
+  } catch (eConf) {
+    console.error('❌ Error enviando email de confirmación:', eConf?.message || eConf);
+  }
+
+
+    const datosFiscalesRef = firestore.collection('datosFiscalesPorEmail').doc(email);
+
     
 // ⛔ Kill-switch de facturación
 const invoicingDisabled =
@@ -179,9 +260,42 @@ if (invoicingDisabled) {
   }
 
   } catch (err) {
-    console.error('❌ Error al crear factura:', err);
-    pdfBuffer = null; // 👈 continuamos sin factura
-  }
+      console.error('❌ Error al crear factura:', err);
+      pdfBuffer = null; // 👈 continuamos sin factura
+
+      // 🔔 Aviso al admin con TODOS los datos para facturar manualmente
+      try {
+        await enviarEmailPersonalizado({
+          to: 'laboroteca@gmail.com',
+          subject: '⚠️ Fallo al generar factura (procesarCompra)',
+          text: `Email: ${email}
+    Nombre: ${nombre} ${apellidos}
+    DNI: ${dni}
+    Tipo: ${tipoProducto}
+    Producto: ${nombreProducto}
+    Descripción: ${descripcionProducto}
+    Importe: ${importe.toFixed(2)} €
+    Dirección: ${direccion}, ${cp} ${ciudad} (${provincia})
+    InvoiceId: ${datos.invoiceId || '-'}
+    Error: ${err?.message || String(err)}`,
+          html: `<p><strong>Fallo al generar factura</strong></p>
+                <ul>
+                  <li><strong>Email:</strong> ${email}</li>
+                  <li><strong>Nombre:</strong> ${escapeHtml(nombre)} ${escapeHtml(apellidos)}</li>
+                  <li><strong>DNI:</strong> ${escapeHtml(dni)}</li>
+                  <li><strong>Tipo:</strong> ${escapeHtml(tipoProducto)}</li>
+                  <li><strong>Producto:</strong> ${escapeHtml(nombreProducto)}</li>
+                  <li><strong>Descripción:</strong> ${escapeHtml(descripcionProducto)}</li>
+                  <li><strong>Importe:</strong> ${importe.toFixed(2)} €</li>
+                  <li><strong>Dirección:</strong> ${escapeHtml(direccion)}, ${escapeHtml(cp)} ${escapeHtml(ciudad)} (${escapeHtml(provincia)})</li>
+                  <li><strong>InvoiceId:</strong> ${datos.invoiceId || '-'}</li>
+                </ul>
+                <p>Se continúa el flujo (membresía ya activada).</p>`
+        });
+      } catch (eAviso) {
+        console.error('⚠️ No se pudo avisar al admin (procesarCompra):', eAviso?.message || eAviso);
+      }
+    }
 
 
   // 2) Subir a GCS
@@ -217,42 +331,22 @@ if (invoicingDisabled) {
   }
 
 
-// 4) Registrar en Google Sheets SOLO si hay factura real (pdfBuffer).
-// Nota: en kill-switch ya registras arriba; y si hubo error, lo registra crearFacturaEnFacturaCity.
+// 4) Registrar en Google Sheets SIEMPRE (pago confirmado), aunque no haya factura
 try {
-  if (pdfBuffer) {
+  const kSheet = `sheet:${dedupeKey || compraId}`;
+  const firstSheet = await ensureOnce('sheetOnce', kSheet);
+  if (!firstSheet) {
+    console.warn(`🟡 Dedupe Sheets ignorado: ${kSheet}`);
+  } else {
     console.log('📝 → Registrando en Google Sheets...');
     await guardarEnGoogleSheets(datosCliente);
   }
 } catch (err) {
-  console.error('❌ Error en Google Sheets:', err);
+  console.error('❌ Error en Google Sheets (registro incondicional):', err?.message || err);
 }
 
+
 }
-
-    const membership_id = MEMBERPRESS_IDS[claveNormalizada];
-
-if (membership_id) { // ← robusto: activa CLUB por mapeo del producto, no por texto "club"
-  try {
-    console.log(`🔓 → Activando membresía CLUB con ID ${membership_id} para ${email}`);
-    await activarMembresiaClub(email);
-    await syncMemberpressClub({ email, accion: 'activar', membership_id, importe });
-    console.log('✅ Membresía del CLUB activada correctamente');
-  } catch (err) {
-    console.error('❌ Error activando membresía del CLUB:', err.message || err);
-  }
-} else if (tipoProducto.toLowerCase() === 'libro') {
-  try {
-    const { syncMemberpressLibro } = require('./syncMemberpressLibro');
-    console.log(`📘 → Activando membresía LIBRO para ${email}`);
-    await syncMemberpressLibro({ email, accion: 'activar', importe });
-    console.log('✅ Membresía del LIBRO activada correctamente');
-  } catch (err) {
-    console.error('❌ Error activando membresía del LIBRO:', err.message || err);
-  }
-}
-
-    const datosFiscalesRef = firestore.collection('datosFiscalesPorEmail').doc(email);
 
     // ✅ Guardar/actualizar datos fiscales sin borrar el documento (merge)
     try {
@@ -271,6 +365,23 @@ if (membership_id) { // ← robusto: activa CLUB por mapeo del producto, no por 
     } catch (err) {
       console.error('❌ Error guardando datos fiscales en Firestore:', err.message || err);
     }
+
+    // 🧾 Registro de venta en Firestore (best-effort)
+try {
+  await firestore.collection('ventas').add({
+    email,
+    tipoProducto,
+    nombreProducto,
+    descripcionProducto,
+    importe,
+    fecha: new Date().toISOString(),
+    origen: 'procesarCompra',
+    dedupeKey: dedupeKey || null
+  });
+  console.log('✅ Venta registrada en Firestore (ventas)');
+} catch (eVenta) {
+  console.error('❌ Error registrando venta en Firestore:', eVenta?.message || eVenta);
+}
 
 
     await docRef.update({

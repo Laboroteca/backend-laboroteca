@@ -11,7 +11,7 @@ const { auth } = require('../google/sheetsAuth');
 
 const router = express.Router();
 
-// ── Sheets por formulario (fallback al 22)
+// ── Hoja por formulario (fallback al 22)
 const MAP_SHEETS = {
   '22': process.env.SHEET_ID_FORM_22 || '1W-0N5kBYxNk_DoSNWDBK7AwkM66mcQIpDHQnPooDW6s',
   '39': process.env.SHEET_ID_FORM_39 || '1PbhRFdm1b1bR0g5wz5nz0ZWAcgsbkakJVEh0dz34lCM',
@@ -21,28 +21,32 @@ const MAP_SHEETS = {
 };
 const FALLBACK_22 = MAP_SHEETS['22'];
 
-// ── Metadatos por formulario (se usan SOLO si el frontend no envía los hidden)
-const EVENTOS_POR_FORM = {
-  '22': {
-    descripcionProducto: 'Evento 1',
-    nombreProducto: 'Evento 1',
-    fechaActuacion: '30/10/2025 - 17:00',
-    direccionEvento: 'Dirección evento 1',
-    imagenEvento: 'https://www.laboroteca.es/wp-content/uploads/2025/08/logo-entradas-laboroteca-qr-scaled.jpg'
-  },
-  '39': {
-    descripcionProducto: 'Evento 2',
-    nombreProducto: 'Evento 2',
-    fechaActuacion: '31/10/2025 - 19:00',
-    direccionEvento: 'Dirección evento 2',
-    imagenEvento: 'https://www.laboroteca.es/wp-content/uploads/2025/08/logo-entradas-laboroteca-qr-scaled.jpg'
-  },
-  '40': { descripcionProducto: 'Evento 3', nombreProducto: 'Evento 3', fechaActuacion: '', direccionEvento: '', imagenEvento: '' },
-  '41': { descripcionProducto: 'Evento 4', nombreProducto: 'Evento 4', fechaActuacion: '', direccionEvento: '', imagenEvento: '' },
-  '42': { descripcionProducto: 'Evento 5', nombreProducto: 'Evento 5', fechaActuacion: '', direccionEvento: '', imagenEvento: '' },
-};
+// ── Lee metadatos del evento desde variables de entorno por formulario
+//    Soportados (ej. para form 39):
+//      EVENT_39_DESCRIPCION  | EVENT_39_DESC
+//      EVENT_39_NOMBRE
+//      EVENT_39_FECHA
+//      EVENT_39_DIRECCION
+//      EVENT_39_IMG
+//    Opcional global: EVENT_DEFAULT_IMG
+function getEventoFromEnv(formId) {
+  const id = String(formId || '').trim();
+  const env = (k) => process.env[k] || '';
+  return {
+    descripcionProducto:
+      env(`EVENT_${id}_DESCRIPCION`) || env(`EVENT_${id}_DESC`) || '',
+    nombreProducto:
+      env(`EVENT_${id}_NOMBRE`) || '',
+    fechaActuacion:
+      env(`EVENT_${id}_FECHA`) || '',
+    direccionEvento:
+      env(`EVENT_${id}_DIRECCION`) || '',
+    imagenEvento:
+      env(`EVENT_${id}_IMG`) || env('EVENT_DEFAULT_IMG') || ''
+  };
+}
 
-// Rosa para marcar G="REGALO"
+// ── Estilos: Columna G "REGALO"
 const COLOR_ROSA = { red: 1, green: 0.8, blue: 0.9 };
 const TEXTO_BOLD = { bold: true };
 
@@ -73,7 +77,13 @@ async function appendRegaloRow({ spreadsheetId, fecha, desc, comprador, codigo }
       requestBody: {
         requests: [{
           repeatCell: {
-            range: { sheetId: sheetIdNum, startRowIndex: row1 - 1, endRowIndex: row1, startColumnIndex: 6, endColumnIndex: 7 },
+            range: {
+              sheetId: sheetIdNum,
+              startRowIndex: row1 - 1,
+              endRowIndex: row1,
+              startColumnIndex: 6, // G
+              endColumnIndex: 7
+            },
             cell: { userEnteredFormat: { backgroundColor: COLOR_ROSA, textFormat: TEXTO_BOLD } },
             fields: 'userEnteredFormat(backgroundColor,textFormat)'
           }
@@ -85,7 +95,9 @@ async function appendRegaloRow({ spreadsheetId, fecha, desc, comprador, codigo }
 
 /**
  * POST /entradas/crear-entrada-regalo
- * body: { beneficiarioNombre, beneficiarioEmail, cantidad, formularioId, (opcionales: descripcionProducto, nombreProducto, fechaActuacion, direccionEvento, imagenEvento) }
+ * body:
+ *   beneficiarioNombre, beneficiarioEmail, cantidad, formularioId
+ *   (opcionalmente puede enviar: descripcionProducto, nombreProducto, fechaActuacion, direccionEvento, imagenEvento)
  */
 router.post('/crear-entrada-regalo', async (req, res) => {
   try {
@@ -94,16 +106,37 @@ router.post('/crear-entrada-regalo', async (req, res) => {
     const cantidad           = Math.max(1, parseInt(req.body?.cantidad, 10) || 1);
     const formularioId       = String(req.body?.formularioId || '22').trim();
 
-    if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))
+    if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
       return res.status(400).json({ ok: false, error: 'Email del beneficiario inválido' });
+    }
 
-    // Respetar hidden → si no llegan, fallback por formulario
-    const base = EVENTOS_POR_FORM[formularioId] || {};
-    const descripcionProducto = String((req.body?.descripcionProducto ?? base.descripcionProducto ?? `Evento ${formularioId}`)).trim();
-    const nombreProducto      = String((req.body?.nombreProducto      ?? base.nombreProducto      ?? descripcionProducto)).trim();
-    const fechaActuacion      = String((req.body?.fechaActuacion      ?? base.fechaActuacion      ?? '')).trim();
-    const direccionEvento     = String((req.body?.direccionEvento     ?? base.direccionEvento     ?? '')).trim();
-    const imagenEvento        = String((req.body?.imagenEvento        ?? base.imagenEvento        ?? '')).trim();
+    // 1) Preferimos SIEMPRE lo que envía el frontend (hidden del formulario)
+    // 2) Si no llegan, usamos ENV por formulario
+    const envCfg = getEventoFromEnv(formularioId);
+
+    const descripcionProducto = String(
+      (req.body?.descripcionProducto !== undefined ? req.body.descripcionProducto : envCfg.descripcionProducto)
+    ).trim();
+
+    const nombreProducto = String(
+      (req.body?.nombreProducto !== undefined ? req.body.nombreProducto : envCfg.nombreProducto || descripcionProducto)
+    ).trim();
+
+    const fechaActuacion = String(
+      (req.body?.fechaActuacion !== undefined ? req.body.fechaActuacion : envCfg.fechaActuacion)
+    ).trim();
+
+    const direccionEvento = String(
+      (req.body?.direccionEvento !== undefined ? req.body.direccionEvento : envCfg.direccionEvento)
+    ).trim();
+
+    const imagenEvento = String(
+      (req.body?.imagenEvento !== undefined ? req.body.imagenEvento : envCfg.imagenEvento)
+    ).trim();
+
+    if (!descripcionProducto) {
+      return res.status(400).json({ ok: false, error: 'Falta descripcionProducto (envía hidden o define EVENT_{ID}_DESCRIPCION)' });
+    }
 
     const sheetId = getSheetId(formularioId);
     const carpeta = normalizar(descripcionProducto);

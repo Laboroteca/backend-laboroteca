@@ -78,7 +78,6 @@ async function enviarEmailConEntradas({
       <p>Hola ${escapeHtml(displayName)},</p>
       <p>Te reenviamos tus <strong>${numEntradas}</strong> entrada(s) para <strong>«${escapeHtml(descripcionProducto)}»</strong>.</p>
       ${bloqueEventoHTML}
-      ${euros ? `<p>Importe total de la compra original: <strong>${euros.html} €</strong></p>` : ''}
       <p>Puedes presentar el <strong>PDF adjunto</strong> en tu móvil o impreso. Cada entrada incluye su <strong>código QR único</strong>.</p>
       <p>
         Una vez validada tu entrada en el evento, el código de la misma podrá canjearse por un libro digital gratuito desde:<br/>
@@ -110,7 +109,7 @@ async function enviarEmailConEntradas({
 
 Te reenviamos tus ${numEntradas} entrada(s) para:
 - ${descripcionProducto}
-${fecha ? `- Fecha: ${fecha}\n` : ''}${direccion ? `- Lugar: ${direccion}\n` : ''}${euros ? `- Importe total de la compra original: ${euros.text} €\n` : ''}
+${fecha ? `- Fecha: ${fecha}\n` : ''}${direccion ? `- Lugar: ${direccion}\n` : ''}
 
 Cada entrada incluye un código QR único que se validará el día del evento.
 Puedes llevarlas en el móvil o impresas.

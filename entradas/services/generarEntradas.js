@@ -163,53 +163,64 @@ async function generarEntradas({
       }
     }
 
-    // ───────── Registro en Firestore (best-effort) ─────────
-    try {
-      await firestore.collection('entradas').doc(codigo).set(
-        {
-          codigo,
-          email, // comprador
-          emailComprador: email, // alias por compatibilidad
-          nombre: asistente.nombre || '',
-          apellidos: asistente.apellidos || '',
-          slugEvento, // ej. "presentacion-del-libro..."
-          nombreEvento: descripcionProducto || slugEvento || 'Evento',
-          descripcionProducto: descripcionProducto || '',
-          direccionEvento: direccionEvento || '',
-          fechaEvento: fechaEvento || '', // formato "DD/MM/YYYY - HH:mm"
-          fechaActuacion: fechaEvento || '', // duplicado para búsquedas
-          nEntrada: i + 1,
-          usada: false,
-          fechaCompra: new Date().toISOString(),
-          timestamp: Date.now(),
-        },
-        { merge: true }
-      );
+// ───────── Registro en Firestore (best-effort) ─────────
+try {
+  // ❗ Test: forzar fallo controlado (toda la escritura Firestore)
+  if (process.env.FIRESTORE_FAIL_TEST === '1') {
+    throw new Error('TEST Firestore: fallo forzado (generarEntradas)');
+  }
 
-      await firestore.collection('entradasCompradas').doc(codigo).set(
-        {
-          codigo,
-          emailComprador: email,
-          nombreEvento: descripcionProducto || slugEvento || 'Evento',
-          descripcionProducto: descripcionProducto || '',
-          slugEvento: slugEvento || '',
-          direccionEvento: direccionEvento || '',
-          fechaEvento: fechaEvento || '',
-          fechaActuacion: fechaEvento || '',
-          usado: false,
-          fechaCompra: new Date().toISOString(),
-        },
-        { merge: true }
-      );
-    } catch (err) {
-      console.error(`❌ Error guardando en Firestore entrada ${codigo}:`, err.message);
-      errores.push({
-        paso: 'FIRESTORE',
-        codigo,
-        detalle: err.message,
-        motivo: 'No se ha registrado la venta en Firebase (Firestore)',
-      });
-    }
+  await firestore.collection('entradas').doc(codigo).set(
+    {
+      codigo,
+      email, // comprador
+      emailComprador: email, // alias por compatibilidad
+      nombre: asistente.nombre || '',
+      apellidos: asistente.apellidos || '',
+      slugEvento, // ej. "presentacion-del-libro..."
+      nombreEvento: descripcionProducto || slugEvento || 'Evento',
+      descripcionProducto: descripcionProducto || '',
+      direccionEvento: direccionEvento || '',
+      fechaEvento: fechaEvento || '', // formato "DD/MM/YYYY - HH:mm"
+      fechaActuacion: fechaEvento || '', // duplicado para búsquedas
+      nEntrada: i + 1,
+      usada: false,
+      fechaCompra: new Date().toISOString(),
+      timestamp: Date.now(),
+    },
+    { merge: true }
+  );
+
+  // ❗ Test: forzar fallo SOLO en la segunda colección (fallo parcial)
+  if (process.env.FIRESTORE_FAIL_TEST === 'SECOND') {
+    throw new Error('TEST Firestore: fallo forzado en entradasCompradas (generarEntradas)');
+  }
+
+  await firestore.collection('entradasCompradas').doc(codigo).set(
+    {
+      codigo,
+      emailComprador: email,
+      nombreEvento: descripcionProducto || slugEvento || 'Evento',
+      descripcionProducto: descripcionProducto || '',
+      slugEvento: slugEvento || '',
+      direccionEvento: direccionEvento || '',
+      fechaEvento: fechaEvento || '',
+      fechaActuacion: fechaEvento || '',
+      usado: false,
+      fechaCompra: new Date().toISOString(),
+    },
+    { merge: true }
+  );
+} catch (err) {
+  console.error(`❌ Error guardando en Firestore entrada ${codigo}:`, err.message);
+  errores.push({
+    paso: 'FIRESTORE',
+    codigo,
+    detalle: err.message,
+    motivo: 'No se ha registrado la venta en Firebase (Firestore)',
+  });
+}
+
 
     entradas.push({ codigo, nombreArchivo, buffer: pdfBuffer });
   }

@@ -438,7 +438,7 @@ const invoicingDisabled =
 if (invoicingDisabled) {
   console.warn(`⛔ Facturación deshabilitada (invoiceId=${invoiceId}). Saltando crear/subir/email. Registrando SOLO en Sheets.`);
 try {
-  await guardarEnGoogleSheets({ ...datosRenovacion, facturaId: '' });
+  await guardarEnGoogleSheets({ ...datosRenovacion, facturaId: '', uid: String(invoiceId) });
 } catch (e) {
   console.error('❌ Sheets (kill-switch):', e?.message || e);
   await alertAdmin({
@@ -474,6 +474,8 @@ try {
       ...datosRenovacion,                                   // ya incluye invoiceIdStripe
       facturaId: facturaId ? String(facturaId) : ''         // añade FacturaCity si existe
     };
+    datosSheets.uid = String(facturaId || invoiceId);
+
 
     try {
       await guardarEnGoogleSheets(datosSheets);             // ← una sola llamada
@@ -536,7 +538,7 @@ if (!firstSend) {
 
       // ✅ Registrar en Google Sheets AUNQUE falle FacturaCity
     try {
-      await guardarEnGoogleSheets(datosRenovacion);
+      await guardarEnGoogleSheets({ ...datosRenovacion, uid: String(invoiceId) });
     } catch (se) {
       console.error('❌ Sheets (invoice.paid catch):', se?.message || se);
       await alertAdmin({
@@ -1015,7 +1017,7 @@ try {
   if (invoicingDisabled) {
     console.warn('⛔ Facturación deshabilitada. Saltando crear/subir/email. Registrando SOLO en Sheets.');
     try {
-      await guardarEnGoogleSheets(datosCliente);
+      await guardarEnGoogleSheets({ ...datosCliente, uid: String(pi || sessionId || '') });
 } catch (e) {
   console.error('❌ Sheets (kill-switch):', e?.message || e);
   await alertAdmin({
@@ -1044,6 +1046,14 @@ const datosSheets = {
   sessionId: sessionId ? String(sessionId) : '',
   facturaId: facturaId ? String(facturaId) : ''
 };
+datosSheets.uid = String(
+  datosSheets.facturaId ||
+  datosSheets.invoiceIdStripe ||
+  datosSheets.sessionId ||
+  sessionId ||
+  pi ||
+  ''
+);
 
 try {
   const sheetsKey = datosSheets.facturaId
@@ -1121,7 +1131,7 @@ if (!firstSend) {
 
       // 🧾 Aún así, registramos la compra en Sheets (pago confirmado)
       try {
-        await guardarEnGoogleSheets(datosCliente);
+        await guardarEnGoogleSheets({ ...datosCliente, uid: String(pi || sessionId || '') });
     } catch (e) {
       console.error('❌ Sheets tras fallo de FacturaCity:', e?.message || e);
       await alertAdmin({

@@ -244,7 +244,11 @@ if (invoicingDisabled) {
   // ✅ Registrar SIEMPRE en Google Sheets aunque no haya factura
   try {
     console.log('📝 → Registrando en Google Sheets (kill-switch activo)...');
-    await guardarEnGoogleSheets(datosCliente);
+    await guardarEnGoogleSheets({
+  ...datosCliente,
+  uid: String(datos.invoiceId || datos.sessionId || datos.pedidoId || '')
+});
+
   } catch (err) {
     console.error('❌ Error en Google Sheets:', err);
   }
@@ -265,6 +269,7 @@ if (invoicingDisabled) {
         // 📝 Registrar la FACTURA en Sheets con ID fiscal si existe (SIN dedupe)
         const datosSheets = { ...datosCliente };
         if (facturaId) datosSheets.invoiceId = String(facturaId);
+        datosSheets.uid = String(facturaId || datos.invoiceId || '');
         try {
           await guardarEnGoogleSheets(datosSheets);
         } catch (e) {
@@ -348,10 +353,13 @@ if (invoicingDisabled) {
 
 // 4) Registrar en Google Sheets SIEMPRE si NO hay factura (compra)
 try {
-  if (!pdfBuffer) {
-    console.log('📝 → Registrando COMPRA en Google Sheets (sin PDF)...');
-    await guardarEnGoogleSheets(datosCliente);
-  }
+if (!pdfBuffer) {
+  console.log('📝 → Registrando COMPRA en Google Sheets (sin PDF)...');
+  await guardarEnGoogleSheets({
+    ...datosCliente,
+    uid: String(datos.invoiceId || datos.sessionId || datos.pedidoId || '')
+  });
+}
 } catch (err) {
   console.error('❌ Error registrando COMPRA en Sheets:', err?.message || err);
 }

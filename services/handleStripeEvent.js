@@ -12,6 +12,12 @@ const { registrarBajaClub } = require('./registrarBajaClub');
 const desactivarMembresiaClub = require('./desactivarMembresiaClub');
 const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+const escapeHtml = s => String(s ?? '')
+  .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+  .replace(/>/g,'&gt;').replace(/"/g,'&quot;')
+  .replace(/'/g,'&#39;');
+const crypto = require('crypto');
+const hash12 = e => crypto.createHash('sha256').update(String(e || '').toLowerCase()).digest('hex').slice(0,12);
 const { ensureOnce } = require('../utils/dedupe');
 
 // ——— Helper: cargar metadata de FluentForms desde el Checkout Session que creó la suscripción
@@ -25,6 +31,16 @@ async function cargarFFDesdeCheckoutPorSubscription(subId) {
     console.warn('⚠️ No se pudo listar checkout.sessions por subscription:', e?.message || e);
     return {};
   }
+}
+
+function mapCancellationReason(subscription) {
+  const det = subscription?.cancellation_details || {};
+  // Valores típicos de Stripe:
+  // 'payment_failed', 'requested_by_customer', 'cancellation_requested', 'incomplete_expired'
+  if (det.reason === 'payment_failed') return 'impago';
+  if (det.reason === 'requested_by_customer' || det.reason === 'cancellation_requested') return 'baja_voluntaria';
+  if (det.reason === 'incomplete_expired') return 'incompleta_expirada';
+  return 'desconocida';
 }
 
 
@@ -284,12 +300,12 @@ const pick = (obj, ...keys) => {
 // Normalizamos posibles nombres de campos que puede mandar FF
 const subNombre     = pick(subMeta, 'nombre', 'first_name', 'Nombre', 'billing_first_name', 'billing_name', 'ff_nombre');
 const subApellidos  = pick(subMeta, 'apellidos', 'last_name', 'Apellidos', 'billing_last_name', 'ff_apellidos');
-const subDni        = pick(subMeta, 'dni', 'nif', 'NIF', 'DNI', 'vat', 'vat_number', 'tax_id', 'taxid', 'billing_nif', 'nif_cif');
-const subDireccion  = pick(subMeta, 'direccion', 'address', 'billing_address_1', 'billing_address', 'address_line1', 'billing_line1', 'ff_direccion');
-const subCiudad     = pick(subMeta, 'ciudad', 'city', 'billing_city', 'ff_ciudad');
-const subProvincia  = pick(subMeta, 'provincia', 'state', 'region', 'billing_state', 'ff_provincia');
-const subCp         = pick(subMeta, 'cp', 'codigo_postal', 'postal_code', 'zip', 'billing_postcode', 'codigoPostal', 'ff_cp');
-const subEmail      = pick(subMeta, 'email_autorelleno', 'email', 'correo', 'billing_email', 'ff_email');
+const subDni        = pick(subMeta, 'dni','nif','NIF','DNI','vat','vat_number','vatnumber','tax_id','taxid','billing_nif','nif_cif');
+const subDireccion  = pick(subMeta, 'direccion','address','billing_address_1','billing_address','address_line1','billing_line1','ff_direccion');
+const subCiudad     = pick(subMeta, 'ciudad','city','billing_city','ff_ciudad');
+const subProvincia  = pick(subMeta, 'provincia','state','region','billing_state','ff_provincia');
+const subCp         = pick(subMeta, 'cp','codigo_postal','postal_code','postcode','postal','zip','billing_postcode','codigoPostal','ff_cp');
+const subEmail      = pick(subMeta, 'email_autorelleno','email','correo','billing_email','ff_email');
 
 
 // Preferimos el email de FluentForms en el ALTA (si vino en subMeta)
@@ -369,15 +385,15 @@ const datosRenovacion = {
   invoiceId,
 };
 
+let pdfBuffer = null;
+let facturaId = null;
+let seEnvioFactura = false;
+let falloFactura = false;
+
 const invoicingDisabled =
   String(process.env.DISABLE_INVOICING || '').toLowerCase() === 'true' ||
   process.env.DISABLE_INVOICING === '1';
 
-let pdfBuffer = null;
-let facturaId = null;
-
-let seEnvioFactura = false;   // ← true si conseguimos enviar la factura al cliente
-let falloFactura   = false;   // ← true si falla crear/enviar la factura
 
 if (invoicingDisabled) {
   console.warn(`⛔ Facturación deshabilitada (invoiceId=${invoiceId}). Saltando crear/subir/email. Registrando SOLO en Sheets.`);
@@ -408,7 +424,7 @@ if (invoicingDisabled) {
       if (!firstSend) {
         console.warn(`🟡 Dedupe envío/Upload para ${kSend}. No repito subir/email.`);
       } else {
-        const nombreArchivoGCS = `facturas/${email}/${invoiceId}.pdf`;
+        const nombreArchivoGCS = `facturas/${hash12(email)}/${invoiceId}.pdf`;
         await subirFactura(nombreArchivoGCS, pdfBuffer, {
           email,
           nombreProducto: datosRenovacion.nombreProducto,
@@ -441,36 +457,39 @@ if (invoicingDisabled) {
       
     // (Opcional) Aviso al admin — versión completa
     try {
-      const safe = v => (v === undefined || v === null || v === '') ? '-' : String(v);
+        const E = v => escapeHtml(String(v ?? '-'));
+  const T = v => String(v ?? '-'); // para el texto plano
 
-      await enviarEmailPersonalizado({
-        to: 'laboroteca@gmail.com',
-        subject: '⚠️ Factura fallida en invoice.paid',
-        text: `Email: ${safe(email)}
-    Nombre: ${safe(nombre)} ${safe(apellidos)}
-    DNI: ${safe(dni)}
-    Dirección: ${safe(direccion)}, ${safe(cp)} ${safe(ciudad)} (${safe(provincia)})
-    Producto: ${safe(datosRenovacion.nombreProducto)}
-    Importe: ${Number(datosRenovacion.importe).toFixed(2)} €
-    InvoiceId: ${safe(invoiceId)}
-    Motivo (billing_reason): ${safe(billingReason)} ${isAlta ? '(ALTA)' : '(RENOVACIÓN)'}
-    Error: ${safe(e?.message || e)}`,
-        html: `
-          <h3>Factura fallida en invoice.paid</h3>
-          <ul>
-            <li><strong>Email:</strong> ${safe(email)}</li>
-            <li><strong>Nombre:</strong> ${safe(nombre)} ${safe(apellidos)}</li>
-            <li><strong>DNI:</strong> ${safe(dni)}</li>
-            <li><strong>Dirección:</strong> ${safe(direccion)}, ${safe(cp)} ${safe(ciudad)} (${safe(provincia)})</li>
-            <li><strong>Producto:</strong> ${safe(datosRenovacion.nombreProducto)}</li>
-            <li><strong>Importe:</strong> ${Number(datosRenovacion.importe).toFixed(2)} €</li>
-            <li><strong>InvoiceId (Stripe):</strong> ${safe(invoiceId)}</li>
-            <li><strong>Motivo (billing_reason):</strong> ${safe(billingReason)} ${isAlta ? '(ALTA)' : '(RENOVACIÓN)'}</li>
-            <li><strong>Error:</strong> ${safe(e?.message || e)}</li>
-          </ul>
-          <pre style="white-space:pre-wrap">${safe(JSON.stringify(datosRenovacion, null, 2))}</pre>
-        `
-      });
+  await enviarEmailPersonalizado({
+    to: 'laboroteca@gmail.com',
+    subject: '⚠️ Factura fallida en invoice.paid',
+    text: `Email: ${T(email)}
+Nombre: ${T(nombre)} ${T(apellidos)}
+DNI: ${T(dni)}
+Dirección: ${T(direccion)}, ${T(cp)} ${T(ciudad)} (${T(provincia)})
+Producto: ${T(datosRenovacion.nombreProducto)}
+Importe: ${Number(datosRenovacion.importe).toFixed(2)} €
+InvoiceId: ${T(invoiceId)}
+Motivo (billing_reason): ${T(billingReason)} ${isAlta ? '(ALTA)' : '(RENOVACIÓN)'}
+Error: ${T(e?.message || e)}`,
+    html: `
+      <h3>Factura fallida en invoice.paid</h3>
+      <ul>
+        <li><strong>Email:</strong> ${E(email)}</li>
+        <li><strong>Nombre:</strong> ${E(nombre)} ${E(apellidos)}</li>
+        <li><strong>DNI:</strong> ${E(dni)}</li>
+        <li><strong>Dirección:</strong> ${E(direccion)}, ${E(cp)} ${E(ciudad)} (${E(provincia)})</li>
+        <li><strong>Producto:</strong> ${E(datosRenovacion.nombreProducto)}</li>
+        <li><strong>Importe:</strong> ${Number(datosRenovacion.importe).toFixed(2)} €</li>
+        <li><strong>InvoiceId (Stripe):</strong> ${E(invoiceId)}</li>
+        <li><strong>Motivo (billing_reason):</strong> ${E(billingReason)} ${isAlta ? '(ALTA)' : '(RENOVACIÓN)'}</li>
+        <li><strong>Error:</strong> ${E(e?.message || e)}</li>
+      </ul>
+      <pre style="white-space:pre-wrap">${E(JSON.stringify(datosRenovacion, null, 2))}</pre>
+    `
+  });
+
+
     } catch (ea) {
       console.error('⚠️ Aviso admin (invoice.paid) falló:', ea?.message || ea);
     }
@@ -569,21 +588,26 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
       return { duplicateBaja: true };
     }
 
+    const motivo = mapCancellationReason(subscription);
+
     if (email) {
       try {
-        console.log('❌ Suscripción cancelada por impago:', email);
+        console.log(`❌ Suscripción cancelada: ${email} (motivo=${motivo})`);
         await desactivarMembresiaClub(email, false);
-        await registrarBajaClub({ email, motivo: 'impago' });
+       await registrarBajaClub({ email, motivo });
         await enviarAvisoCancelacion(email, nombre, enlacePago);
       } catch (err) {
-        console.error('❌ Error al registrar baja por impago:', err?.message);
+        console.error('❌ Error al registrar baja:', err?.message);
       }
     }
     return { success: true, baja: true };
   }
 
-  if (event.type === 'checkout.session.completed') {
-    const session = event.data.object;
+if (event.type === 'checkout.session.completed') {
+  const session = event.data.object;
+
+
+  let errorProcesando = false;   // declaración única
     
 
   if (session.mode === 'subscription') {
@@ -768,19 +792,18 @@ try {
       m.cantidadEntradas ??
       m.cantidad ??
       0;
-    const totalAsist = Number(totalAsistRaw) || 0;
+    const totalAsist = Math.max(0, Math.floor(Number(totalAsistRaw) || 0));
     const esEntrada =
       tipoLower.includes('entrada') ||
       totalAsist > 0 ||
       /entrada|ticket|evento/i.test(m.nombreProducto || m.descripcionProducto || '');
 
-    const totalAsist = Math.max(0, Math.floor(Number(totalAsistRaw) || 0));
 
     if (esEntrada) {
       datosCliente.tipoProducto = 'entrada';          // normalizamos
       datosCliente.totalAsistentes = totalAsist;      // ya es entero ≥ 0
     }
-    
+
     console.log('📦 Procesando producto:', productoSlug, '-', datosCliente.importe, '€');
 
     // 🔐 GATE PAGO CONFIRMADO (PaymentIntent)
@@ -835,6 +858,9 @@ try {
 // (quitado) — La confirmación “Compra confirmada y acceso activado” SOLO se enviará más tarde
 // y SOLO si la factura falla (para libro). Para entradas ya tienes su propio correo.
 
+let pdfBuffer = null;
+let seEnvioFactura = false;
+let falloFactura = false;
 
 try {
   const invoicingDisabled =
@@ -877,7 +903,7 @@ if (!pdfBuffer) {
   if (!firstSend) {
     console.warn(`🟡 Dedupe envío/Upload para ${kSend}. No repito subir/email.`);
   } else {
-    const nombreArchivo = `facturas/${email}/${baseName}-${datosCliente.producto}.pdf`;
+    const nombreArchivo = `facturas/${hash12(email)}/${baseName}-${datosCliente.producto}.pdf`;
     await subirFactura(nombreArchivo, pdfBuffer, {
       email,
       nombreProducto: datosCliente.nombreProducto || datosCliente.producto,
@@ -913,74 +939,76 @@ if (!esEntrada) {
         console.error('❌ Sheets tras fallo de FacturaCity:', e?.message || e);
       }
 
-      // 🔔 Aviso al admin del fallo de factura con TODOS los datos del formulario
-      try {
-        const fechaCompraISO = new Date().toISOString();
+// 🔔 Aviso al admin del fallo de factura con TODOS los datos del formulario (ESCAPADO)
+try {
+  const E = v => escapeHtml(String(v ?? '-'));
+  const T = v => String(v ?? '-');
+  const fechaCompraISO = new Date().toISOString();
 
-        const detallesTexto = `
-  ==== DATOS DE LA COMPRA (FACTURA FALLIDA) ====
-  - Nombre: ${datosCliente.nombre || '-'}
-  - Apellidos: ${datosCliente.apellidos || '-'}
-  - DNI: ${datosCliente.dni || '-'}
-  - Email: ${email || datosCliente.email || '-'}
-  - Tipo de producto: ${datosCliente.tipoProducto || '-'}
-  - Nombre del producto: ${datosCliente.nombreProducto || datosCliente.producto || '-'}
-  - Descripción del producto: ${datosCliente.descripcionProducto || '-'}
-  - Importe (€): ${typeof datosCliente.importe === 'number' ? datosCliente.importe.toFixed(2) : '-'}
-  - Fecha de la compra (ISO): ${fechaCompraISO}
+  const detallesTexto = `
+==== DATOS DE LA COMPRA (FACTURA FALLIDA) ====
+- Nombre: ${T(datosCliente.nombre)}
+- Apellidos: ${T(datosCliente.apellidos)}
+- DNI: ${T(datosCliente.dni)}
+- Email: ${T(email || datosCliente.email)}
+- Tipo de producto: ${T(datosCliente.tipoProducto)}
+- Nombre del producto: ${T(datosCliente.nombreProducto || datosCliente.producto)}
+- Descripción del producto: ${T(datosCliente.descripcionProducto)}
+- Importe (€): ${typeof datosCliente.importe === 'number' ? datosCliente.importe.toFixed(2) : '-'}
+- Fecha de la compra (ISO): ${fechaCompraISO}
 
-  -- Dirección de facturación --
-  - Dirección: ${datosCliente.direccion || '-'}
-  - Ciudad: ${datosCliente.ciudad || '-'}
-  - CP: ${datosCliente.cp || '-'}
-  - Provincia: ${datosCliente.provincia || '-'}
+-- Dirección de facturación --
+- Dirección: ${T(datosCliente.direccion)}
+- Ciudad: ${T(datosCliente.ciudad)}
+- CP: ${T(datosCliente.cp)}
+- Provincia: ${T(datosCliente.provincia)}
 
-  -- Datos adicionales --
-  - Total asistentes (si aplica): ${datosCliente.totalAsistentes ?? '-'}
-  - Session ID: ${sessionId || '-'}
-  - Payment Intent: ${pi || '-'}
-  - Error FacturaCity: ${errFactura?.message || String(errFactura)}
+-- Datos adicionales --
+- Total asistentes (si aplica): ${T(datosCliente.totalAsistentes ?? '-')}
+- Session ID: ${T(sessionId)}
+- Payment Intent: ${T(pi)}
+- Error FacturaCity: ${T(errFactura?.message || String(errFactura))}
+`.trim();
+
+  const detallesHTML = `
+    <h3>Datos de la compra (factura fallida)</h3>
+    <ul>
+      <li><strong>Nombre:</strong> ${E(datosCliente.nombre)}</li>
+      <li><strong>Apellidos:</strong> ${E(datosCliente.apellidos)}</li>
+      <li><strong>DNI:</strong> ${E(datosCliente.dni)}</li>
+      <li><strong>Email:</strong> ${E(email || datosCliente.email)}</li>
+      <li><strong>Tipo de producto:</strong> ${E(datosCliente.tipoProducto)}</li>
+      <li><strong>Nombre del producto:</strong> ${E(datosCliente.nombreProducto || datosCliente.producto)}</li>
+      <li><strong>Descripción del producto:</strong> ${E(datosCliente.descripcionProducto)}</li>
+      <li><strong>Importe (€):</strong> ${typeof datosCliente.importe === 'number' ? datosCliente.importe.toFixed(2) : '-'}</li>
+      <li><strong>Fecha de la compra (ISO):</strong> ${E(fechaCompraISO)}</li>
+    </ul>
+    <h4>Dirección de facturación</h4>
+    <ul>
+      <li><strong>Dirección:</strong> ${E(datosCliente.direccion)}</li>
+      <li><strong>Ciudad:</strong> ${E(datosCliente.ciudad)}</li>
+      <li><strong>CP:</strong> ${E(datosCliente.cp)}</li>
+      <li><strong>Provincia:</strong> ${E(datosCliente.provincia)}</li>
+    </ul>
+    <h4>Datos adicionales</h4>
+    <ul>
+      <li><strong>Total asistentes (si aplica):</strong> ${E(datosCliente.totalAsistentes ?? '-')}</li>
+      <li><strong>Session ID:</strong> ${E(sessionId)}</li>
+      <li><strong>Payment Intent:</strong> ${E(pi)}</li>
+      <li><strong>Error FacturaCity:</strong> ${E(errFactura?.message || errFactura)}</li>
+    </ul>
+    <p>Nota: se continúa el flujo ${esEntrada ? 'enviando <strong>entradas</strong> sin factura' : 'sin enviar factura'}.</p>
   `.trim();
 
-        const detallesHTML = `
-          <h3>Datos de la compra (factura fallida)</h3>
-          <ul>
-            <li><strong>Nombre:</strong> ${datosCliente.nombre || '-'}</li>
-            <li><strong>Apellidos:</strong> ${datosCliente.apellidos || '-'}</li>
-            <li><strong>DNI:</strong> ${datosCliente.dni || '-'}</li>
-            <li><strong>Email:</strong> ${email || datosCliente.email || '-'}</li>
-            <li><strong>Tipo de producto:</strong> ${datosCliente.tipoProducto || '-'}</li>
-            <li><strong>Nombre del producto:</strong> ${datosCliente.nombreProducto || datosCliente.producto || '-'}</li>
-            <li><strong>Descripción del producto:</strong> ${datosCliente.descripcionProducto || '-'}</li>
-            <li><strong>Importe (€):</strong> ${typeof datosCliente.importe === 'number' ? datosCliente.importe.toFixed(2) : '-'}</li>
-            <li><strong>Fecha de la compra (ISO):</strong> ${fechaCompraISO}</li>
-          </ul>
-          <h4>Dirección de facturación</h4>
-          <ul>
-            <li><strong>Dirección:</strong> ${datosCliente.direccion || '-'}</li>
-            <li><strong>Ciudad:</strong> ${datosCliente.ciudad || '-'}</li>
-            <li><strong>CP:</strong> ${datosCliente.cp || '-'}</li>
-            <li><strong>Provincia:</strong> ${datosCliente.provincia || '-'}</li>
-          </ul>
-          <h4>Datos adicionales</h4>
-          <ul>
-            <li><strong>Total asistentes (si aplica):</strong> ${datosCliente.totalAsistentes ?? '-'}</li>
-            <li><strong>Session ID:</strong> ${sessionId || '-'}</li>
-            <li><strong>Payment Intent:</strong> ${pi || '-'}</li>
-            <li><strong>Error FacturaCity:</strong> ${String(errFactura?.message || errFactura)}</li>
-          </ul>
-          <p>Nota: se continúa el flujo ${esEntrada ? 'enviando <strong>entradas</strong> sin factura' : 'sin enviar factura'}.</p>
-        `.trim();
-
-        await enviarEmailPersonalizado({
-          to: 'laboroteca@gmail.com',
-          subject: '⚠️ Fallo al generar factura (checkout.session.completed)',
-          text: detallesTexto,
-          html: detallesHTML
-        });
-      } catch (eAviso) {
-        console.error('⚠️ No se pudo avisar al admin del fallo de factura:', eAviso?.message || eAviso);
-      }
+  await enviarEmailPersonalizado({
+    to: 'laboroteca@gmail.com',
+    subject: '⚠️ Fallo al generar factura (checkout.session.completed)',
+    text: detallesTexto,
+    html: detallesHTML
+  });
+} catch (eAviso) {
+  console.error('⚠️ No se pudo avisar al admin del fallo de factura:', eAviso?.message || eAviso);
+}
     }
   }
 

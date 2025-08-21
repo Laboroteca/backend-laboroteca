@@ -244,6 +244,23 @@ if (isAlta && invoice.subscription && Object.keys(subMeta).length === 0) {
   }
 }
 
+// 4) CUARTA fuente: metadata del Customer (la grabamos en checkout.session.completed)
+try {
+  const cust = await stripe.customers.retrieve(customerId);
+  const custMeta = cust?.metadata || {};
+  if (custMeta && Object.keys(custMeta).length > 0) {
+    subMeta = { ...custMeta, ...subMeta }; // 🡐 Customer como base; mantén prioridad de FF si ya estaba
+  }
+} catch (e) {
+  console.warn('⚠️ No se pudo recuperar customer.metadata:', e?.message || e);
+}
+
+// 5) QUINTA fuente: metadata de la propia invoice (si alguien la añadió)
+const invMeta = invoice?.metadata || {};
+if (invMeta && Object.keys(invMeta).length > 0) {
+  subMeta = { ...subMeta, ...invMeta };
+}
+
 
 // Helper para coger la primera key válida
 const pick = (obj, ...keys) => {
@@ -255,14 +272,15 @@ const pick = (obj, ...keys) => {
 };
 
 // Normalizamos posibles nombres de campos que puede mandar FF
-const subNombre     = pick(subMeta, 'nombre', 'first_name', 'Nombre', 'billing_first_name');
-const subApellidos  = pick(subMeta, 'apellidos', 'last_name', 'Apellidos', 'billing_last_name');
-const subDni        = pick(subMeta, 'dni', 'nif', 'NIF', 'DNI', 'vat', 'vat_number');
-const subDireccion  = pick(subMeta, 'direccion', 'address', 'billing_address_1', 'billing_address');
-const subCiudad     = pick(subMeta, 'ciudad', 'city', 'billing_city');
-const subProvincia  = pick(subMeta, 'provincia', 'state', 'region', 'billing_state');
-const subCp         = pick(subMeta, 'cp', 'codigo_postal', 'postal_code', 'zip', 'billing_postcode', 'codigoPostal');
-const subEmail      = pick(subMeta, 'email_autorelleno', 'email', 'correo');
+const subNombre     = pick(subMeta, 'nombre', 'first_name', 'Nombre', 'billing_first_name', 'billing_name', 'ff_nombre');
+const subApellidos  = pick(subMeta, 'apellidos', 'last_name', 'Apellidos', 'billing_last_name', 'ff_apellidos');
+const subDni        = pick(subMeta, 'dni', 'nif', 'NIF', 'DNI', 'vat', 'vat_number', 'tax_id', 'taxid', 'billing_nif', 'nif_cif');
+const subDireccion  = pick(subMeta, 'direccion', 'address', 'billing_address_1', 'billing_address', 'address_line1', 'billing_line1', 'ff_direccion');
+const subCiudad     = pick(subMeta, 'ciudad', 'city', 'billing_city', 'ff_ciudad');
+const subProvincia  = pick(subMeta, 'provincia', 'state', 'region', 'billing_state', 'ff_provincia');
+const subCp         = pick(subMeta, 'cp', 'codigo_postal', 'postal_code', 'zip', 'billing_postcode', 'codigoPostal', 'ff_cp');
+const subEmail      = pick(subMeta, 'email_autorelleno', 'email', 'correo', 'billing_email', 'ff_email');
+
 
 // Preferimos el email de FluentForms en el ALTA (si vino en subMeta)
 if (isAlta) {
@@ -291,14 +309,15 @@ const dniFromStripe  = invoice.customer_tax_ids?.[0]?.value || '';
 let nombre, apellidos, dni, direccion, ciudad, provincia, cp;
 
 if (isAlta) {
-  // ✅ ALTA: prioridad a datos de Fluent Forms (con mapeo de claves)
-  nombre    = subNombre    || nameFromStripe || 'Cliente Laboroteca';
-  apellidos = subApellidos || '';
-  dni       = subDni       || dniFromStripe  || '';
-  direccion = subDireccion || addr.line1     || '';
-  ciudad    = subCiudad    || addr.city      || '';
-  provincia = subProvincia || addr.state     || '';
-  cp        = subCp        || addr.postal_code || '';
+  // ✅ ALTA: 1) FluentForms (subMeta) → 2) Firestore (base) → 3) Stripe (invoice/customer) → 4) Defaults
+  nombre    = subNombre    || base.nombre    || nameFromStripe || 'Cliente Laboroteca';
+  apellidos = subApellidos || base.apellidos || '';
+  dni       = subDni       || base.dni       || dniFromStripe  || '';
+  direccion = subDireccion || base.direccion || addr.line1     || '';
+  ciudad    = subCiudad    || base.ciudad    || addr.city      || '';
+  provincia = subProvincia || base.provincia || addr.state     || '';
+  cp        = subCp        || base.cp        || addr.postal_code || '';
+
 } else {
   // 🔁 RENOVACIÓN: mantenemos tu comportamiento actual (Firestore -> Stripe)
   nombre    = (base.nombre    || nameFromStripe || 'Cliente Laboroteca');

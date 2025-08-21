@@ -31,6 +31,16 @@ const GROUP_HEADER = 'groupid';   // col M
 const GROUP_COL_INDEX = 12;
 const DUP_HEADER = 'duplicado';   // col N
 const DUP_COL_INDEX = 13;
+// índice 0-based → letra A1
+function colToA1(idx) {
+  let n = idx + 1, s = '';
+  while (n > 0) {
+    const m = (n - 1) % 26;
+    s = String.fromCharCode(65 + m) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
+}
 // Backoff simple para 429/5xx
 async function withRetries(fn, { tries = 3, baseMs = 250 } = {}) {
   let lastErr;
@@ -38,7 +48,7 @@ async function withRetries(fn, { tries = 3, baseMs = 250 } = {}) {
     try { return await fn(); } catch (e) {
       const code = Number(e?.code || e?.response?.status || 0);
       if (i < tries - 1 && (code === 429 || code >= 500)) {
-        const delay = baseMs * Math.pow(2, i);
+        const delay = baseMs * Math.pow(2, i) + Math.floor(Math.random() * 150); // jitter
         await new Promise(r => setTimeout(r, delay));
         lastErr = e;
         continue;
@@ -75,12 +85,14 @@ async function seedHeadersIfMissing(sheets, sheetId, header) {
   );
   if (ok) return;
 
-  await withRetries(() => sheets.spreadsheets.values.update({
-    spreadsheetId: sheetId,
-    range: `${HOJA}!A1:N1`,
-    valueInputOption: 'RAW',
-    requestBody: { values: [merged] },
-  }));
+   const lastIdx = Math.max(...Object.keys(map).map(Number), merged.length - 1);
+   const toColA1 = colToA1(lastIdx);
+   await withRetries(() => sheets.spreadsheets.values.update({
+     spreadsheetId: sheetId,
+     range: `${HOJA}!A1:${toColA1}1`,
+     valueInputOption: 'RAW',
+     requestBody: { values: [merged] },
+   }));
 }
 
 
@@ -130,41 +142,58 @@ async function escribirSiNoDuplicado(sheets, sheetId, fila, ctx) {
   }
 
 
-  const headerLower = header.map(h => String(h || '').trim().toLowerCase());
-  const uidColInSheet   = headerLower.findIndex(h => h === UID_HEADER);
-  const groupColInSheet = headerLower.findIndex(h => h === GROUP_HEADER);
-  const dupColInSheet   = headerLower.findIndex(h => h === DUP_HEADER);
+    const headerLower = header.map(h => String(h || '').trim().toLowerCase());
+    const uidColInSheet   = headerLower.findIndex(h => h === UID_HEADER);
+    const groupColInSheet = headerLower.findIndex(h => h === GROUP_HEADER);
+    const dupColInSheet   = headerLower.findIndex(h => h === DUP_HEADER);
 
-  // Índices efectivos (si no hubiera encabezado válido)
-  const uidIdx   = uidColInSheet   >= 0 ? uidColInSheet   : UID_COL_INDEX;
-  const groupIdx = groupColInSheet >= 0 ? groupColInSheet : GROUP_COL_INDEX;
-  const dupIdx   = dupColInSheet   >= 0 ? dupColInSheet   : DUP_COL_INDEX;
+    // Índices efectivos (si no hubiera encabezado válido)
+    const uidIdx   = uidColInSheet   >= 0 ? uidColInSheet   : UID_COL_INDEX;
+    const groupIdx = groupColInSheet >= 0 ? groupColInSheet : GROUP_COL_INDEX;
+    const dupIdx   = dupColInSheet   >= 0 ? dupColInSheet   : DUP_COL_INDEX;
 
-  // Lectura eficiente por columnas: L(uid), M(group), D..G(desc, imp, fec, email)
-  let batches;
-  try {
-    batches = await withRetries(() => sheets.spreadsheets.values.batchGet({
+    // Localiza columnas lógicas por header; fallback a D,E,F,G (3..6)
+    const findIdx = (aliases) => {
+      const idx = headerLower.findIndex(h => aliases.includes(h));
+      return idx >= 0 ? idx : -1;
+    };
+    const descIdx = findIdx(['descripcion', 'descripcionproducto', 'concepto', 'descripción']);
+    const impIdx  = findIdx(['importe', 'precio', 'total']);
+    const fecIdx  = findIdx(['fecha', 'fecha compra', 'fecha_compra']);
+    const emIdx   = findIdx(['email', 'correo', 'correo electronico', 'correo_electronico']);
+
+    const descEff = descIdx >= 0 ? descIdx : 3;
+    const impEff  = impIdx  >= 0 ? impIdx  : 4;
+    const fecEff  = fecIdx  >= 0 ? fecIdx  : 5;
+    const emEff   = emIdx   >= 0 ? emIdx   : 6;
+
+    const uidColA1   = colToA1(uidIdx);
+    const groupColA1 = colToA1(groupIdx);
+    const descColA1  = colToA1(descEff);
+    const impColA1   = colToA1(impEff);
+    const fecColA1   = colToA1(fecEff);
+    const emColA1    = colToA1(emEff);
+
+    // Lectura por columnas independientes
+    const batches = await withRetries(() => sheets.spreadsheets.values.batchGet({
       spreadsheetId: sheetId,
       ranges: [
-        `${HOJA}!L2:L`,
-        `${HOJA}!M2:M`,
-        `${HOJA}!D2:G`,
+        `${HOJA}!${uidColA1}2:${uidColA1}`,
+        `${HOJA}!${groupColA1}2:${groupColA1}`,
+        `${HOJA}!${descColA1}2:${descColA1}`,
+        `${HOJA}!${impColA1}2:${impColA1}`,
+        `${HOJA}!${fecColA1}2:${fecColA1}`,
+        `${HOJA}!${emColA1}2:${emColA1}`,
       ],
     }));
-  } catch (e) {
-    await alertAdmin({
-      area: 'sheets_batch_get',
-      email: ctx?.email || '-',
-      err: e,
-      meta: { sheetId, hoja: HOJA, ranges: ['L2:L', 'M2:M', 'D2:G'] }
-    });
-    throw e;
-  }
+    const rangeL   = batches.data.valueRanges?.[0]?.values || [];
+    const rangeM   = batches.data.valueRanges?.[1]?.values || [];
+    const descCol  = batches.data.valueRanges?.[2]?.values || [];
+    const impCol   = batches.data.valueRanges?.[3]?.values || [];
+    const fecCol   = batches.data.valueRanges?.[4]?.values || [];
+    const emCol    = batches.data.valueRanges?.[5]?.values || [];
 
-  const rangeL  = batches.data.valueRanges?.[0]?.values || [];
-  const rangeM  = batches.data.valueRanges?.[1]?.values || [];
-  const rangeDG = batches.data.valueRanges?.[2]?.values || [];
-  const { email, descripcion, importe, fecha, uid, groupId } = ctx;
+    const { email, descripcion, importe, fecha, uid, groupId } = ctx;
 
 
   console.log('[Sheets] uid-debug', {
@@ -202,8 +231,12 @@ async function escribirSiNoDuplicado(sheets, sheetId, fila, ctx) {
   // 2) Fallback sin UID: dedupe por contenido normalizado
   if (!uid) {
     const impNormObjetivo = String(importe); // ya viene normalizado desde guardarEnGoogleSheets
-    const yaExiste = rangeDG.some(row => {
-      const [desc, imp, fec, em] = [row?.[0] || '', row?.[1] || '', row?.[2] || '', row?.[3] || ''];
+    const maxLen = Math.max(descCol.length, impCol.length, fecCol.length, emCol.length);
+    const yaExiste = Array.from({ length: maxLen }).some((_, i) => {
+      const desc = descCol[i]?.[0] || '';
+      const imp  = impCol[i]?.[0]  || '';
+      const fec  = fecCol[i]?.[0]  || '';
+      const em   = emCol[i]?.[0]   || '';
       return (
         (em || '').toLowerCase() === email &&
         normalizarTexto(desc) === normalizarTexto(descripcion) &&
@@ -216,7 +249,8 @@ async function escribirSiNoDuplicado(sheets, sheetId, fila, ctx) {
       return;
     }
     // Cerrojo atómico por contenido
-    const contentKeyRaw = `${email}|${normalizarTexto(descripcion)}|${impNormObjetivo}|${fecha}|${sheetId}`;
+    // Añadimos hora al key para reducir carreras sin tocar el layout de la hoja
+    const contentKeyRaw = `${email}|${normalizarTexto(descripcion)}|${impNormObjetivo}|${fecha}|${(ctx?.hora || '')}|${sheetId}`;
     const contentKey = crypto.createHash('sha1').update(contentKeyRaw).digest('hex');
     const wrote = await ensureOnce('sheetsWrite', `sheets:${sheetId}:content:${contentKey}`);
     if (!wrote) {
@@ -311,49 +345,79 @@ async function guardarEnGoogleSheets(datos) {
       ''                // N (duplicado) → lo setea escribirSiNoDuplicado con `duplicadoFlag` (ya calculado arriba)
     ];
 
-    // Escribir en TODOS los IDs definidos, usando dedupe por UID si es posible
-await Promise.all(
-  SPREADSHEET_IDS.map(async (id) => {
+// Escribir en principal (obligatorio) y espejos no bloqueantes
+{
+  const tz = 'Europe/Madrid';
+  const nowTime = now.toLocaleTimeString('es-ES', { timeZone: tz, hour12: false }); // HH:MM:SS
+
+  const ctxBase = {
+    email,
+    descripcion,
+    importe: importeForCompare,
+    fecha: nowString,
+    hora: nowTime,
+    uid,
+    groupId,
+  };
+
+  const [principalId, ...mirrors] = SPREADSHEET_IDS;
+
+  if (!principalId) {
+    throw new Error('❌ No hay SPREADSHEET_IDS configurados');
+  }
+
+  // 1) Principal: si falla, dejamos que burbujee (debe quedar registrado sí o sí)
+  await escribirSiNoDuplicado(sheets, principalId, fila, ctxBase);
+
+  // 2) Espejos: best-effort; no bloquean el flujo
+  for (const id of mirrors) {
     try {
-      return await escribirSiNoDuplicado(
-        sheets, id, fila,
-        { email, descripcion, importe: importeForCompare, fecha: nowString, uid, groupId }
-      );
+      await escribirSiNoDuplicado(sheets, id, fila, ctxBase);
     } catch (e) {
-      // Aviso de “guardado por sheet” (además del global del catch superior)
-      await alertAdmin({
-        area: 'sheets_guardar_por_sheet',
-        email,
-        err: e,
-        meta: { sheetId: id, hoja: HOJA, uid, groupId }
-      });
-      throw e;
+      console.warn(`[Sheets espejo] fallo en ${id}:`, e?.message || e);
+      // Aviso por sheet (sin bloquear)
+      try {
+        await alertAdmin({
+          area: 'sheets_guardar_por_sheet',
+          email,
+          err: e,
+          meta: { sheetId: id, hoja: HOJA, uid, groupId },
+        });
+      } catch (ae) {
+        console.warn('[Sheets espejo] fallo al alertar admin:', ae?.message || ae);
+      }
+      // no relanzamos: espejo no bloquea
     }
-  })
-);
+  }
+}
 
 } catch (error) {
   console.error('❌ Error al guardar en Google Sheets:', error);
-  // Aviso global (puede agrupar fallos de auth, client, Promise.all, etc.)
-  await alertAdmin({
-    area: 'sheets_guardar_global',
-    email: (datos?.email || '').toLowerCase() || '-',
-    err: error,
-    meta: {
-      hoja: HOJA,
-      spreadsheets: SPREADSHEET_IDS,
-      uid: String(
-        datos?.uid ||
-        datos?.facturaId ||
-        datos?.invoiceId ||
-        datos?.invoiceIdStripe ||
-        datos?.sessionId || ''
-      ).trim(),
-      groupId: String(datos?.groupId || '').trim()
-    }
-  });
+  // Aviso global (puede agrupar fallos de auth, client, principal, etc.)
+  try {
+    await alertAdmin({
+      area: 'sheets_guardar_global',
+      email: (datos?.email || '').toLowerCase() || '-',
+      err: error,
+      meta: {
+        hoja: HOJA,
+        spreadsheets: SPREADSHEET_IDS,
+        uid: String(
+          datos?.uid ||
+          datos?.facturaId ||
+          datos?.invoiceId ||
+          datos?.invoiceIdStripe ||
+          datos?.sessionId || ''
+        ).trim(),
+        groupId: String(datos?.groupId || '').trim(),
+      },
+    });
+  } catch (ae) {
+    console.warn('[Sheets] fallo al alertar admin (global):', ae?.message || ae);
+  }
   throw error;
 }
+
 
 }
 

@@ -4,7 +4,7 @@ const { emailRegistradoEnWordPress } = require('../utils/wordpress');
 const PRODUCTOS = require('../../utils/productos');
 
 const router = express.Router();
-const URL_IMAGEN_DEFAULT = 'https://www.laboroteca.es/wp-content/uploads/2025/07/ENTRADAS-LABOROTECA-scaled.webp';
+const URL_IMAGEN_DEFAULT = 'https://www.laboroteca.es/wp-content/uploads/2025/08/logo-entradas-laboroteca-scaled.webp';
 
 router.post('/crear-sesion-entrada', async (req, res) => {
   try {

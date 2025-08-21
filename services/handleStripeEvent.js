@@ -17,6 +17,7 @@ const escapeHtml = s => String(s ?? '')
   .replace(/>/g,'&gt;').replace(/"/g,'&quot;')
   .replace(/'/g,'&#39;');
 const crypto = require('crypto');
+const redact = (v) => (process.env.NODE_ENV === 'production' ? hash12(String(v || '')) : String(v || ''));
 const hash12 = e => crypto.createHash('sha256').update(String(e || '').toLowerCase()).digest('hex').slice(0,12);
 const { ensureOnce } = require('../utils/dedupe');
 
@@ -369,21 +370,15 @@ if (isAlta && !snap.exists) {
 
 // Construcción de datos para Factura/Sheets
 const datosRenovacion = {
-  email,
-  nombre,
-  apellidos,
-  dni,
-  direccion,
-  ciudad,
-  provincia,
-  cp,
+  email, nombre, apellidos, dni, direccion, ciudad, provincia, cp,
   nombreProducto: isAlta ? 'Alta y primera cuota Club Laboroteca' : 'Renovación mensual Club Laboroteca',
   descripcionProducto: isAlta ? 'Alta y primera cuota Club Laboroteca' : 'Renovación mensual Club Laboroteca',
   tipoProducto: 'Club',
   producto: 'el club laboroteca',
   importe: (invoice.amount_paid ?? invoice.amount_due ?? 0) / 100,
-  invoiceId,
+  invoiceIdStripe: String(invoiceId) // <— SIEMPRE el de Stripe
 };
+
 
 let pdfBuffer = null;
 let facturaId = null;
@@ -397,7 +392,11 @@ const invoicingDisabled =
 
 if (invoicingDisabled) {
   console.warn(`⛔ Facturación deshabilitada (invoiceId=${invoiceId}). Saltando crear/subir/email. Registrando SOLO en Sheets.`);
-  try { await guardarEnGoogleSheets(datosRenovacion); } catch (e) { console.error('❌ Sheets (kill-switch):', e?.message || e); }
+try {
+  await guardarEnGoogleSheets({ ...datosRenovacion, facturaId: '' });
+} catch (e) {
+  console.error('❌ Sheets (kill-switch):', e?.message || e);
+}
 } else {
   try {
     const resFactura = await crearFacturaEnFacturaCity(datosRenovacion);
@@ -406,17 +405,24 @@ if (invoicingDisabled) {
 
     if (!pdfBuffer) {
       console.warn('🟡 crearFacturaEnFacturaCity devolvió null (dedupe). No se sube ni se envía email. Registrando en Sheets.');
-      try { await guardarEnGoogleSheets(datosRenovacion); } catch (e) { console.error('❌ Sheets (dedupe):', e?.message || e); }
+try {
+  await guardarEnGoogleSheets({ ...datosRenovacion, facturaId: '' });
+} catch (e) {
+  console.error('❌ Sheets (dedupe):', e?.message || e);
+}
     } else {
-      // ✅ Registrar en Sheets la FACTURA usando el ID real si existe (antes del gate)
-      const datosSheets = { ...datosRenovacion };
-      if (facturaId) datosSheets.invoiceId = String(facturaId);
+    // ✅ Registrar en Sheets con IDs separados (Stripe vs FacturaCity)
+    const datosSheets = {
+      ...datosRenovacion,                                   // ya incluye invoiceIdStripe
+      facturaId: facturaId ? String(facturaId) : ''         // añade FacturaCity si existe
+    };
 
-      try {
-        await guardarEnGoogleSheets(datosSheets);
-      } catch (e) {
-        console.warn('⚠️ Sheets (invoice.paid) falló (ignorado):', e?.message || e);
-      }
+    try {
+      await guardarEnGoogleSheets(datosSheets);             // ← una sola llamada
+    } catch (e) {
+      console.warn('⚠️ Sheets (invoice.paid) falló (ignorado):', e?.message || e);
+    }
+
 
       // Segunda compuerta: no repetir subida/envío aunque hubiese doble PDF
       const kSend = `send:invoice:${invoiceId}`;
@@ -559,7 +565,7 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
     });
 
 
-    console.log(`✅ Factura de ${isAlta ? 'ALTA' : 'RENOVACIÓN'} procesada para ${email}`);
+    console.log(`✅ Factura de ${isAlta ? 'ALTA' : 'RENOVACIÓN'} procesada para ${redact(email)}`);
   } catch (error) {
     console.error('❌ Error al procesar invoice.paid:', error);
   }
@@ -588,7 +594,10 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
       return { duplicateBaja: true };
     }
 
-    const motivo = mapCancellationReason(subscription);
+    // Prioriza metadata propia si tu endpoint de baja la escribe:
+    const motivoFromMeta = subscription?.metadata?.motivo_baja;
+    const motivo = motivoFromMeta || mapCancellationReason(subscription);
+
 
     if (email) {
       try {
@@ -780,7 +789,8 @@ try {
     };
 
     // Reutilizamos la dedupe de FacturaCity: invoiceId = payment_intent
-    if (pi) datosCliente.invoiceId = String(pi);
+    if (pi) datosCliente.invoiceIdStripe = String(pi); // ← NO toques invoiceId
+
 
     const tipoLower = ((m.tipoProducto || m.tipo || '').toLowerCase().trim());
     const totalAsistRaw =
@@ -886,15 +896,28 @@ if (!pdfBuffer) {
   console.warn('🟡 crearFacturaEnFacturaCity devolvió null (dedupe). Registro en Sheets pero NO subo a GCS ni envío factura.');
   try { await guardarEnGoogleSheets(datosCliente); } catch (e) { console.error('❌ Sheets (dedupe):', e?.message || e); }
 } else {
-  // ✅ Registrar en Sheets la FACTURA usando el ID real si existe
-  const datosSheets = { ...datosCliente };
-  if (facturaId) datosSheets.invoiceId = String(facturaId);
+// ✅ Registrar en Sheets con IDs separados (Stripe vs FacturaCity)
+const datosSheets = {
+  ...datosCliente,                                    // ← NO datosRenovacion
+  invoiceIdStripe: pi ? String(pi) : '',              // ← PaymentIntent (único por pago)
+  sessionId: sessionId ? String(sessionId) : '',
+  facturaId: facturaId ? String(facturaId) : ''
+};
 
-  try {
+try {
+  const sheetsKey = `sheets:pi:${datosSheets.invoiceIdStripe || datosSheets.sessionId}`;
+  const firstSheetsWrite = await ensureOnce('sheets', sheetsKey);
+  if (firstSheetsWrite) {
     await guardarEnGoogleSheets(datosSheets);
-  } catch (e) {
-    console.warn('⚠️ Sheets falló (ignorado):', e?.message || e);
+  } else {
+    console.warn(`🟡 Dedupe Sheets: ya existe ${sheetsKey}, no registro de nuevo`);
   }
+} catch (e) {
+  console.warn('⚠️ Sheets (one-time) falló (ignorado):', e?.message || e);
+}
+
+
+
 
   // 🔒 Gate para evitar IO duplicado
   const baseName = (pi || sessionId || Date.now());
@@ -1049,11 +1072,22 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
   console.log(`ℹ️ Email de apoyo NO enviado (esEntrada=${esEntrada}, esLibro=${memberpressId === 7994}, falloFactura=${falloFactura}, seEnvioFactura=${seEnvioFactura})`);
 }
 
-  // 🎫 Procesar ENTRADAS SIEMPRE (aunque falle FacturaCity o DISABLE_INVOICING sea true)
-  if (esEntrada) {
+// 🎫 Procesar ENTRADAS en background + dedupe por sesión
+if (esEntrada) {
+  const kJob = `entradas:${session.id}`;
+  const firstJob = await ensureOnce('jobs', kJob); // atómico
+  if (firstJob) {
     const procesarEntradas = require('../entradas/services/procesarEntradas');
-    await procesarEntradas({ session, datosCliente, pdfBuffer }); // pdfBuffer puede ser null
+    // no await: no bloquea el webhook
+    Promise.resolve()
+      .then(() => procesarEntradas({ session, datosCliente, pdfBuffer })) // pdfBuffer puede ser null
+      .then(() => console.log('🎫 procesarEntradas lanzado (async) job=', kJob))
+      .catch(err => console.error('❌ procesarEntradas async:', err?.message || err));
+  } else {
+    console.log('🟡 procesarEntradas ya encolado/ejecutado para', session.id);
   }
+}
+
 
 
   // 🛡️ Guardar datos fiscales si están completos

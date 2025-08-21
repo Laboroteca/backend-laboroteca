@@ -21,6 +21,44 @@ const redact = (v) => (process.env.NODE_ENV === 'production' ? hash12(String(v |
 const hash12 = e => crypto.createHash('sha256').update(String(e || '').toLowerCase()).digest('hex').slice(0,12);
 const { ensureOnce } = require('../utils/dedupe');
 
+// ——— ALERTAS ADMIN ———————————————————————————————————————————————
+const ADMIN_EMAIL = process.env.ADMIN_ALERTS_TO || 'laboroteca@gmail.com';
+
+async function alertAdmin({ area, email, err, meta = {}, dedupeKey }) {
+  try {
+    const key = dedupeKey || `alert:${(area||'-').toLowerCase()}:${(email||'-').toLowerCase()}:${hash12(String(err?.message || err || '-'))}`;
+    const first = await ensureOnce('adminAlerts', key);
+    if (!first) return;
+
+    const E = v => escapeHtml(String(v ?? '-'));
+    const T = v => String(v ?? '-');
+
+    const subject = `🚨 FALLO ${T(area).toUpperCase()} — ${T(email || '-')}`;
+    const text = [
+      `Área: ${T(area)}`,
+      `Email: ${T(email || '-')}`,
+      `Error: ${T(err?.message || err || '-')}`,
+      `Meta: ${T(JSON.stringify(meta))}`,
+      `Entorno: ${T(process.env.NODE_ENV || 'dev')}`,
+    ].join('\n');
+
+    const html = `
+      <h3>Fallo en ${E(area)}</h3>
+      <ul>
+        <li><strong>Email:</strong> ${E(email || '-')}</li>
+        <li><strong>Error:</strong> ${E(err?.message || err || '-')}</li>
+        <li><strong>Entorno:</strong> ${E(process.env.NODE_ENV || 'dev')}</li>
+      </ul>
+      <pre style="white-space:pre-wrap">${E(JSON.stringify(meta, null, 2))}</pre>
+    `;
+
+    await enviarEmailPersonalizado({ to: ADMIN_EMAIL, subject, text, html });
+  } catch (e) {
+    console.error('⚠️ alertAdmin fallo:', e?.message || e);
+  }
+}
+
+
 // ——— Helper: cargar metadata de FluentForms desde el Checkout Session que creó la suscripción
 async function cargarFFDesdeCheckoutPorSubscription(subId) {
   if (!subId) return {};
@@ -177,8 +215,15 @@ await enviarAvisoImpago(email, nombre, 1, enlacePago, true); // true = email de 
       });
     } catch (err) {
       console.error('❌ Error al procesar impago/cancelación:', err?.message);
+      await alertAdmin({
+        area: 'impago_cancelacion',
+        email,
+        err,
+        meta: { invoiceId }
+      });
       return { error: 'fallo_envio_cancelacion' };
     }
+
 
     return { impago: 'cancelado_primer_intento' };
   }
@@ -396,6 +441,12 @@ try {
   await guardarEnGoogleSheets({ ...datosRenovacion, facturaId: '' });
 } catch (e) {
   console.error('❌ Sheets (kill-switch):', e?.message || e);
+  await alertAdmin({
+    area: 'sheets_registro',
+    email,
+    err: e,
+    meta: { contexto: 'invoice.paid_kill_switch', datos: { ...datosRenovacion, facturaId: '' } }
+  });
 }
 } else {
   try {
@@ -409,7 +460,14 @@ try {
   await guardarEnGoogleSheets({ ...datosRenovacion, facturaId: '' });
 } catch (e) {
   console.error('❌ Sheets (dedupe):', e?.message || e);
+  await alertAdmin({
+    area: 'sheets_registro',
+    email,
+    err: e,
+    meta: { contexto: 'invoice.paid_dedupe', datos: { ...datosRenovacion, facturaId: '' } }
+  });
 }
+
     } else {
     // ✅ Registrar en Sheets con IDs separados (Stripe vs FacturaCity)
     const datosSheets = {
@@ -419,33 +477,56 @@ try {
 
     try {
       await guardarEnGoogleSheets(datosSheets);             // ← una sola llamada
-    } catch (e) {
-      console.warn('⚠️ Sheets (invoice.paid) falló (ignorado):', e?.message || e);
-    }
+} catch (e) {
+  console.warn('⚠️ Sheets (invoice.paid) falló (ignorado):', e?.message || e);
+  await alertAdmin({
+    area: 'sheets_registro',
+    email,
+    err: e,
+    meta: { contexto: 'invoice.paid', datos: datosSheets }
+  });
+}
 
 
-      // Segunda compuerta: no repetir subida/envío aunque hubiese doble PDF
-      const kSend = `send:invoice:${invoiceId}`;
-      const firstSend = await ensureOnce('sendFactura', kSend);
-      if (!firstSend) {
-        console.warn(`🟡 Dedupe envío/Upload para ${kSend}. No repito subir/email.`);
-      } else {
-        const nombreArchivoGCS = `facturas/${hash12(email)}/${invoiceId}.pdf`;
-        await subirFactura(nombreArchivoGCS, pdfBuffer, {
-          email,
-          nombreProducto: datosRenovacion.nombreProducto,
-          tipoProducto: datosRenovacion.tipoProducto,
-          importe: datosRenovacion.importe
-        });
-        try {
-      await enviarFacturaPorEmail(datosSheets, pdfBuffer);
-      seEnvioFactura = true;
-    } catch (errEmailFactura) {
-      console.error('❌ Error enviando la factura al cliente:', errEmailFactura?.message || errEmailFactura);
-      falloFactura = true;
-    }
 
-      }
+// Segunda compuerta: no repetir subida/envío aunque hubiese doble PDF
+const sendKey = facturaId ? `send:invoice:${facturaId}` : `send:invoice:${invoiceId}`;
+const firstSend = await ensureOnce('sendFactura', sendKey);
+
+if (!firstSend) {
+  console.warn(`🟡 Dedupe envío/Upload para ${sendKey}. No repito subir/email.`);
+} else {
+  const fileId = (facturaId || invoiceId);
+  const nombreArchivoGCS = `facturas/${hash12(email)}/${fileId}.pdf`;
+
+  // Subida a GCS (no rompe el flujo si falla)
+  try {
+    await subirFactura(nombreArchivoGCS, pdfBuffer, {
+      email,
+      nombreProducto: datosRenovacion.nombreProducto,
+      tipoProducto: datosRenovacion.tipoProducto,
+      importe: datosRenovacion.importe
+    });
+  } catch (e) {
+    console.error('❌ Subida GCS (invoice.paid):', e?.message || e);
+    await alertAdmin({
+      area: 'gcs_subida_factura',
+      email,
+      err: e,
+      meta: { nombreArchivoGCS, invoiceId, facturaId }
+    });
+  }
+
+  // Envío email factura (puede fallar sin romper webhook)
+  try {
+    await enviarFacturaPorEmail(datosSheets, pdfBuffer);
+    seEnvioFactura = true;
+  } catch (errEmailFactura) {
+    console.error('❌ Error enviando la factura al cliente:', errEmailFactura?.message || errEmailFactura);
+    falloFactura = true;
+  }
+}
+
     }
 
 
@@ -454,11 +535,18 @@ try {
       falloFactura = true;
 
       // ✅ Registrar en Google Sheets AUNQUE falle FacturaCity
-      try {
-        await guardarEnGoogleSheets(datosRenovacion);
-      } catch (se) {
-        console.error('❌ Sheets (invoice.paid catch):', se?.message || se);
-      }
+    try {
+      await guardarEnGoogleSheets(datosRenovacion);
+    } catch (se) {
+      console.error('❌ Sheets (invoice.paid catch):', se?.message || se);
+      await alertAdmin({
+        area: 'sheets_registro',
+        email,
+        err: se,
+        meta: { contexto: 'invoice.paid_catch', datos: datosRenovacion }
+      });
+    }
+
 
       
     // (Opcional) Aviso al admin — versión completa
@@ -507,15 +595,36 @@ Error: ${T(e?.message || e)}`,
 
     const emailSeguro = (email || '').toString().trim().toLowerCase();
 
-    if (emailSeguro.includes('@')) {
-      await activarMembresiaClub(emailSeguro);
-      await syncMemberpressClub({
-        email: emailSeguro,
-        accion: 'activar',
-        membership_id: MEMBERPRESS_IDS['el club laboroteca'],
-        importe: (invoice.amount_paid || 999) / 100
-      });
-    } else {
+if (emailSeguro.includes('@')) {
+  try {
+    await activarMembresiaClub(emailSeguro);
+  } catch (e) {
+    console.error('❌ Activación Club (invoice.paid):', e?.message || e);
+    await alertAdmin({
+      area: 'activacion_membresia',
+      email: emailSeguro,
+      err: e,
+      meta: { evento: 'invoice.paid' }
+    });
+  }
+  try {
+    await syncMemberpressClub({
+      email: emailSeguro,
+      accion: 'activar',
+      membership_id: MEMBERPRESS_IDS['el club laboroteca'],
+      importe: (invoice.amount_paid || 999) / 100
+    });
+  } catch (e) {
+    console.error('❌ syncMemberpressClub (invoice.paid):', e?.message || e);
+    await alertAdmin({
+      area: 'sync_memberpress',
+      email: emailSeguro,
+      err: e,
+      meta: { evento: 'invoice.paid' }
+    });
+  }
+} else {
+
       console.warn(`❌ Email inválido en syncMemberpressClub: "${emailSeguro}"`);
     }
 
@@ -605,9 +714,16 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
         await desactivarMembresiaClub(email, false);
        await registrarBajaClub({ email, motivo });
         await enviarAvisoCancelacion(email, nombre, enlacePago);
-      } catch (err) {
-        console.error('❌ Error al registrar baja:', err?.message);
-      }
+} catch (err) {
+  console.error('❌ Error al registrar baja:', err?.message);
+  await alertAdmin({
+    area: 'baja_membresia',
+    email,
+    err,
+    meta: { motivo, subscriptionId }
+  });
+}
+
     }
     return { success: true, baja: true };
   }
@@ -642,7 +758,18 @@ if (event.type === 'checkout.session.completed') {
         origen:     'fluentforms@checkout.session.completed',
         fecha:      new Date().toISOString()
       };
-      await firestore.collection('datosFiscalesPorEmail').doc(emailFF).set(payload, { merge: true });
+      try {
+  await firestore.collection('datosFiscalesPorEmail').doc(emailFF).set(payload, { merge: true });
+} catch (e) {
+  console.error('❌ Firestore datos fiscales (suscripción):', e?.message || e);
+  await alertAdmin({
+    area: 'firestore_datos_fiscales',
+    email: emailFF,
+    err: e,
+    meta: { origen: 'checkout.session.completed(subscription)', datos: payload }
+  });
+}
+
           // 💾 Copiamos los datos fiscales de Fluent Forms a la SUSCRIPCIÓN de Stripe
     try {
       const subId = session.subscription;
@@ -861,9 +988,16 @@ try {
         await syncMemberpressLibro({ email, accion: 'activar', importe: datosCliente.importe });
         console.log('✅ LIBRO activado inmediatamente');
       }
-    } catch (e) {
-      console.error('❌ Error activando membresía (se registrará igualmente la compra):', e?.message || e);
-    }
+} catch (e) {
+  console.error('❌ Error activando membresía (se registrará igualmente la compra):', e?.message || e);
+  await alertAdmin({
+    area: 'activacion_membresia',
+    email,
+    err: e,
+    meta: { evento: 'checkout.session.completed', producto: productoSlug, membershipId: memberpressId }
+  });
+}
+
 
 // (quitado) — La confirmación “Compra confirmada y acceso activado” SOLO se enviará más tarde
 // y SOLO si la factura falla (para libro). Para entradas ya tienes su propio correo.
@@ -882,9 +1016,16 @@ try {
     console.warn('⛔ Facturación deshabilitada. Saltando crear/subir/email. Registrando SOLO en Sheets.');
     try {
       await guardarEnGoogleSheets(datosCliente);
-    } catch (e) {
-      console.error('❌ Sheets (kill-switch):', e?.message || e);
-    }
+} catch (e) {
+  console.error('❌ Sheets (kill-switch):', e?.message || e);
+  await alertAdmin({
+    area: 'sheets_registro',
+    email,
+    err: e,
+    meta: { contexto: 'checkout_kill_switch', datos: datosCliente }
+  });
+}
+
   } else {
     try {
       // 🧾 Intento de creación de factura (puede fallar sin cortar el flujo)
@@ -905,7 +1046,9 @@ const datosSheets = {
 };
 
 try {
-  const sheetsKey = `sheets:pi:${datosSheets.invoiceIdStripe || datosSheets.sessionId}`;
+  const sheetsKey = datosSheets.facturaId
+  ? `sheets:factura:${datosSheets.facturaId}`
+  : `sheets:pi:${datosSheets.invoiceIdStripe || datosSheets.sessionId}`;
   const firstSheetsWrite = await ensureOnce('sheets', sheetsKey);
   if (firstSheetsWrite) {
     await guardarEnGoogleSheets(datosSheets);
@@ -914,37 +1057,58 @@ try {
   }
 } catch (e) {
   console.warn('⚠️ Sheets (one-time) falló (ignorado):', e?.message || e);
+  await alertAdmin({
+    area: 'sheets_registro',
+    email,
+    err: e,
+    meta: { contexto: 'checkout_one_time', datos: datosSheets }
+  });
 }
 
 
 
 
-  // 🔒 Gate para evitar IO duplicado
-  const baseName = (pi || sessionId || Date.now());
-  const kSend = `send:invoice:${baseName}`;
-  const firstSend = await ensureOnce('sendFactura', kSend);
-  if (!firstSend) {
-    console.warn(`🟡 Dedupe envío/Upload para ${kSend}. No repito subir/email.`);
-  } else {
-    const nombreArchivo = `facturas/${hash12(email)}/${baseName}-${datosCliente.producto}.pdf`;
+
+// 🔒 Gate para evitar IO duplicado
+const baseName = (facturaId || pi || sessionId || Date.now());
+const sendKey = `send:invoice:${baseName}`;
+const firstSend = await ensureOnce('sendFactura', sendKey);
+
+if (!firstSend) {
+  console.warn(`🟡 Dedupe envío/Upload para ${sendKey}. No repito subir/email.`);
+} else {
+  const nombreArchivo = `facturas/${hash12(email)}/${baseName}-${datosCliente.producto}.pdf`;
+
+  try {
     await subirFactura(nombreArchivo, pdfBuffer, {
       email,
       nombreProducto: datosCliente.nombreProducto || datosCliente.producto,
       tipoProducto: datosCliente.tipoProducto,
       importe: datosCliente.importe
     });
+  } catch (e) {
+    console.error('❌ Subida GCS (checkout.session.completed):', e?.message || e);
+    await alertAdmin({
+      area: 'gcs_subida_factura',
+      email,
+      err: e,
+      meta: { nombreArchivo, baseName, pi, sessionId, facturaId },
+      dedupeKey: `alert:gcs:${sendKey}`
+    });
 
-if (!esEntrada) {
-  try {
-    await enviarFacturaPorEmail(datosSheets, pdfBuffer);
-    seEnvioFactura = true;
-  } catch (errEmailFactura) {
-    console.error('❌ Error enviando la factura al cliente (one-time):', errEmailFactura?.message || errEmailFactura);
-    falloFactura = true;
+  }
+
+  if (!esEntrada) {
+    try {
+      await enviarFacturaPorEmail(datosSheets, pdfBuffer);
+      seEnvioFactura = true;
+    } catch (errEmailFactura) {
+      console.error('❌ Error enviando la factura al cliente (one-time):', errEmailFactura?.message || errEmailFactura);
+      falloFactura = true;
+    }
   }
 }
 
-  }
 }
 
     } catch (errFactura) {
@@ -958,9 +1122,15 @@ if (!esEntrada) {
       // 🧾 Aún así, registramos la compra en Sheets (pago confirmado)
       try {
         await guardarEnGoogleSheets(datosCliente);
-      } catch (e) {
-        console.error('❌ Sheets tras fallo de FacturaCity:', e?.message || e);
-      }
+    } catch (e) {
+      console.error('❌ Sheets tras fallo de FacturaCity:', e?.message || e);
+      await alertAdmin({
+        area: 'sheets_registro',
+        email,
+        err: e,
+        meta: { contexto: 'checkout_catch_facturacity', datos: datosCliente }
+      });
+    }
 
 // 🔔 Aviso al admin del fallo de factura con TODOS los datos del formulario (ESCAPADO)
 try {
@@ -1082,7 +1252,16 @@ if (esEntrada) {
     Promise.resolve()
       .then(() => procesarEntradas({ session, datosCliente, pdfBuffer })) // pdfBuffer puede ser null
       .then(() => console.log('🎫 procesarEntradas lanzado (async) job=', kJob))
-      .catch(err => console.error('❌ procesarEntradas async:', err?.message || err));
+      .catch(async err => {
+  console.error('❌ procesarEntradas async:', err?.message || err);
+  await alertAdmin({
+    area: 'entradas_async',
+    email,
+    err,
+    meta: { sessionId: session?.id, totalAsistentes: datosCliente?.totalAsistentes }
+  });
+});
+
   } else {
     console.log('🟡 procesarEntradas ya encolado/ejecutado para', session.id);
   }
@@ -1100,8 +1279,19 @@ if (esEntrada) {
     datosCliente.provincia &&
     datosCliente.cp
   ) {
-    await firestore.collection('datosFiscalesPorEmail').doc(email).set(datosCliente, { merge: true });
-    console.log(`✅ Datos fiscales guardados para ${email}`);
+    try {
+  await firestore.collection('datosFiscalesPorEmail').doc(email).set(datosCliente, { merge: true });
+  console.log(`✅ Datos fiscales guardados para ${email}`);
+} catch (e) {
+  console.error('❌ Firestore datos fiscales (final):', e?.message || e);
+  await alertAdmin({
+    area: 'firestore_datos_fiscales',
+    email,
+    err: e,
+    meta: { origen: 'checkout.session.completed(final)', datos: datosCliente }
+  });
+}
+
   } else {
     console.warn(`⚠️ Datos incompletos. No se guardan en Firestore para ${email}`);
   }

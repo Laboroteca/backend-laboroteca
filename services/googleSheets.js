@@ -1,5 +1,8 @@
 // services/guardarEnGoogleSheets.js
 const { google } = require('googleapis');
+const crypto = require('crypto');
+const { ensureOnce } = require('../utils/dedupe');
+
 
 const credentialsBase64 = process.env.GCP_CREDENTIALS_BASE64;
 if (!credentialsBase64) {
@@ -26,6 +29,58 @@ const GROUP_HEADER = 'groupid';   // col M
 const GROUP_COL_INDEX = 12;
 const DUP_HEADER = 'duplicado';   // col N
 const DUP_COL_INDEX = 13;
+// Backoff simple para 429/5xx
+async function withRetries(fn, { tries = 3, baseMs = 250 } = {}) {
+  let lastErr;
+  for (let i = 0; i < tries; i++) {
+    try { return await fn(); } catch (e) {
+      const code = Number(e?.code || e?.response?.status || 0);
+      if (i < tries - 1 && (code === 429 || code >= 500)) {
+        const delay = baseMs * Math.pow(2, i);
+        await new Promise(r => setTimeout(r, delay));
+        lastErr = e;
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw lastErr;
+}
+
+// Normaliza importes para comparar (quita €, espacios y unifica separadores)
+function normalizarImporte(str) {
+  const s = String(str || '')
+    .replace(/€/g, '')
+    .replace(/\s+/g, '')
+    .replace(/\./g, '')
+    .replace(/,/g, '.');
+  const n = Number(s);
+  return Number.isFinite(n) ? n.toFixed(2) : s;
+}
+
+// Siembra encabezados si faltan (no pisa los ya presentes)
+async function seedHeadersIfMissing(sheets, sheetId, header) {
+  const map = { [UID_COL_INDEX]: 'uid', [GROUP_COL_INDEX]: 'groupid', [DUP_COL_INDEX]: 'duplicado' };
+  const merged = [...header];
+  Object.entries(map).forEach(([i, name]) => {
+    const idx = Number(i);
+    if (!merged[idx] || String(merged[idx]).trim() === '') merged[idx] = name;
+  });
+
+  // ¿ya están?
+  const ok = Object.entries(map).every(([i, name]) =>
+    String(merged[Number(i)]).trim().toLowerCase() === name
+  );
+  if (ok) return;
+
+  await withRetries(() => sheets.spreadsheets.values.update({
+    spreadsheetId: sheetId,
+    range: `${HOJA}!A1:N1`,
+    valueInputOption: 'RAW',
+    requestBody: { values: [merged] },
+  }));
+}
+
 
 // 🧽 Normalización de texto para comparación robusta (fallback)
 const normalizarTexto = (str) =>
@@ -42,69 +97,80 @@ const normalizarTexto = (str) =>
 async function escribirSiNoDuplicado(sheets, sheetId, fila, ctx) {
   if (!sheetId) return;
 
-  // Leemos encabezado para detectar columna UID si existe
-  const headerRes = await sheets.spreadsheets.values.get({
+    // Leemos encabezado con backoff y sembramos headers si faltan
+  const headerRes = await withRetries(() => sheets.spreadsheets.values.get({
     spreadsheetId: sheetId,
     range: `${HOJA}!A1:N1`,
-  });
+  }));
   const header = headerRes.data.values?.[0] || [];
+  await seedHeadersIfMissing(sheets, sheetId, header);
+
   const headerLower = header.map(h => String(h || '').trim().toLowerCase());
-  const uidColInSheet = headerLower.findIndex(h => h === UID_HEADER);
+  const uidColInSheet   = headerLower.findIndex(h => h === UID_HEADER);
   const groupColInSheet = headerLower.findIndex(h => h === GROUP_HEADER);
-  const dupColInSheet = headerLower.findIndex(h => h === DUP_HEADER);
+  const dupColInSheet   = headerLower.findIndex(h => h === DUP_HEADER);
 
-  // Leemos datos (hasta L para incluir UID si lo hay)
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId: sheetId,
-    range: `${HOJA}!A2:N`,
-  });
-  const filas = res.data.values || [];
-
-  const { email, descripcion, importe, fecha, uid, groupId } = ctx;
-  // Índices efectivos (si no hay header, usamos las columnas L/M/N)
+  // Índices efectivos (si no hubiera encabezado válido)
   const uidIdx   = uidColInSheet   >= 0 ? uidColInSheet   : UID_COL_INDEX;
   const groupIdx = groupColInSheet >= 0 ? groupColInSheet : GROUP_COL_INDEX;
   const dupIdx   = dupColInSheet   >= 0 ? dupColInSheet   : DUP_COL_INDEX;
 
-  // 1) Dedupe por UID si tenemos UID y la hoja ya tiene columna UID
+  // Lectura eficiente por columnas: L(uid), M(group), D..G(desc, imp, fec, email)
+  const batches = await withRetries(() => sheets.spreadsheets.values.batchGet({
+    spreadsheetId: sheetId,
+    ranges: [
+      `${HOJA}!L2:L`,
+      `${HOJA}!M2:M`,
+      `${HOJA}!D2:G`,
+    ],
+  }));
+  const rangeL  = batches.data.valueRanges?.[0]?.values || [];
+  const rangeM  = batches.data.valueRanges?.[1]?.values || [];
+  const rangeDG = batches.data.valueRanges?.[2]?.values || [];
+  const { email, descripcion, importe, fecha, uid, groupId } = ctx;
+
+
+  console.log('[Sheets] uid-debug', {
+    uid,
+    uidColInSheet, groupColInSheet, dupColInSheet,
+    effectiveIdx: { uidIdx, groupIdx, dupIdx },
+    sheetId, hoja: HOJA
+  });
+
+  // 1) Dedupe por UID (si viene)
   if (uid) {
-    const existeUid = filas.some(f => (f[uidIdx] || '').toString().trim() === uid);
+    const existeUid = rangeL.some(r => (r?.[0] || '').toString().trim() === uid);
     if (existeUid) {
       console.log(`🔁 Duplicado evitado por UID en ${sheetId} → ${uid}`);
       return;
     }
+    // Cerrojo atómico cross-proceso (evita carreras get/append simultáneas)
+    const wrote = await ensureOnce('sheetsWrite', `sheets:${sheetId}:uid:${uid}`);
+    if (!wrote) {
+      console.log(`🟡 Carrera evitada por uid en ${sheetId} → ${uid}`);
+      return;
+    }
   }
-  // 1.5) Marcar duplicado lógico (mismo groupId, distinto uid). NO evita insertar; solo marca.
+
+  // 1.5) Flag lógico de duplicado por groupId (no evita insertar)
   let duplicadoFlag = '';
   if (groupId) {
-    const hayOtroMismoGrupoConOtroUid = filas.some(f => {
-      const g = (f[groupIdx] || '').toString().trim();
-      const u = (f[uidIdx]   || '').toString().trim();
-      return g === groupId && (!!uid ? u !== uid : true);
-    });
-    if (hayOtroMismoGrupoConOtroUid) {
+    const hayOtro = rangeM.some(r => (r?.[0] || '').toString().trim() === groupId);
+    if (hayOtro) {
       duplicadoFlag = 'YES';
       console.warn(`⚠️ Doble factura lógica detectada (groupId=${groupId}) en sheet ${sheetId}`);
     }
   }
 
-  console.log('[Sheets] uid-debug', {
-  uid,
-  uidColInSheet, groupColInSheet, dupColInSheet,
-  effectiveIdx: { uidIdx, groupIdx, dupIdx },
-  sheetId,
-  hoja: HOJA
-});
-
-  // 2) Fallback: si no hay UID o la hoja aún no tiene columna UID, dedupe por contenido (antiguo criterio)
+  // 2) Fallback sin UID: dedupe por contenido normalizado
   if (!uid) {
-    const yaExiste = filas.some((f) => {
-      // A,B,C,D,E,F,G,H,I,J,K,(L=UID opcional)
-      const [,, , desc, imp, fec, em] = f;
+    const impNormObjetivo = String(importe); // ya viene normalizado desde guardarEnGoogleSheets
+    const yaExiste = rangeDG.some(row => {
+      const [desc, imp, fec, em] = [row?.[0] || '', row?.[1] || '', row?.[2] || '', row?.[3] || ''];
       return (
         (em || '').toLowerCase() === email &&
         normalizarTexto(desc) === normalizarTexto(descripcion) &&
-        (imp || '') === importe &&
+        normalizarImporte(imp) === impNormObjetivo &&
         (fec || '') === fecha
       );
     });
@@ -112,23 +178,32 @@ async function escribirSiNoDuplicado(sheets, sheetId, fila, ctx) {
       console.log(`🔁 Duplicado evitado por contenido en ${sheetId} para ${email}`);
       return;
     }
+    // Cerrojo atómico por contenido
+    const contentKeyRaw = `${email}|${normalizarTexto(descripcion)}|${impNormObjetivo}|${fecha}|${sheetId}`;
+    const contentKey = crypto.createHash('sha1').update(contentKeyRaw).digest('hex');
+    const wrote = await ensureOnce('sheetsWrite', `sheets:${sheetId}:content:${contentKey}`);
+    if (!wrote) {
+      console.log(`🟡 Carrera evitada por contenido en ${sheetId}`);
+      return;
+    }
   }
-    
-  // 2.5) Escribir el flag de duplicado en la fila antes de hacer append
+
+  // 2.5) Si hay flag de duplicado, lo añadimos en su columna
   if (duplicadoFlag) {
-    // Asegura longitud
     while (fila.length <= dupIdx) fila.push('');
     fila[dupIdx] = duplicadoFlag;
   }
 
+
   // 3) Append fila (ya incluye UID en la última columna)
-  await sheets.spreadsheets.values.append({
+  await withRetries(() => sheets.spreadsheets.values.append({
     spreadsheetId: sheetId,
     range: `${HOJA}!A2`,
     valueInputOption: 'RAW',
     insertDataOption: 'INSERT_ROWS',
     requestBody: { values: [fila] },
-  });
+  }));
+
 
   console.log(`✅ Compra registrada en ${sheetId} para ${email}${uid ? ` (uid=${uid})` : ''}`);
 }
@@ -146,6 +221,10 @@ async function guardarEnGoogleSheets(datos) {
     const importe = typeof datos.importe === 'number'
       ? `${datos.importe.toFixed(2).replace('.', ',')} €`
       : (datos.importe || '');
+    const importeForCompare = typeof datos.importe === 'number'
+      ? datos.importe.toFixed(2)
+      : normalizarImporte(datos.importe);
+
     // UID transaccional: prioridad FacturaCity → Stripe PI/Invoice → Session → fallback vacío
     const uid = String(
       datos.uid ||
@@ -178,7 +257,8 @@ async function guardarEnGoogleSheets(datos) {
     // Escribir en TODOS los IDs definidos, usando dedupe por UID si es posible
     await Promise.all(
       SPREADSHEET_IDS.map((id) =>
-      escribirSiNoDuplicado(sheets, id, fila, { email, descripcion, importe, fecha: nowString, uid, groupId })
+      escribirSiNoDuplicado(sheets, id, fila, { email, descripcion, importe: importeForCompare, fecha: nowString, uid, groupId })
+
 
       )
     );

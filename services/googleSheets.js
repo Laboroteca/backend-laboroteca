@@ -65,8 +65,16 @@ async function escribirSiNoDuplicado(sheets, sheetId, fila, ctx) {
     }
   }
 
+  console.log('[Sheets] uid-debug', {
+  uid,
+  uidColInSheet,
+  hasUidHeader: uidColInSheet >= 0,
+  sheetId,
+  hoja: HOJA
+});
+
   // 2) Fallback: si no hay UID o la hoja aún no tiene columna UID, dedupe por contenido (antiguo criterio)
-  if (!uid || uidColInSheet < 0) {
+  if (!uid) {
     const yaExiste = filas.some((f) => {
       // A,B,C,D,E,F,G,H,I,J,K,(L=UID opcional)
       const [,, , desc, imp, fec, em] = f;

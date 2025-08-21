@@ -102,16 +102,25 @@ if (!firstEvent) {
     // --- Enviar email y desactivar membresía inmediatamente ---
     try {
       console.log(`⛔️ Primer intento de cobro fallido, CANCELANDO suscripción y SIN emitir factura para: ${email} – ${nombre}`);
-      await enviarAvisoImpago(email, nombre, 1, enlacePago, true); // true = email de cancelación inmediata
+// ✅ Determinar subscriptionId primero
+const subscriptionId =
+  invoice.subscription ||
+  invoice.subscription_details?.subscription ||
+  invoice.lines?.data?.[0]?.subscription ||
+  invoice.lines?.data?.[0]?.parent?.invoice_item_details?.subscription ||
+  invoice.metadata?.subscription ||
+  null;
 
-      // ✅ Cancelar también la suscripción en Stripe
-      const subscriptionId =
-        invoice.subscription ||
-        invoice.subscription_details?.subscription ||
-        invoice.lines?.data?.[0]?.subscription ||
-        invoice.lines?.data?.[0]?.parent?.invoice_item_details?.subscription ||
-        invoice.metadata?.subscription ||
-        null;
+// ⛔️ DEDUPE de BAJA por suscripción/email (evita doble baja e emails duplicados)
+const bajaKey = `baja:${subscriptionId || email}`;
+const isFirstBaja = await ensureOnce('bajasClub', bajaKey);
+if (!isFirstBaja) {
+  console.warn(`⛔️ Baja ya registrada, omito acciones duplicadas (key=${bajaKey})`);
+  return { received: true, duplicateBaja: true };
+}
+
+// 🔔 A partir de aquí SÍ enviamos el aviso/cancelamos (solo primera vez)
+await enviarAvisoImpago(email, nombre, 1, enlacePago, true); // true = email de cancelación inmediata
 
 
       console.log('🧪 Subscription ID extraído del invoice:', subscriptionId);
@@ -126,6 +135,14 @@ if (!firstEvent) {
           console.error(`❌ Error al cancelar suscripción en Stripe (${subscriptionId}):`, err.message);
         }
       }
+
+      // ⛔️ DEDUPE de BAJA por suscripción/email (evita doble baja e emails duplicados)
+    const bajaKey = `baja:${subscriptionId || email}`;
+    const isFirstBaja = await ensureOnce('bajasClub', bajaKey);
+    if (!isFirstBaja) {
+      console.warn(`⛔️ Baja ya registrada, omito acciones duplicadas (key=${bajaKey})`);
+      return { received: true, duplicateBaja: true };
+    }
 
       await syncMemberpressClub({
         email,
@@ -366,6 +383,9 @@ const invoicingDisabled =
 let pdfBuffer = null;
 let facturaId = null;
 
+let seEnvioFactura = false;   // ← true si conseguimos enviar la factura al cliente
+let falloFactura   = false;   // ← true si falla crear/enviar la factura
+
 if (invoicingDisabled) {
   console.warn(`⛔ Facturación deshabilitada (invoiceId=${invoiceId}). Saltando crear/subir/email. Registrando SOLO en Sheets.`);
   try { await guardarEnGoogleSheets(datosRenovacion); } catch (e) { console.error('❌ Sheets (kill-switch):', e?.message || e); }
@@ -402,13 +422,21 @@ if (invoicingDisabled) {
           tipoProducto: datosRenovacion.tipoProducto,
           importe: datosRenovacion.importe
         });
-        await enviarFacturaPorEmail(datosSheets, pdfBuffer);
+        try {
+      await enviarFacturaPorEmail(datosSheets, pdfBuffer);
+      seEnvioFactura = true;
+    } catch (errEmailFactura) {
+      console.error('❌ Error enviando la factura al cliente:', errEmailFactura?.message || errEmailFactura);
+      falloFactura = true;
+    }
+
       }
     }
 
 
     } catch (e) {
       console.error('❌ Error facturación invoice.paid:', e?.message || e);
+      falloFactura = true;
 
       // ✅ Registrar en Google Sheets AUNQUE falle FacturaCity
       try {
@@ -473,38 +501,42 @@ if (invoicingDisabled) {
       console.warn(`❌ Email inválido en syncMemberpressClub: "${emailSeguro}"`);
     }
 
-    // 📧 Email de confirmación de activación (Club)
-    try {
-      const fechaISO = new Date().toISOString();
-      await enviarEmailPersonalizado({
-        to: email,
-        subject: '✅ Tu acceso al Club Laboroteca ya está activo',
-        html: `
-          <p>Hola ${nombre || 'cliente'},</p>
-          <p>Tu <strong>membresía del Club Laboroteca</strong> ha sido <strong>activada correctamente</strong>.</p>
-          <p><strong>Producto:</strong> ${isAlta ? 'Alta y primera cuota Club Laboroteca' : 'Renovación mensual Club Laboroteca'}<br>
-            <strong>Importe:</strong> ${((invoice.amount_paid ?? invoice.amount_due ?? 0)/100).toFixed(2).replace('.', ',')} €<br>
-            <strong>Fecha:</strong> ${fechaISO}</p>
-          <p>Puedes acceder a tu área:</p>
-          <p><a href="https://www.laboroteca.es/mi-cuenta/">https://www.laboroteca.es/mi-cuenta/</a></p>
-          <p>Gracias por confiar en Laboroteca.</p>
-        `,
-        text: `Hola ${nombre || 'cliente'},
+// 📧 Email de activación SOLO si falló la factura
+if (falloFactura) {
+  try {
+    const fechaISO = new Date().toISOString();
+    await enviarEmailPersonalizado({
+      to: email,
+      subject: '✅ Tu acceso al Club Laboroteca ya está activo',
+      html: `
+        <p>Hola ${nombre || 'cliente'},</p>
+        <p>Tu <strong>membresía del Club Laboroteca</strong> ha sido <strong>activada correctamente</strong>.</p>
+        <p><em>Hemos tenido un problema generando o enviando tu factura.</em> En cuanto esté disponible, te la enviaremos a este mismo correo.</p>
+        <p><strong>Producto:</strong> ${isAlta ? 'Alta y primera cuota Club Laboroteca' : 'Renovación mensual Club Laboroteca'}<br>
+           <strong>Importe:</strong> ${((invoice.amount_paid ?? invoice.amount_due ?? 0)/100).toFixed(2).replace('.', ',')} €<br>
+           <strong>Fecha:</strong> ${fechaISO}</p>
+        <p><a href="https://www.laboroteca.es/mi-cuenta/">Accede a tu área de cliente</a></p>
+      `,
+      text: `Hola ${nombre || 'cliente'},
 
-    Tu membresía del Club Laboroteca ha sido activada correctamente.
+Tu membresía del Club Laboroteca ha sido activada correctamente.
+Hemos tenido un problema generando o enviando tu factura. En cuanto esté disponible, te la enviaremos.
 
-    Producto: ${isAlta ? 'Alta y primera cuota Club Laboroteca' : 'Renovación mensual Club Laboroteca'}
-    Importe: ${((invoice.amount_paid ?? invoice.amount_due ?? 0)/100).toFixed(2)} €
-    Fecha: ${fechaISO}
+Producto: ${isAlta ? 'Alta y primera cuota Club Laboroteca' : 'Renovación mensual Club Laboroteca'}
+Importe: ${((invoice.amount_paid ?? invoice.amount_due ?? 0)/100).toFixed(2)} €
+Fecha: ${new Date().toISOString()}
 
-    Acceso: https://www.laboroteca.es/mi-cuenta/
+Acceso: https://www.laboroteca.es/mi-cuenta/
+`
+    });
+    console.log('✅ Email de activación (solo por fallo de factura) enviado');
+  } catch (e) {
+    console.error('❌ Error enviando email de activación por fallo de factura:', e?.message || e);
+  }
+} else {
+  console.log('ℹ️ No se envía email de activación: la factura se generó y/o se envió correctamente.');
+}
 
-    Gracias por confiar en Laboroteca.`
-      });
-      console.log('✅ Email de confirmación de Club enviado');
-    } catch (e) {
-      console.error('❌ Error enviando email de confirmación de Club:', e?.message || e);
-    }
 
 
     await firestore.collection('facturasEmitidas').doc(invoiceId).set({
@@ -532,6 +564,17 @@ if (invoicingDisabled) {
 
     const nombre = subscription.customer_details?.name || '';
     const enlacePago = 'https://www.laboroteca.es/membresia-club-laboroteca/';
+
+
+    const subscriptionId = subscription.id || subscription.subscription || null;
+
+    // ⛔️ DEDUPE de BAJA por suscripción/email
+    const bajaKey = `baja:${subscriptionId || email}`;
+    const isFirstBaja = await ensureOnce('bajasClub', bajaKey);
+    if (!isFirstBaja) {
+      console.log(`🟡 customer.subscription.deleted duplicado (baja ya procesada) key=${bajaKey}`);
+      return { duplicateBaja: true };
+    }
 
     if (email) {
       try {
@@ -781,43 +824,15 @@ try {
       console.error('❌ Error activando membresía (se registrará igualmente la compra):', e?.message || e);
     }
 
-   // 📧 Confirmación al usuario de compra + activación (NO enviar si es venta de entradas)
-if (!esEntrada) {
-  try {
-    const productoLabel = datosCliente.nombreProducto || datosCliente.producto || 'Producto Laboroteca';
-    const ahoraISO = new Date().toISOString();
-    await enviarEmailPersonalizado({
-      to: email,
-      subject: '✅ Compra confirmada y acceso activado',
-      html: `
-        <p>Hola ${datosCliente.nombre || 'cliente'},</p>
-        <p>Tu compra de <strong>${productoLabel}</strong> se ha procesado correctamente y tu acceso ya está <strong>activado</strong>.</p>
-        <p><strong>Importe:</strong> ${datosCliente.importe.toFixed(2).replace('.', ',')} €<br>
-           <strong>Fecha:</strong> ${ahoraISO}</p>
-        <p>Puedes acceder a tu área:</p>
-        <p><a href="https://www.laboroteca.es/mi-cuenta/">https://www.laboroteca.es/mi-cuenta/</a></p>
-      `,
-      text: `Hola ${datosCliente.nombre || 'cliente'},
-
-Tu compra de ${productoLabel} se ha procesado correctamente y tu acceso ya está activado.
-
-Importe: ${datosCliente.importe.toFixed(2)} €
-Fecha: ${ahoraISO}
-
-Área de cliente: https://www.laboroteca.es/mi-cuenta/
-`
-    });
-    console.log('✅ Email de confirmación de compra+activación enviado (checkout.session.completed)');
-  } catch (e) {
-    console.error('❌ Error enviando email de confirmación de compra+activación:', e?.message || e);
-  }
-} else {
-  console.log('ℹ️ Venta de entradas: NO se envía email de confirmación (se envía desde el flujo de entradas).');
-}
+// (quitado) — La confirmación “Compra confirmada y acceso activado” SOLO se enviará más tarde
+// y SOLO si la factura falla (para libro). Para entradas ya tienes su propio correo.
 
 
     let errorProcesando = false;
-let pdfBuffer = null; // ← movido fuera del try para que esté accesible en finally
+    let pdfBuffer = null; // ← movido fuera del try para que esté accesible en finally
+
+    let seEnvioFactura = false;   // true si enviamos la factura al cliente
+    let falloFactura   = false;   // true si falla crear/enviar la factura
 
 try {
   const invoicingDisabled =
@@ -868,14 +883,23 @@ if (!pdfBuffer) {
       importe: datosCliente.importe
     });
 
-    if (!esEntrada) {
-      await enviarFacturaPorEmail(datosSheets, pdfBuffer);
-    }
+if (!esEntrada) {
+  try {
+    await enviarFacturaPorEmail(datosSheets, pdfBuffer);
+    seEnvioFactura = true;
+  } catch (errEmailFactura) {
+    console.error('❌ Error enviando la factura al cliente (one-time):', errEmailFactura?.message || errEmailFactura);
+    falloFactura = true;
+  }
+}
+
   }
 }
 
     } catch (errFactura) {
       console.error('⛔ Error FacturaCity sin respuesta:', errFactura?.message || errFactura);
+
+        falloFactura = true;
 
       // ⚠️ Continuamos el flujo sin factura
       pdfBuffer = null;
@@ -957,6 +981,43 @@ if (!pdfBuffer) {
       }
     }
   }
+
+  // 📧 Email de apoyo SOLO si la factura FALLÓ (aplica al LIBRO)
+// - No para entradas (tienen su correo propio)
+// - No para el club (se gestiona en invoice.paid)
+if (!esEntrada && memberpressId === 7994 && falloFactura) {
+  try {
+    const ahoraISO = new Date().toISOString();
+    const productoLabel = datosCliente.nombreProducto || datosCliente.producto || 'Libro Laboroteca';
+    await enviarEmailPersonalizado({
+      to: email,
+      subject: '✅ Acceso activo — estamos generando tu factura',
+      html: `
+        <p>Hola ${datosCliente.nombre || 'cliente'},</p>
+        <p>Tu <strong>compra del libro</strong> <strong>${productoLabel}</strong> se ha procesado correctamente y tu acceso ya está <strong>activado</strong>.</p>
+        <p><em>Hemos tenido un problema generando o enviando tu factura.</em> En cuanto esté disponible, te la enviaremos a este mismo correo.</p>
+        <p><strong>Importe:</strong> ${datosCliente.importe.toFixed(2).replace('.', ',')} €<br>
+           <strong>Fecha:</strong> ${ahoraISO}</p>
+        <p><a href="https://www.laboroteca.es/mi-cuenta/">Accede a tu área de cliente</a></p>
+      `,
+      text: `Hola ${datosCliente.nombre || 'cliente'},
+
+Tu compra del libro ${productoLabel} se ha procesado correctamente y tu acceso ya está activado.
+Hemos tenido un problema generando o enviando tu factura. En cuanto esté disponible, te la enviaremos.
+
+Importe: ${datosCliente.importe.toFixed(2)} €
+Fecha: ${ahoraISO}
+
+Acceso: https://www.laboroteca.es/mi-cuenta/
+`
+    });
+    console.log('✅ Email de apoyo (solo por fallo de factura en LIBRO) enviado');
+  } catch (e) {
+    console.error('❌ Error enviando email de apoyo (libro):', e?.message || e);
+  }
+} else {
+  console.log(`ℹ️ Email de apoyo NO enviado (esEntrada=${esEntrada}, esLibro=${memberpressId === 7994}, falloFactura=${falloFactura}, seEnvioFactura=${seEnvioFactura})`);
+}
 
   // 🎫 Procesar ENTRADAS SIEMPRE (aunque falle FacturaCity o DISABLE_INVOICING sea true)
   if (esEntrada) {

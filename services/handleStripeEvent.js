@@ -758,14 +758,29 @@ try {
     // Reutilizamos la dedupe de FacturaCity: invoiceId = payment_intent
     if (pi) datosCliente.invoiceId = String(pi);
 
-    const tipoLower = (m.tipoProducto || '').toLowerCase().trim();
-    const totalAsist = parseInt((m.totalAsistentes || '0'), 10);
-    const esEntrada = tipoLower.startsWith('entrada') || totalAsist > 0;
-    if (esEntrada) {
-      datosCliente.tipoProducto = 'entrada';              // normalizamos
-      datosCliente.totalAsistentes = isNaN(totalAsist) ? 0 : totalAsist;
-    }
+    const tipoLower = ((m.tipoProducto || m.tipo || '').toLowerCase().trim());
+    const totalAsistRaw =
+      m.totalAsistentes ??
+      m.total_asistentes ??
+      m.numEntradas ??
+      m.entradas ??
+      m.tickets ??
+      m.cantidadEntradas ??
+      m.cantidad ??
+      0;
+    const totalAsist = Number(totalAsistRaw) || 0;
+    const esEntrada =
+      tipoLower.includes('entrada') ||
+      totalAsist > 0 ||
+      /entrada|ticket|evento/i.test(m.nombreProducto || m.descripcionProducto || '');
 
+    const totalAsist = Math.max(0, Math.floor(Number(totalAsistRaw) || 0));
+
+    if (esEntrada) {
+      datosCliente.tipoProducto = 'entrada';          // normalizamos
+      datosCliente.totalAsistentes = totalAsist;      // ya es entero ≥ 0
+    }
+    
     console.log('📦 Procesando producto:', productoSlug, '-', datosCliente.importe, '€');
 
     // 🔐 GATE PAGO CONFIRMADO (PaymentIntent)

@@ -14,6 +14,19 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 const { ensureOnce } = require('../utils/dedupe');
 
+// ——— Helper: cargar metadata de FluentForms desde el Checkout Session que creó la suscripción
+async function cargarFFDesdeCheckoutPorSubscription(subId) {
+  if (!subId) return {};
+  try {
+    const lista = await stripe.checkout.sessions.list({ subscription: subId, limit: 1 });
+    const s = lista?.data?.[0];
+    return s?.metadata ? s.metadata : {};
+  } catch (e) {
+    console.warn('⚠️ No se pudo listar checkout.sessions por subscription:', e?.message || e);
+    return {};
+  }
+}
+
 
 function normalizarProducto(str) {
   return (str || '')
@@ -27,7 +40,6 @@ function normalizarProducto(str) {
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
 }
-
 
 
 const MEMBERPRESS_IDS = {
@@ -190,7 +202,9 @@ if (!['subscription_create', 'subscription_cycle'].includes(billingReason)) {
   return;
 }
 
-// 📧 Email preferente de la invoice; fallback al customer de Stripe
+// Etiqueta ALTA vs RENOVACIÓN
+const isAlta = billingReason === 'subscription_create';
+// Email base desde la invoice; fallback al customer
 let email = (invoice.customer_email || invoice.customer_details?.email || '').toLowerCase().trim();
 if (!email) {
   const cust = await stripe.customers.retrieve(customerId);
@@ -201,23 +215,35 @@ if (!email || !email.includes('@')) {
   return;
 }
 
-// Etiqueta ALTA vs RENOVACIÓN
-const isAlta = billingReason === 'subscription_create';
 
-    // 1) ALTA: intentar leer PRIMERO metadata embebida en la invoice (Stripe la incluye)
-let subMeta = invoice.subscription_details?.metadata || {};
+// 1) ALTA: PRIMERA fuente = FluentForms desde el Checkout Session que creó la suscripción
+let subMeta = {};
+if (isAlta && invoice.subscription) {
+  const ffMeta = await cargarFFDesdeCheckoutPorSubscription(invoice.subscription);
+  if (ffMeta && Object.keys(ffMeta).length > 0) {
+    subMeta = { ...ffMeta };
+  }
+}
 
-// Si sigue vacío, recuperamos la suscripción como plan B
-if (isAlta && (!subMeta || Object.keys(subMeta).length === 0)) {
+// 2) SEGUNDA fuente = subscription_details.metadata de la invoice (si viene, completa huecos)
+const sdMeta = invoice.subscription_details?.metadata || {};
+if (sdMeta && Object.keys(sdMeta).length > 0) {
+  subMeta = { ...subMeta, ...sdMeta }; // lo de la invoice NO pisa lo ya traído de FF
+}
+
+// 3) TERCERA fuente (plan B): recuperar la suscripción de Stripe por si su metadata trae algo más
+if (isAlta && invoice.subscription && Object.keys(subMeta).length === 0) {
   try {
-    if (invoice.subscription) {
-      const subObj = await stripe.subscriptions.retrieve(invoice.subscription);
-      subMeta = subObj?.metadata || {};
+    const subObj = await stripe.subscriptions.retrieve(invoice.subscription);
+    const subM = subObj?.metadata || {};
+    if (Object.keys(subM).length > 0) {
+      subMeta = { ...subMeta, ...subM };
     }
   } catch (e) {
     console.warn('⚠️ No se pudo recuperar la suscripción para leer metadata FF:', e?.message || e);
   }
 }
+
 
 // Helper para coger la primera key válida
 const pick = (obj, ...keys) => {
@@ -235,7 +261,17 @@ const subDni        = pick(subMeta, 'dni', 'nif', 'NIF', 'DNI', 'vat', 'vat_numb
 const subDireccion  = pick(subMeta, 'direccion', 'address', 'billing_address_1', 'billing_address');
 const subCiudad     = pick(subMeta, 'ciudad', 'city', 'billing_city');
 const subProvincia  = pick(subMeta, 'provincia', 'state', 'region', 'billing_state');
-const subCp         = pick(subMeta, 'cp', 'codigo_postal', 'postal_code', 'zip', 'billing_postcode');
+const subCp         = pick(subMeta, 'cp', 'codigo_postal', 'postal_code', 'zip', 'billing_postcode', 'codigoPostal');
+const subEmail      = pick(subMeta, 'email_autorelleno', 'email', 'correo');
+
+// Preferimos el email de FluentForms en el ALTA (si vino en subMeta)
+if (isAlta) {
+  const emailFF = (subEmail || '').toLowerCase();
+  if (emailFF && emailFF.includes('@')) {
+    email = emailFF;
+  }
+}
+
 
 console.log('🧾 invoice.paid • isAlta=', isAlta, '• subscription_details.metadata keys=', Object.keys(invoice.subscription_details?.metadata || {}));
 console.log('🧾 invoice.paid • subMeta keys (final)=', Object.keys(subMeta || {}));
@@ -279,7 +315,7 @@ if (isAlta) {
 if (isAlta && !snap.exists) {
   await docRef.set({
     nombre, apellidos, dni, direccion, ciudad, provincia, cp, email,
-    origen: 'subscription.metadata@invoice.paid',
+    origen: 'checkout.session.metadata@invoice.paid',
     fecha: new Date().toISOString()
   }, { merge: true });
   console.log(`ℹ️ (ALTA) Datos fiscales guardados desde subscription.metadata para ${email}`);

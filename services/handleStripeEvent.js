@@ -136,13 +136,6 @@ await enviarAvisoImpago(email, nombre, 1, enlacePago, true); // true = email de 
         }
       }
 
-      // ⛔️ DEDUPE de BAJA por suscripción/email (evita doble baja e emails duplicados)
-    const bajaKey = `baja:${subscriptionId || email}`;
-    const isFirstBaja = await ensureOnce('bajasClub', bajaKey);
-    if (!isFirstBaja) {
-      console.warn(`⛔️ Baja ya registrada, omito acciones duplicadas (key=${bajaKey})`);
-      return { received: true, duplicateBaja: true };
-    }
 
       await syncMemberpressClub({
         email,
@@ -827,12 +820,6 @@ try {
 // (quitado) — La confirmación “Compra confirmada y acceso activado” SOLO se enviará más tarde
 // y SOLO si la factura falla (para libro). Para entradas ya tienes su propio correo.
 
-
-    let errorProcesando = false;
-    let pdfBuffer = null; // ← movido fuera del try para que esté accesible en finally
-
-    let seEnvioFactura = false;   // true si enviamos la factura al cliente
-    let falloFactura   = false;   // true si falla crear/enviar la factura
 
 try {
   const invoicingDisabled =

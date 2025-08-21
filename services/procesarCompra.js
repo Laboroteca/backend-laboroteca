@@ -9,6 +9,8 @@ const { activarMembresiaClub } = require('./activarMembresiaClub');
 const { syncMemberpressClub } = require('./syncMemberpressClub');
 const { normalizarProducto, MEMBERPRESS_IDS } = require('../utils/productos');
 const { ensureOnce } = require('../utils/dedupe');
+const { alertAdmin } = require('../utils/alertAdmin'); // 👈 NUEVO
+
 
 // --- helper global ---
 function escapeHtml(s) {
@@ -37,12 +39,33 @@ module.exports = async function procesarCompra(datos) {
         }
       } catch (err) {
         console.error(`❌ Error recuperando email por alias "${alias}":`, err);
+        try {
+  await alertAdmin({
+    area: 'procesarCompra_alias_lookup',
+    email: '-',
+    err,
+    meta: { alias, hint: 'Fallo al recuperar email por alias' }
+  });
+} catch (_) {}
+
       }
     }
   }
 
     if (!email || !email.includes('@')) {
       console.error(`❌ Email inválido: "${email}"`);
+      try {
+  await alertAdmin({
+    area: 'procesarCompra_email_invalido',
+    email: email || '-',
+    err: new Error('Email inválido'),
+    meta: {
+      nombreProducto, tipoProducto, importe,
+      alias: (datos.alias || datos.userAlias || null)
+    }
+  });
+} catch (_) {}
+
       return { success: false, mensaje: 'email_invalido' };
     }
 
@@ -78,6 +101,15 @@ module.exports = async function procesarCompra(datos) {
         return { success: false, mensaje: 'Compra ya procesada (duplicado)' };
       }
     console.error('❌ Error creando lock (continuo sin lock, riesgo mínimo de duplicado):', e);
+    try {
+  await alertAdmin({
+    area: 'procesarCompra_lock_create',
+    email,
+    err: e,
+    meta: { dedupeKey }
+  });
+} catch (_) {}
+
     // no returns aquí; seguir con el flujo
     }
 
@@ -165,6 +197,15 @@ if (membership_id) { // ← robusto: activa CLUB por mapeo del producto, no por 
     console.log('✅ Membresía del CLUB activada correctamente');
   } catch (err) {
     console.error('❌ Error activando membresía del CLUB:', err.message || err);
+    try {
+      await alertAdmin({
+        area: 'club_activar_fallo',
+        email,
+        err,
+        meta: { membership_id, importe, producto: claveNormalizada }
+      });
+    } catch (_) {}
+
   }
 } else if (tipoProducto.toLowerCase() === 'libro') {
   try {
@@ -174,6 +215,15 @@ if (membership_id) { // ← robusto: activa CLUB por mapeo del producto, no por 
     console.log('✅ Membresía del LIBRO activada correctamente');
   } catch (err) {
     console.error('❌ Error activando membresía del LIBRO:', err.message || err);
+    try {
+      await alertAdmin({
+        area: 'libro_activar_fallo',
+        email,
+        err,
+        meta: { importe, producto: claveNormalizada }
+      });
+    } catch (_) {}
+
   }
 }
 
@@ -224,6 +274,15 @@ if (membership_id) { // ← robusto: activa CLUB por mapeo del producto, no por 
     console.log('✅ Email de confirmación enviado al usuario');
   } catch (eConf) {
     console.error('❌ Error enviando email de confirmación:', eConf?.message || eConf);
+    try {
+      await alertAdmin({
+        area: 'email_confirmacion_fallo',
+        email,
+        err: eConf,
+        meta: { producto: claveNormalizada, tipoProducto }
+      });
+    } catch (_) {}
+
   }
 
 
@@ -251,6 +310,15 @@ if (invoicingDisabled) {
 
   } catch (err) {
     console.error('❌ Error en Google Sheets:', err);
+    try {
+      await alertAdmin({
+        area: 'sheets_guardar_killswitch',
+        email,
+        err,
+        meta: { uid: String(datos.invoiceId || datos.sessionId || datos.pedidoId || '') }
+      });
+    } catch (_) {}
+
   }
 
 } else {
@@ -331,6 +399,24 @@ if (invoicingDisabled) {
     }
   } catch (err) {
     console.error('❌ Error subiendo a GCS:', err);
+    try {
+      await alertAdmin({
+        area: 'gcs_subida_factura',
+        email,
+        err,
+        meta: {
+          nombreArchivo: (() => {
+            try {
+              const base = (facturaId || datos.invoiceId || Date.now());
+              return `facturas/${email}/${base}-${claveNormalizada}.pdf`;
+            } catch { return null; }
+          })(),
+          facturaId: facturaId || null,
+          invoiceId: datos.invoiceId || null
+        }
+      });
+    } catch (_) {}
+
   }
 
   // 3) Enviar por email
@@ -348,6 +434,15 @@ if (invoicingDisabled) {
     }
   } catch (err) {
     console.error('❌ Error enviando email:', err);
+    try {
+      await alertAdmin({
+        area: 'email_factura_fallo',
+        email,
+        err,
+        meta: { facturaId: facturaId || null, invoiceId: datos.invoiceId || null }
+      });
+    } catch (_) {}
+
   }
 
 
@@ -362,6 +457,15 @@ if (!pdfBuffer) {
 }
 } catch (err) {
   console.error('❌ Error registrando COMPRA en Sheets:', err?.message || err);
+  try {
+  await alertAdmin({
+    area: 'sheets_guardar_compra_sin_pdf',
+    email,
+    err,
+    meta: { uid: String(datos.invoiceId || datos.sessionId || datos.pedidoId || '') }
+  });
+} catch (_) {}
+
 }
 
 
@@ -383,6 +487,15 @@ if (!pdfBuffer) {
       }, { merge: true });
     } catch (err) {
       console.error('❌ Error guardando datos fiscales en Firestore:', err.message || err);
+      try {
+        await alertAdmin({
+          area: 'firestore_guardar_datos_fiscales',
+          email,
+          err,
+          meta: { collection: 'datosFiscalesPorEmail', doc: email }
+        });
+      } catch (_) {}
+
     }
 
     // 🧾 Registro de venta en Firestore (best-effort)
@@ -400,6 +513,15 @@ try {
   console.log('✅ Venta registrada en Firestore (ventas)');
 } catch (eVenta) {
   console.error('❌ Error registrando venta en Firestore:', eVenta?.message || eVenta);
+  try {
+    await alertAdmin({
+      area: 'firestore_registrar_venta',
+      email,
+      err: eVenta,
+      meta: { collection: 'ventas', producto: claveNormalizada, tipoProducto, importe }
+    });
+  } catch (_) {}
+
 }
 
 
@@ -443,6 +565,15 @@ if (datos.invoiceId && pdfBuffer) {
       }, { merge: true });
     }
     console.error('❌ Error en procesarCompra:', error);
+    try {
+  await alertAdmin({
+    area: 'procesarCompra_error_global',
+    email,
+    err: error,
+    meta: { producto: claveNormalizada, dedupeKey: dedupeKey || null }
+  });
+} catch (_) {}
+
     return { success: false, mensaje: 'error_procesar_compra', error: String(error?.message || error) };
 
   }

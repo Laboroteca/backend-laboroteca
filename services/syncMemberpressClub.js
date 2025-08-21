@@ -1,4 +1,6 @@
+// services/syncMemberpressClub.js
 const fetch = require('node-fetch');
+const { alertAdmin } = require('../utils/alertAdmin'); // 👈 añadido
 
 const API_KEY = 'laboroteca_club_sync_2024supersegura';
 const API_URL = 'https://www.laboroteca.es/wp-json/laboroteca/v1/club-membership';
@@ -61,7 +63,27 @@ async function syncMemberpressClub({ email, accion, membership_id, importe = 9.9
 
   } catch (err) {
     console.error(`❌ [syncMemberpressClub] Error total:`, err.message || err, text || '');
-    throw err;
+
+    // 🔔 Alerta al admin (sin cambiar el comportamiento: seguimos lanzando el error)
+    try {
+      await alertAdmin({
+        area: 'memberpress_sync',
+        email,
+        err,
+        meta: {
+          accion,
+          membership_id,
+          importe,
+          apiUrl: API_URL,
+          status: response?.status || null,
+          responseTextSnippet: typeof text === 'string' ? text.slice(0, 500) : null
+        }
+      });
+    } catch (_) {
+      // no romper el flujo si alertAdmin fallase
+    }
+
+    throw err; // 👈 se mantiene el comportamiento original
   }
 }
 

@@ -1,8 +1,20 @@
-const { google } = require('googleapis'); 
+const { google } = require('googleapis');
+const { alertAdmin } = require('../utils/alertAdmin'); // 👈 añadido
 
 // Validar credenciales
 const credentialsBase64 = process.env.GCP_CREDENTIALS_BASE64;
 if (!credentialsBase64) {
+  // 🔔 avisamos y mantenemos el throw original
+  (async () => {
+    try {
+      await alertAdmin({
+        area: 'bajas_sheets_config',
+        email: '-',
+        err: new Error('GCP_CREDENTIALS_BASE64 ausente'),
+        meta: { hasVar: !!process.env.GCP_CREDENTIALS_BASE64 }
+      });
+    } catch (_) {}
+  })();
   throw new Error('❌ Falta la variable GCP_CREDENTIALS_BASE64');
 }
 
@@ -14,6 +26,17 @@ try {
     scopes: ['https://www.googleapis.com/auth/spreadsheets'],
   });
 } catch (err) {
+  // 🔔 avisamos y mantenemos el throw original
+  (async () => {
+    try {
+      await alertAdmin({
+        area: 'bajas_sheets_parse_creds',
+        email: '-',
+        err,
+        meta: { samplePrefix: String(credentialsBase64).slice(0, 12) + '...' }
+      });
+    } catch (_) {}
+  })();
   throw new Error('❌ Error al parsear credenciales de Google Cloud: ' + err.message);
 }
 
@@ -33,7 +56,7 @@ const rangoDestino = 'A2';
 async function registrarBajaClub({ email, nombre = '', motivo = 'desconocido' }) {
   if (!email || typeof email !== 'string' || !email.includes('@')) {
     console.warn('⚠️ Email inválido al registrar baja en Sheets:', email);
-    return;
+    return; // 👈 se mantiene el comportamiento original (salir sin lanzar)
   }
 
   try {
@@ -64,10 +87,24 @@ async function registrarBajaClub({ email, nombre = '', motivo = 'desconocido' })
       requestBody: { values: [fila] }
     });
 
-console.log(`📉 Baja registrada en Sheets: ${email} (${motivo})`);
+    console.log(`📉 Baja registrada en Sheets: ${email} (${motivo})`);
 
   } catch (error) {
     console.error('❌ Error al registrar baja en Sheets:', error.message);
+    // 🔔 avisamos pero NO cambiamos el comportamiento (no lanzamos)
+    try {
+      await alertAdmin({
+        area: 'bajas_sheets_append',
+        email: (email || '-').toLowerCase(),
+        err: error,
+        meta: {
+          spreadsheetId,
+          range: rangoDestino,
+          nombre: nombre || '',
+          motivo: motivo || ''
+        }
+      });
+    } catch (_) {}
   }
 }
 

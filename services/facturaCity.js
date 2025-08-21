@@ -1,6 +1,8 @@
 const axios = require('axios');
 const qs = require('qs');
 require('dotenv').config();
+const { alertAdmin } = require('../utils/alertAdmin');
+
 
 const FACTURACITY_API_KEY = process.env.FACTURACITY_API_KEY?.trim().replace(/"/g, '');
 const API_BASE = process.env.FACTURACITY_API_URL;
@@ -122,24 +124,45 @@ function trunc4(n) {
 
 async function crearFacturaEnFacturaCity(datosCliente) {
   try {
-    // ✅ Kill-switch de duplicados FacturaCity
-   if (datosCliente.invoiceId) {
-      const first = await ensureOnce('facturasGeneradas', datosCliente.invoiceId);
-      if (!first) {
-        console.warn(`🟡 Duplicado invoiceId=${datosCliente.invoiceId} ignorado en crearFacturaEnFacturaCity`);
-        return null;
-      }
-    }
+// ✅ Kill-switch de duplicados FacturaCity
+const dedupeId = String(
+  datosCliente.invoiceId ||
+  datosCliente.invoiceIdStripe ||  // ← PaymentIntent (checkout)
+  datosCliente.sessionId ||        // ← fallback útil
+  ''
+).trim();
+
+if (dedupeId) {
+  const first = await ensureOnce('facturasGeneradas', dedupeId);
+  if (!first) {
+    console.warn(`🟡 Duplicado dedupeId=${dedupeId} ignorado en crearFacturaEnFacturaCity`);
+    return null;
+  }
+}
+
 
     const maskedKey = FACTURACITY_API_KEY ? FACTURACITY_API_KEY.slice(-4).padStart(8, '•') : '(no definida)';
     console.log('🔐 API KEY utilizada (mascarada):', maskedKey);
 
-    if (!API_BASE) {
-      throw new Error('FACTURACITY_API_URL no está definida');
-    }
-    if (!FACTURACITY_API_KEY) {
-      throw new Error('FACTURACITY_API_KEY no está definida');
-    }
+if (!API_BASE) {
+  await alertAdmin({
+    area: 'facturacity_config',
+    email: datosCliente?.email || '-',
+    err: new Error('FACTURACITY_API_URL no está definida'),
+    meta: { hasKey: !!FACTURACITY_API_KEY, apiUrl: API_BASE || null }
+  });
+  throw new Error('FACTURACITY_API_URL no está definida');
+}
+if (!FACTURACITY_API_KEY) {
+  await alertAdmin({
+    area: 'facturacity_config',
+    email: datosCliente?.email || '-',
+    err: new Error('FACTURACITY_API_KEY no está definida'),
+    meta: { hasKey: !!FACTURACITY_API_KEY, apiUrl: API_BASE || null }
+  });
+  throw new Error('FACTURACITY_API_KEY no está definida');
+}
+
 
 
     console.log('🌐 API URL utilizada:', API_BASE);
@@ -177,7 +200,15 @@ async function crearFacturaEnFacturaCity(datosCliente) {
     });
 
     const codcliente = clienteResp.data?.data?.codcliente;
-    if (!codcliente) throw new Error('❌ No se pudo obtener codcliente');
+if (!codcliente) {
+  await alertAdmin({
+    area: 'facturacity_codcliente_missing',
+    email: datosCliente.email,
+    err: new Error('No se pudo obtener codcliente'),
+    meta: { respuesta: clienteResp?.data || null, datosMin: { email: datosCliente.email, dni: datosCliente.dni } }
+  });
+  throw new Error('❌ No se pudo obtener codcliente');
+}
     console.log(`✅ Cliente creado en FacturaCity codcliente=${codcliente} email=${datosCliente.email}`);
 
     // 🏠 Dirección fiscal (opcional)
@@ -200,9 +231,16 @@ async function crearFacturaEnFacturaCity(datosCliente) {
       });
 
       console.log(`🏠 Dirección fiscal añadida para codcliente=${codcliente} email=${datosCliente.email}`);
-    } catch (err) {
-      console.warn('⚠️ No se pudo añadir dirección fiscal:', err.message);
-    }
+} catch (err) {
+  console.warn('⚠️ No se pudo añadir dirección fiscal:', err.message);
+  await alertAdmin({
+    area: 'facturacity_direccion_opcional',
+    email: datosCliente.email,
+    err,
+    meta: { codcliente, email: datosCliente.email }
+  });
+}
+
 
     // ===== Referencia/Descripción =====
     const descripcion = datosCliente.descripcionProducto || datosCliente.descripcion || datosCliente.producto;
@@ -261,7 +299,16 @@ async function crearFacturaEnFacturaCity(datosCliente) {
     console.log('📩 Respuesta completa de crearFacturaCliente:', JSON.stringify(facturaResp.data, null, 2));
 
     const idfactura = facturaResp.data?.doc?.idfactura;
-    if (!idfactura) throw new Error('❌ No se recibió idfactura');
+    if (!idfactura) {
+      await alertAdmin({
+        area: 'facturacity_idfactura_missing',
+        email: datosCliente.email,
+        err: new Error('No se recibió idfactura'),
+        meta: { respuesta: facturaResp?.data || null, email: datosCliente.email, invoiceId: datosCliente.invoiceId || null }
+      });
+      throw new Error('❌ No se recibió idfactura');
+    }
+
     console.log(`✅ Factura emitida idfactura=${idfactura} invoiceId=${datosCliente.invoiceId || 'N/A'} email=${datosCliente.email}`);
 
 
@@ -303,37 +350,62 @@ async function crearFacturaEnFacturaCity(datosCliente) {
 
     const pdfSize = pdfResponse.data?.length || 0;
     console.log(`📦 PDF generado (${pdfSize} bytes)`);
+if (pdfSize <= 0) {
+  await alertAdmin({
+    area: 'facturacity_pdf_vacio',
+    email: datosCliente.email,
+    err: new Error('PDF vacío o nulo'),
+    meta: { idfactura, numeroFactura, email: datosCliente.email, invoiceId: datosCliente.invoiceId || null }
+  });
+}
 
     return pdfResponse.data;
   } catch (error) {
-   if (error.response) {
-      console.error(`⛔ Error FacturaCity invoiceId=${datosCliente.invoiceId || 'N/A'} email=${datosCliente.email}`);
-      console.error('🔢 Status:', error.response.status);
-      console.error('📦 Data:', error.response.data);
-    } else {
-      console.error(`⛔ Error FacturaCity sin respuesta invoiceId=${datosCliente.invoiceId || 'N/A'} email=${datosCliente.email} → ${error.message}`);
+  // 🔔 AVISO SIEMPRE (haya o no response)
+  await alertAdmin({
+    area: 'facturacity_error',
+    email: datosCliente?.email || '-',
+    err: error,
+    meta: {
+      invoiceId: datosCliente?.invoiceId || null,
+      url: error?.config?.url || null,
+      status: error?.response?.status || null,
+      responseType: error?.response?.headers?.['content-type'] || null
     }
+  });
 
-    // 📝 Registrar fallo en Sheets y GCS aunque no haya factura
-    try {
-      const { guardarEnGoogleSheets } = require('./googleSheets');
-      const { subirFactura } = require('./gcs');
-      const fakePdf = Buffer.from(`Factura NO generada. Error: ${error.message}`, 'utf-8');
-
-      await guardarEnGoogleSheets({
-        ...datosCliente,
-        estadoFactura: 'ERROR',
-        error: error.message
-      });
-
-      await subirFactura(`fallo-factura-${datosCliente.invoiceId || Date.now()}.txt`, fakePdf);
-      console.warn('⚠️ Fallo de facturación registrado en Sheets y GCS');
-    } catch (logErr) {
-      console.error('⛔ No se pudo registrar el fallo en Sheets/GCS:', logErr.message);
-    }
-
-    throw new Error('Error al generar la factura');
+  if (error.response) {
+    console.error(`⛔ Error FacturaCity invoiceId=${datosCliente.invoiceId || 'N/A'} email=${datosCliente.email}`);
+    console.error('🔢 Status:', error.response.status);
+    console.error('📦 Data:', error.response.data);
+  } else {
+    console.error(`⛔ Error FacturaCity sin respuesta invoiceId=${datosCliente.invoiceId || 'N/A'} email=${datosCliente.email} → ${error.message}`);
   }
+
+  // 📝 Registrar fallo en Sheets y GCS aunque no haya factura
+  try {
+    const { guardarEnGoogleSheets } = require('./googleSheets');
+    const { subirFactura } = require('./gcs');
+    const fakePdf = Buffer.from(`Factura NO generada. Error: ${error.message}`, 'utf-8');
+
+    await guardarEnGoogleSheets({
+      ...datosCliente,
+      estadoFactura: 'ERROR',
+      error: error.message
+    });
+
+    await subirFactura(
+      `fallo-factura-${(datosCliente.invoiceId || datosCliente.invoiceIdStripe || datosCliente.sessionId || Date.now()).toString()}.txt`,
+      fakePdf
+    );
+
+    console.warn('⚠️ Fallo de facturación registrado en Sheets y GCS');
+  } catch (logErr) {
+    console.error('⛔ No se pudo registrar el fallo en Sheets/GCS:', logErr.message);
+  }
+
+  throw new Error('Error al generar la factura');
+}
 }
 
 module.exports = { crearFacturaEnFacturaCity };

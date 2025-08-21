@@ -1,7 +1,7 @@
 // services/activarMembresiaClub.js
-
 const admin = require('../firebase');
 const firestore = admin.firestore();
+const { alertAdmin } = require('../utils/alertAdmin');
 
 /**
  * Activa la membresía del club para el email dado.
@@ -12,6 +12,12 @@ const firestore = admin.firestore();
 async function activarMembresiaClub(email) {
   if (!email || typeof email !== 'string' || !email.includes('@')) {
     console.warn('Email inválido en activarMembresiaClub');
+    await alertAdmin({
+      area: 'activarMembresiaClub_email_invalido',
+      email: email || '(no definido)',
+      err: new Error('Email inválido'),
+      meta: { email }
+    });
     return false; // no romper flujo
   }
 
@@ -31,6 +37,12 @@ async function activarMembresiaClub(email) {
     return true;
   } catch (err) {
     console.error(`❌ Error al activar membresía para ${email}:`, err?.message || err);
+    await alertAdmin({
+      area: 'activarMembresiaClub_firestore_error',
+      email,
+      err,
+      meta: { email }
+    });
     return false; // no romper flujo si Firestore falla
   }
 }

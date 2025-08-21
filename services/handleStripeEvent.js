@@ -20,48 +20,7 @@ const crypto = require('crypto');
 const redact = (v) => (process.env.NODE_ENV === 'production' ? hash12(String(v || '')) : String(v || ''));
 const hash12 = e => crypto.createHash('sha256').update(String(e || '').toLowerCase()).digest('hex').slice(0,12);
 const { ensureOnce } = require('../utils/dedupe');
-
-// ——— ALERTAS ADMIN ———————————————————————————————————————————————
-const ADMIN_EMAIL = process.env.ADMIN_ALERTS_TO || 'laboroteca@gmail.com';
-
-async function alertAdmin({ area, email, err, meta = {}, dedupeKey }) {
-  try {
-    const key = dedupeKey || `alert:${(area||'-').toLowerCase()}:${(email||'-').toLowerCase()}:${hash12(String(err?.message || err || '-'))}`;
-    const first = await ensureOnce('adminAlerts', key);
-    if (!first) return;
-
-    const E = v => escapeHtml(String(v ?? '-'));
-    const T = v => String(v ?? '-');
-
-    const subject = `🚨 FALLO ${T(area).toUpperCase()} — ${T(email || '-')}`;
-    const text = [
-      `Área: ${T(area)}`,
-      `Email: ${T(email || '-')}`,
-      `Error: ${T(err?.message || err || '-')}`,
-      `Meta: ${T(JSON.stringify(meta))}`,
-      `Entorno: ${T(process.env.NODE_ENV || 'dev')}`,
-      ``,
-      `ℹ️ Pega este email en ChatGPT para generar un comando y solucionarlo manualmente en PowerShell.`
-    ].join('\n');
-
-    const html = `
-      <h3>Fallo en ${E(area)}</h3>
-      <ul>
-        <li><strong>Email:</strong> ${E(email || '-')}</li>
-        <li><strong>Error:</strong> ${E(err?.message || err || '-')}</li>
-        <li><strong>Entorno:</strong> ${E(process.env.NODE_ENV || 'dev')}</li>
-      </ul>
-      <pre style="white-space:pre-wrap">${E(JSON.stringify(meta, null, 2))}</pre>
-      <p style="margin-top:15px;color:#444;font-size:14px">
-        ℹ️ Pega este email en ChatGPT para generar un comando y solucionarlo manualmente en PowerShell.
-      </p>
-    `;
-
-    await enviarEmailPersonalizado({ to: ADMIN_EMAIL, subject, text, html });
-  } catch (e) {
-    console.error('⚠️ alertAdmin fallo:', e?.message || e);
-  }
-}
+const { alertAdmin } = require('../utils/alertAdmin');
 
 
 // ——— Helper: cargar metadata de FluentForms desde el Checkout Session que creó la suscripción

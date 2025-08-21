@@ -2,6 +2,8 @@
 const { google } = require('googleapis');
 const crypto = require('crypto');
 const { ensureOnce } = require('../utils/dedupe');
+const { alertAdmin } = require('../utils/alertAdmin');
+
 
 
 const credentialsBase64 = process.env.GCP_CREDENTIALS_BASE64;
@@ -98,12 +100,35 @@ async function escribirSiNoDuplicado(sheets, sheetId, fila, ctx) {
   if (!sheetId) return;
 
     // Leemos encabezado con backoff y sembramos headers si faltan
-  const headerRes = await withRetries(() => sheets.spreadsheets.values.get({
-    spreadsheetId: sheetId,
-    range: `${HOJA}!A1:N1`,
-  }));
+  let headerRes;
+  try {
+    headerRes = await withRetries(() => sheets.spreadsheets.values.get({
+      spreadsheetId: sheetId,
+      range: `${HOJA}!A1:N1`,
+    }));
+  } catch (e) {
+    await alertAdmin({
+      area: 'sheets_read_header',
+      email: ctx?.email || '-',
+      err: e,
+      meta: { sheetId, hoja: HOJA }
+    });
+    throw e;
+  }
+
   const header = headerRes.data.values?.[0] || [];
-  await seedHeadersIfMissing(sheets, sheetId, header);
+    try {
+    await seedHeadersIfMissing(sheets, sheetId, header);
+  } catch (e) {
+    await alertAdmin({
+      area: 'sheets_seed_headers',
+      email: ctx?.email || '-',
+      err: e,
+      meta: { sheetId, hoja: HOJA, header }
+    });
+    throw e;
+  }
+
 
   const headerLower = header.map(h => String(h || '').trim().toLowerCase());
   const uidColInSheet   = headerLower.findIndex(h => h === UID_HEADER);
@@ -116,14 +141,26 @@ async function escribirSiNoDuplicado(sheets, sheetId, fila, ctx) {
   const dupIdx   = dupColInSheet   >= 0 ? dupColInSheet   : DUP_COL_INDEX;
 
   // Lectura eficiente por columnas: L(uid), M(group), D..G(desc, imp, fec, email)
-  const batches = await withRetries(() => sheets.spreadsheets.values.batchGet({
-    spreadsheetId: sheetId,
-    ranges: [
-      `${HOJA}!L2:L`,
-      `${HOJA}!M2:M`,
-      `${HOJA}!D2:G`,
-    ],
-  }));
+  let batches;
+  try {
+    batches = await withRetries(() => sheets.spreadsheets.values.batchGet({
+      spreadsheetId: sheetId,
+      ranges: [
+        `${HOJA}!L2:L`,
+        `${HOJA}!M2:M`,
+        `${HOJA}!D2:G`,
+      ],
+    }));
+  } catch (e) {
+    await alertAdmin({
+      area: 'sheets_batch_get',
+      email: ctx?.email || '-',
+      err: e,
+      meta: { sheetId, hoja: HOJA, ranges: ['L2:L', 'M2:M', 'D2:G'] }
+    });
+    throw e;
+  }
+
   const rangeL  = batches.data.valueRanges?.[0]?.values || [];
   const rangeM  = batches.data.valueRanges?.[1]?.values || [];
   const rangeDG = batches.data.valueRanges?.[2]?.values || [];
@@ -196,13 +233,33 @@ async function escribirSiNoDuplicado(sheets, sheetId, fila, ctx) {
 
 
   // 3) Append fila (ya incluye UID en la última columna)
-  await withRetries(() => sheets.spreadsheets.values.append({
-    spreadsheetId: sheetId,
-    range: `${HOJA}!A2`,
-    valueInputOption: 'RAW',
-    insertDataOption: 'INSERT_ROWS',
-    requestBody: { values: [fila] },
-  }));
+  try {
+    await withRetries(() => sheets.spreadsheets.values.append({
+      spreadsheetId: sheetId,
+      range: `${HOJA}!A2`,
+      valueInputOption: 'RAW',
+      insertDataOption: 'INSERT_ROWS',
+      requestBody: { values: [fila] },
+    }));
+  } catch (e) {
+    // En meta no mandamos toda la fila para no alargar; incluimos campos clave
+    await alertAdmin({
+      area: 'sheets_append',
+      email: ctx?.email || '-',
+      err: e,
+      meta: {
+        sheetId,
+        hoja: HOJA,
+        uid: ctx?.uid || '',
+        groupId: ctx?.groupId || '',
+        descripcion: ctx?.descripcion || '',
+        importe: ctx?.importe,
+        fecha: ctx?.fecha
+      }
+    });
+    throw e;
+  }
+
 
 
   console.log(`✅ Compra registrada en ${sheetId} para ${email}${uid ? ` (uid=${uid})` : ''}`);
@@ -255,17 +312,49 @@ async function guardarEnGoogleSheets(datos) {
     ];
 
     // Escribir en TODOS los IDs definidos, usando dedupe por UID si es posible
-    await Promise.all(
-      SPREADSHEET_IDS.map((id) =>
-      escribirSiNoDuplicado(sheets, id, fila, { email, descripcion, importe: importeForCompare, fecha: nowString, uid, groupId })
+await Promise.all(
+  SPREADSHEET_IDS.map(async (id) => {
+    try {
+      return await escribirSiNoDuplicado(
+        sheets, id, fila,
+        { email, descripcion, importe: importeForCompare, fecha: nowString, uid, groupId }
+      );
+    } catch (e) {
+      // Aviso de “guardado por sheet” (además del global del catch superior)
+      await alertAdmin({
+        area: 'sheets_guardar_por_sheet',
+        email,
+        err: e,
+        meta: { sheetId: id, hoja: HOJA, uid, groupId }
+      });
+      throw e;
+    }
+  })
+);
 
+} catch (error) {
+  console.error('❌ Error al guardar en Google Sheets:', error);
+  // Aviso global (puede agrupar fallos de auth, client, Promise.all, etc.)
+  await alertAdmin({
+    area: 'sheets_guardar_global',
+    email: (datos?.email || '').toLowerCase() || '-',
+    err: error,
+    meta: {
+      hoja: HOJA,
+      spreadsheets: SPREADSHEET_IDS,
+      uid: String(
+        datos?.uid ||
+        datos?.facturaId ||
+        datos?.invoiceId ||
+        datos?.invoiceIdStripe ||
+        datos?.sessionId || ''
+      ).trim(),
+      groupId: String(datos?.groupId || '').trim()
+    }
+  });
+  throw error;
+}
 
-      )
-    );
-  } catch (error) {
-    console.error('❌ Error al guardar en Google Sheets:', error);
-    throw error;
-  }
 }
 
 module.exports = { guardarEnGoogleSheets };

@@ -1,5 +1,7 @@
 require('dotenv').config(); 
 const fetch = require('node-fetch');
+const { alertAdmin } = require('../utils/alertAdmin');
+
 
 /**
  * Envía un email con o sin factura adjunta (PDF).
@@ -47,27 +49,69 @@ También puede reclamar ante la autoridad de control si lo considera necesario.
       }];
     }
 
-  const response = await fetch('https://api.smtp2go.com/v3/email/send', {
+let response, resultado, successReal;
+
+try {
+  response = await fetch('https://api.smtp2go.com/v3/email/send', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   });
 
-  const resultado = await response.json();
-  const successReal = resultado?.data?.succeeded === 1 && resultado?.data?.failed === 0;
+  // Leemos como texto y luego intentamos parsear a JSON (para capturar respuestas no-JSON)
+  const raw = await response.text();
+  try {
+    resultado = JSON.parse(raw);
+  } catch {
+    resultado = { success: false, data: {}, raw };
+  }
+
+  successReal = resultado?.data?.succeeded === 1 && resultado?.data?.failed === 0;
 
   if (!resultado.success && !successReal) {
-    console.error('❌ Error real desde SMTP2GO:', JSON.stringify(resultado, null, 2));
+    console.error('❌ Error real desde SMTP2GO:', typeof resultado.raw === 'string' ? resultado.raw : JSON.stringify(resultado, null, 2));
+
+    // 🔔 Aviso al admin (no rompe el flujo adicionalmente; igualmente lanzamos el mismo error)
+    try {
+      await alertAdmin({
+        area: 'smtp2go_send',
+        email: Array.isArray(to) ? to.join(', ') : to,
+        err: new Error('Fallo SMTP2GO al enviar email'),
+        meta: {
+          subject,
+          provider: 'smtp2go',
+          httpStatus: response?.status ?? null,
+          responseSnippet: (resultado?.raw || raw || '').slice(0, 500)
+        }
+      });
+    } catch (_) { /* nunca romper por fallo en alertAdmin */ }
+
     throw new Error('Error al enviar email con SMTP2GO');
   }
+} catch (e) {
+  // Errores de red/timeout/parseo → también avisamos
+  try {
+    await alertAdmin({
+      area: 'smtp2go_network',
+      email: Array.isArray(to) ? to.join(', ') : to,
+      err: e,
+      meta: {
+        subject,
+        provider: 'smtp2go'
+      }
+    });
+  } catch (_) { /* no-op */ }
+  throw e; // ✅ mismo comportamiento original
+}
 
-  if (successReal) {
-    console.log(`✅ Email "${subject}" enviado correctamente a ${destinatarios.join(', ')}`);
-  } else {
-    console.warn(`⚠️ Advertencia: Email "${subject}" enviado pero con posibles incidencias:`, resultado);
-  }
+if (successReal) {
+  console.log(`✅ Email "${subject}" enviado correctamente a ${destinatarios.join(', ')}`);
+} else {
+  console.warn(`⚠️ Advertencia: Email "${subject}" enviado pero con posibles incidencias:`, resultado);
+}
 
-  return 'OK';
+return 'OK';
+
 }
 
 // ✅ ENVÍO DE FACTURA CON PDF

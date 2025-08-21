@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const https = require('https');
 const http = require('http');
 const { URL } = require('url');
+const { alertAdmin } = require('./alertAdmin'); // 👈 NUEVO
 
 // ───────────────────────────── Firebase Admin ─────────────────────────────
 if (!admin.apps.length) {
@@ -17,17 +18,40 @@ if (!admin.apps.length) {
       admin.initializeApp({ credential: admin.credential.cert(svc) });
     } catch (e) {
       console.warn('⚠️ Firebase Admin init falló:', e?.message || e);
+      // 🔔 Aviso: init fallido (no rompe más de lo que ya rompía)
+      try {
+        alertAdmin({
+          area: 'consent_firebase_init',
+          email: '-',
+          err: e,
+          meta: { hasSvcVar: !!process.env.FIREBASE_SERVICE_ACCOUNT_JSON }
+        });
+      } catch (_) {}
     }
   }
 }
 function getDb() {
   try {
     return admin.firestore();
-  } catch {
+  } catch (e) {
     throw new Error('Firestore no inicializado (falta admin.initializeApp).');
   }
 }
-const db = getDb();
+let db;
+try {
+  db = getDb();
+} catch (e) {
+  // 🔔 Aviso si Firestore no está disponible
+  try {
+    alertAdmin({
+      area: 'consent_db_init',
+      email: '-',
+      err: e,
+      meta: { appsLength: admin.apps.length }
+    });
+  } catch (_) {}
+  throw e; // se mantiene el comportamiento original (romper)
+}
 
 // ───────────────────────────── GCS (opcional) ─────────────────────────────
 let Storage = null;
@@ -66,6 +90,15 @@ if (Storage) {
     } catch {
       storage = null;
     }
+    // 🔔 Aviso: problemas inicializando cliente de GCS
+    try {
+      alertAdmin({
+        area: 'consent_gcs_init',
+        email: '-',
+        err: e,
+        meta: { hasBucket: !!GCS_BUCKET, hasLib: !!Storage }
+      });
+    } catch (_) {}
   }
 }
 
@@ -121,6 +154,16 @@ async function ensureSnapshot({ type, version, url, htmlOverride }) {
     console.warn('[CONSENT] Modo degradado: bucket o @google-cloud/storage ausentes', {
       hasBucket: !!GCS_BUCKET, hasLib: !!Storage, hasClient: !!storage
     });
+    // 🔔 Aviso degradado (dedupe por tipo+versión)
+    try {
+      await alertAdmin({
+        area: 'consent_snapshot_degraded',
+        email: '-',
+        err: new Error('Snapshot en modo degradado'),
+        meta: { type, version, url, hasBucket: !!GCS_BUCKET, hasLib: !!Storage, hasClient: !!storage },
+        dedupeKey: `consent:degraded:${type}:${version}`
+      });
+    } catch (_) {}
     const basis = htmlOverride || url || `${type}:${version}`;
     return { hash: 'sha256:' + sha256Hex(basis), blobPath: '', snapshotOk: false };
   }
@@ -157,6 +200,16 @@ async function ensureSnapshot({ type, version, url, htmlOverride }) {
     return { hash: 'sha256:' + sha256Hex(content), blobPath, snapshotOk: true };
   } catch (e) {
     console.warn(`⚠️ Snapshot ${type}/${version} fallo:`, e?.message || e);
+    // 🔔 Aviso de fallo de snapshot (dedupe por tipo+versión)
+    try {
+      await alertAdmin({
+        area: 'consent_snapshot_fail',
+        email: '-',
+        err: e,
+        meta: { type, version, url, bucket: GCS_BUCKET, path: blobPath },
+        dedupeKey: `consent:snapshotFail:${type}:${version}`
+      });
+    } catch (_) {}
     return { hash: 'sha256:' + sha256Hex(`${type}:${version}:${url || ''}`), blobPath: '', snapshotOk: false };
   }
 }
@@ -244,7 +297,30 @@ async function logConsent(opts = {}) {
     batch.set(userRef, { ...data, idx: fingerprint });
   }
 
-  await batch.commit();
+  try {
+    await batch.commit();
+  } catch (e) {
+    // 🔔 Aviso si falla el commit de Firestore (con dedupe por fingerprint del consentimiento)
+    try {
+      await alertAdmin({
+        area: 'consent_log_commit',
+        email: emailLower || '-',
+        err: e,
+        meta: {
+          uid,
+          termsVersion,
+          privacyVersion,
+          source,
+          sessionId,
+          paymentIntentId,
+          privacySnapshotOk: !!pp.snapshotOk,
+          termsSnapshotOk: !!tos.snapshotOk
+        },
+        dedupeKey: `consent:commit:${fingerprint}`
+      });
+    } catch (_) {}
+    throw e; // mantener el comportamiento (propagar error)
+  }
 
   return {
     id: docRef.id,

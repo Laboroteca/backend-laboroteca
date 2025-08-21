@@ -2,6 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const { logConsent } = require('../utils/consentLogs');
+const { alertAdmin } = require('../utils/alertAdmin'); // 👈 NUEVO
 
 /* ───────────── Helpers ───────────── */
 
@@ -32,6 +33,7 @@ router.post('/registrar-consentimiento', async (req, res) => {
       const srcHint = s(req.body?.source || req.body?.formularioId || '');
       const emailHint = s((req.body?.email || '').toLowerCase());
       console.log(`[CONSENT] sin consentData; source=${srcHint} email=${emailHint}`);
+      // (No es un error, así que no avisamos al admin aquí)
     }
 
     // Acepta tanto campos sueltos como el blob consentData
@@ -86,12 +88,43 @@ router.post('/registrar-consentimiento', async (req, res) => {
       termsHtml, privacyHtml
     })
       .then(r => console.log('CONSENT OK:', r.id))
-      .catch(e => console.warn('CONSENT WARN (no bloquea):', e?.message || e));
+      .catch(async e => {
+        console.warn('CONSENT WARN (no bloquea):', e?.message || e);
+        // 🔔 Aviso admin si el guardado falla (no bloquea)
+        try {
+          await alertAdmin({
+            area: 'consent_log_fail',
+            email: email || '-',
+            err: e,
+            meta: {
+              uid, email, source, sessionId, paymentIntentId,
+              termsVersion, privacyVersion,
+              hasTermsHtml: !!termsHtml, hasPrivacyHtml: !!privacyHtml
+            }
+          });
+        } catch (_) { /* no-op */ }
+      });
 
     // ✅ Respuesta inmediata para no afectar al flujo de compra/membresía/registro
     return res.json({ ok: true });
   } catch (err) {
     console.error('registrar-consentimiento error (handler):', err);
+
+    // 🔔 Aviso admin en error inesperado del handler (no bloquea)
+    try {
+      await alertAdmin({
+        area: 'consent_route_error',
+        email: s((req.body?.email || '').toLowerCase()) || '-',
+        err,
+        meta: {
+          hasConsentData: !!req.body?.consentData,
+          source: s(req.body?.source || req.body?.formularioId || ''),
+          ip: req.ip || req.connection?.remoteAddress || null,
+          ua: req.headers['user-agent'] || null
+        }
+      });
+    } catch (_) { /* no-op */ }
+
     // Incluso ante errores inesperados, no bloqueamos el front/checkout
     return res.json({ ok: true, warn: 'consent_route_failed' });
   }

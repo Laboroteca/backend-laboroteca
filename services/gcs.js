@@ -1,4 +1,6 @@
 const { Storage } = require('@google-cloud/storage');
+const { alertAdmin } = require('../utils/alertAdmin');
+
 
 // Carga y decodifica las credenciales desde la variable de entorno
 const credentialsJSON = JSON.parse(
@@ -28,8 +30,21 @@ async function subirFactura(nombreArchivo, pdfBuffer) {
 
     stream.on('error', (err) => {
       console.error('❌ Error subiendo a GCS:', err);
+      // Aviso admin (callback no async: sin await)
+      alertAdmin({
+        area: 'gcs_subida_factura',
+        email: '-', // aquí no tenemos email; el caller lo conoce
+        err,
+        meta: {
+          file: __filename,
+          bucket: BUCKET_NAME,
+          nombreArchivo,
+          pdfBytes: Buffer.isBuffer(pdfBuffer) ? pdfBuffer.length : undefined
+        }
+      });
       throw err;
     });
+
 
     stream.on('finish', () => {
       console.log(`✅ Factura subida a Google Cloud Storage como: ${nombreArchivo}`);
@@ -38,8 +53,22 @@ async function subirFactura(nombreArchivo, pdfBuffer) {
     stream.end(pdfBuffer);
   } catch (err) {
     console.error('❌ Error en subirFactura:', err);
+    // Aviso admin (aquí sí podemos await)
+    await alertAdmin({
+      area: 'gcs_subida_factura_wrapper',
+      email: '-', // el email lo aporta el servicio llamante
+      err,
+      meta: {
+        file: __filename,
+        bucket: BUCKET_NAME,
+        nombreArchivo,
+        esBuffer: Buffer.isBuffer(pdfBuffer),
+        pdfBytes: Buffer.isBuffer(pdfBuffer) ? pdfBuffer.length : undefined
+      }
+    });
     throw err;
   }
+
 }
 
 module.exports = { subirFactura };

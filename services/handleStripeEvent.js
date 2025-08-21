@@ -40,6 +40,8 @@ async function alertAdmin({ area, email, err, meta = {}, dedupeKey }) {
       `Error: ${T(err?.message || err || '-')}`,
       `Meta: ${T(JSON.stringify(meta))}`,
       `Entorno: ${T(process.env.NODE_ENV || 'dev')}`,
+      ``,
+      `ℹ️ Pega este email en ChatGPT para generar un comando y solucionarlo manualmente en PowerShell.`
     ].join('\n');
 
     const html = `
@@ -50,6 +52,9 @@ async function alertAdmin({ area, email, err, meta = {}, dedupeKey }) {
         <li><strong>Entorno:</strong> ${E(process.env.NODE_ENV || 'dev')}</li>
       </ul>
       <pre style="white-space:pre-wrap">${E(JSON.stringify(meta, null, 2))}</pre>
+      <p style="margin-top:15px;color:#444;font-size:14px">
+        ℹ️ Pega este email en ChatGPT para generar un comando y solucionarlo manualmente en PowerShell.
+      </p>
     `;
 
     await enviarEmailPersonalizado({ to: ADMIN_EMAIL, subject, text, html });
@@ -438,7 +443,8 @@ const invoicingDisabled =
 if (invoicingDisabled) {
   console.warn(`⛔ Facturación deshabilitada (invoiceId=${invoiceId}). Saltando crear/subir/email. Registrando SOLO en Sheets.`);
 try {
-  await guardarEnGoogleSheets({ ...datosRenovacion, facturaId: '', uid: String(invoiceId) });
+  await guardarEnGoogleSheets({ ...datosRenovacion, facturaId: '', uid: String(invoiceId), groupId: String(invoiceId) });
+
 } catch (e) {
   console.error('❌ Sheets (kill-switch):', e?.message || e);
   await alertAdmin({
@@ -457,7 +463,7 @@ try {
     if (!pdfBuffer) {
       console.warn('🟡 crearFacturaEnFacturaCity devolvió null (dedupe). No se sube ni se envía email. Registrando en Sheets.');
 try {
-  await guardarEnGoogleSheets({ ...datosRenovacion, facturaId: '' });
+  await guardarEnGoogleSheets({ ...datosRenovacion, facturaId: '', uid: String(invoiceId), groupId: String(invoiceId) });
 } catch (e) {
   console.error('❌ Sheets (dedupe):', e?.message || e);
   await alertAdmin({
@@ -475,7 +481,7 @@ try {
       facturaId: facturaId ? String(facturaId) : ''         // añade FacturaCity si existe
     };
     datosSheets.uid = String(facturaId || invoiceId);
-
+    datosSheets.groupId = String(invoiceId);
 
     try {
       await guardarEnGoogleSheets(datosSheets);             // ← una sola llamada
@@ -538,7 +544,7 @@ if (!firstSend) {
 
       // ✅ Registrar en Google Sheets AUNQUE falle FacturaCity
     try {
-      await guardarEnGoogleSheets({ ...datosRenovacion, uid: String(invoiceId) });
+      await guardarEnGoogleSheets({ ...datosRenovacion, uid: String(invoiceId), groupId: String(invoiceId) });
     } catch (se) {
       console.error('❌ Sheets (invoice.paid catch):', se?.message || se);
       await alertAdmin({
@@ -1017,7 +1023,7 @@ try {
   if (invoicingDisabled) {
     console.warn('⛔ Facturación deshabilitada. Saltando crear/subir/email. Registrando SOLO en Sheets.');
     try {
-      await guardarEnGoogleSheets({ ...datosCliente, uid: String(pi || sessionId || '') });
+      await guardarEnGoogleSheets({ ...datosCliente, uid: String(pi || sessionId || ''), groupId: String(pi || sessionId) });
 } catch (e) {
   console.error('❌ Sheets (kill-switch):', e?.message || e);
   await alertAdmin({
@@ -1037,7 +1043,7 @@ const facturaId = resFactura?.facturaId || resFactura?.numeroFactura || null;
 
 if (!pdfBuffer) {
   console.warn('🟡 crearFacturaEnFacturaCity devolvió null (dedupe). Registro en Sheets pero NO subo a GCS ni envío factura.');
-  try { await guardarEnGoogleSheets(datosCliente); } catch (e) { console.error('❌ Sheets (dedupe):', e?.message || e); }
+  try { await guardarEnGoogleSheets({ ...datosCliente, uid: String(pi || sessionId || '') }); } catch (e) { console.error('❌ Sheets (dedupe):', e?.message || e); }
 } else {
 // ✅ Registrar en Sheets con IDs separados (Stripe vs FacturaCity)
 const datosSheets = {
@@ -1054,6 +1060,7 @@ datosSheets.uid = String(
   pi ||
   ''
 );
+  datosSheets.groupId = String(pi || sessionId);
 
 try {
   const sheetsKey = datosSheets.facturaId
@@ -1131,7 +1138,7 @@ if (!firstSend) {
 
       // 🧾 Aún así, registramos la compra en Sheets (pago confirmado)
       try {
-        await guardarEnGoogleSheets({ ...datosCliente, uid: String(pi || sessionId || '') });
+        await guardarEnGoogleSheets({ ...datosCliente, uid: String(pi || sessionId || ''), groupId: String(pi || sessionId) });
     } catch (e) {
       console.error('❌ Sheets tras fallo de FacturaCity:', e?.message || e);
       await alertAdmin({

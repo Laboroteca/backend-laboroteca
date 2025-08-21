@@ -22,6 +22,10 @@ const SPREADSHEET_IDS = [
 const HOJA = 'Hoja 1';
 const UID_HEADER = 'uid';         // encabezado esperado (col L)
 const UID_COL_INDEX = 11;         // 0-based → 11 = columna L
+const GROUP_HEADER = 'groupid';   // col M
+const GROUP_COL_INDEX = 12;
+const DUP_HEADER = 'duplicado';   // col N
+const DUP_COL_INDEX = 13;
 
 // 🧽 Normalización de texto para comparación robusta (fallback)
 const normalizarTexto = (str) =>
@@ -41,34 +45,53 @@ async function escribirSiNoDuplicado(sheets, sheetId, fila, ctx) {
   // Leemos encabezado para detectar columna UID si existe
   const headerRes = await sheets.spreadsheets.values.get({
     spreadsheetId: sheetId,
-    range: `${HOJA}!A1:L1`,
+    range: `${HOJA}!A1:N1`,
   });
   const header = headerRes.data.values?.[0] || [];
   const headerLower = header.map(h => String(h || '').trim().toLowerCase());
   const uidColInSheet = headerLower.findIndex(h => h === UID_HEADER);
+  const groupColInSheet = headerLower.findIndex(h => h === GROUP_HEADER);
+  const dupColInSheet = headerLower.findIndex(h => h === DUP_HEADER);
 
   // Leemos datos (hasta L para incluir UID si lo hay)
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: sheetId,
-    range: `${HOJA}!A2:L`,
+    range: `${HOJA}!A2:N`,
   });
   const filas = res.data.values || [];
 
-  const { email, descripcion, importe, fecha, uid } = ctx;
+  const { email, descripcion, importe, fecha, uid, groupId } = ctx;
+  // Índices efectivos (si no hay header, usamos las columnas L/M/N)
+  const uidIdx   = uidColInSheet   >= 0 ? uidColInSheet   : UID_COL_INDEX;
+  const groupIdx = groupColInSheet >= 0 ? groupColInSheet : GROUP_COL_INDEX;
+  const dupIdx   = dupColInSheet   >= 0 ? dupColInSheet   : DUP_COL_INDEX;
 
   // 1) Dedupe por UID si tenemos UID y la hoja ya tiene columna UID
-  if (uid && uidColInSheet >= 0) {
-    const existeUid = filas.some(f => (f[uidColInSheet] || '').toString().trim() === uid);
+  if (uid) {
+    const existeUid = filas.some(f => (f[uidIdx] || '').toString().trim() === uid);
     if (existeUid) {
       console.log(`🔁 Duplicado evitado por UID en ${sheetId} → ${uid}`);
       return;
     }
   }
+  // 1.5) Marcar duplicado lógico (mismo groupId, distinto uid). NO evita insertar; solo marca.
+  let duplicadoFlag = '';
+  if (groupId) {
+    const hayOtroMismoGrupoConOtroUid = filas.some(f => {
+      const g = (f[groupIdx] || '').toString().trim();
+      const u = (f[uidIdx]   || '').toString().trim();
+      return g === groupId && (!!uid ? u !== uid : true);
+    });
+    if (hayOtroMismoGrupoConOtroUid) {
+      duplicadoFlag = 'YES';
+      console.warn(`⚠️ Doble factura lógica detectada (groupId=${groupId}) en sheet ${sheetId}`);
+    }
+  }
 
   console.log('[Sheets] uid-debug', {
   uid,
-  uidColInSheet,
-  hasUidHeader: uidColInSheet >= 0,
+  uidColInSheet, groupColInSheet, dupColInSheet,
+  effectiveIdx: { uidIdx, groupIdx, dupIdx },
   sheetId,
   hoja: HOJA
 });
@@ -89,6 +112,13 @@ async function escribirSiNoDuplicado(sheets, sheetId, fila, ctx) {
       console.log(`🔁 Duplicado evitado por contenido en ${sheetId} para ${email}`);
       return;
     }
+  }
+    
+  // 2.5) Escribir el flag de duplicado en la fila antes de hacer append
+  if (duplicadoFlag) {
+    // Asegura longitud
+    while (fila.length <= dupIdx) fila.push('');
+    fila[dupIdx] = duplicadoFlag;
   }
 
   // 3) Append fila (ya incluye UID en la última columna)
@@ -125,9 +155,10 @@ async function guardarEnGoogleSheets(datos) {
       datos.sessionId ||           // checkout.session id
       ''
     ).trim();
+    const groupId = String(datos.groupId || '').trim();
 
     // La fila añade UID como última columna (L)
-    const fila = [
+   const fila = [
       datos.nombre || '',
       datos.apellidos || '',
       datos.dni || '',
@@ -139,19 +170,16 @@ async function guardarEnGoogleSheets(datos) {
       datos.ciudad || '',
       datos.cp || '',
       datos.provincia || '',
-      uid || ''                    // ← Columna L: UID
+      uid || '',        // L
+      groupId || '',    // M
+      ''                // N (duplicado) → lo setea escribirSiNoDuplicado con `duplicadoFlag` (ya calculado arriba)
     ];
 
     // Escribir en TODOS los IDs definidos, usando dedupe por UID si es posible
     await Promise.all(
       SPREADSHEET_IDS.map((id) =>
-        escribirSiNoDuplicado(sheets, id, fila, {
-          email,
-          descripcion,
-          importe,
-          fecha: nowString,
-          uid,
-        })
+      escribirSiNoDuplicado(sheets, id, fila, { email, descripcion, importe, fecha: nowString, uid, groupId })
+
       )
     );
   } catch (error) {

@@ -395,16 +395,34 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), async (req, res) => {
           ? new Date(resultado.current_period_end * 1000).toISOString()
           : undefined);
 
-      registrarBajaClub({
-        email,
-        nombre: '',
-        motivo: 'voluntaria',
-        fechaSolicitud: ahoraISO,
-        fechaEfectos: efectosISO,      // si el servicio te lo devuelve → fin de ciclo
-        verificacion: 'PENDIENTE',     // se confirmará cuando llegue el deleted
-      }).catch((e) => {
-        console.warn('⚠️ No se pudo registrar la baja en Sheets:', e.message);
-      });
+      try {
+        // Obtener la fecha REAL de efectos (fin de ciclo) desde Stripe
+        let fechaEfectosISO = new Date().toISOString(); // fallback (por si fuese inmediata)
+        const customers = await stripe.customers.list({ email, limit: 1 });
+        if (customers.data.length) {
+          const subs = await stripe.subscriptions.list({
+            customer: customers.data[0].id,
+            status: 'all',
+            limit: 10
+          });
+          // Preferimos la que queda programada a fin de ciclo
+          const s = subs.data.find(x => x.cancel_at_period_end) || subs.data.find(x => x.status === 'active');
+          if (s?.current_period_end) {
+            fechaEfectosISO = new Date(s.current_period_end * 1000).toISOString();
+          }
+        }
+
+        await registrarBajaClub({
+          email,
+          nombre: '',
+          motivo: 'voluntaria',                 // clave normalizada
+          fechaSolicitud: new Date().toISOString(),
+          fechaEfectos: fechaEfectosISO,        // ← esto alimenta la COLUMNA E
+          verificacion: 'PENDIENTE'             // pendiente hasta que Stripe mande el deleted
+        });
+      } catch (e) {
+        console.warn('⚠️ registrarBajaClub:', e?.message || e);
+      }
 
       return res.json({ cancelada: true, efectos: efectosISO });
     }

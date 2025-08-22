@@ -21,6 +21,51 @@ const hash12 = e => crypto.createHash('sha256').update(String(e || '').toLowerCa
 const { ensureOnce } = require('../utils/dedupe');
 const { alertAdmin } = require('../utils/alertAdmin');
 
+// ——— Helpers comunes ———
+async function nombreCompletoPorEmail(email, fallbackNombre = '', fallbackApellidos = '') {
+  // 1) Si tengo nombre+apellidos en Firestore → uso eso
+  try {
+    const s = await firestore.collection('datosFiscalesPorEmail').doc(email).get();
+    if (s.exists) {
+      const d = s.data() || {};
+      const n = [d.nombre, d.apellidos].filter(Boolean).join(' ').trim();
+      if (n) return n;
+    }
+  } catch (_) {}
+  // 2) Si me pasan nombre/apellidos en memoria → combino
+  const full = [fallbackNombre, fallbackApellidos].filter(Boolean).join(' ').trim();
+  if (full) return full;
+  // 3) Último fallback
+  return (fallbackNombre || email.split('@')[0] || '').trim();
+}
+
+async function logBajaFirestore({
+  email,
+  nombre,
+  motivo,                // 'impago' | 'eliminacion_cuenta' | 'voluntaria' | 'manual_inmediata' | 'manual_fin_ciclo'
+  verificacion,          // 'CORRECTO' | 'FALLIDA' | 'PENDIENTE'
+  fechaSolicitudISO,
+  fechaEfectosISO,
+  subscriptionId = null,
+  source = 'stripe'
+}) {
+  const payload = {
+    email,
+    nombre: nombre || '',
+    motivo,
+    verificacion,
+    fechaSolicitud: fechaSolicitudISO || new Date().toISOString(),
+    fechaEfectos: fechaEfectosISO || new Date().toISOString(),
+    subscriptionId,
+    source,
+    createdAt: new Date().toISOString()
+  };
+  try {
+    await firestore.collection('bajasClubLog').add(payload);
+  } catch (e) {
+    await alertAdmin({ area: 'bajasClubLog', email, err: e, meta: payload });
+  }
+}
 
 // ——— Helper: cargar metadata de FluentForms desde el Checkout Session que creó la suscripción
 async function cargarFFDesdeCheckoutPorSubscription(subId) {
@@ -131,7 +176,7 @@ const subscriptionId =
 
 // ⛔️ DEDUPE de BAJA por suscripción/email (evita doble baja e emails duplicados)
 const bajaKey = `baja:${subscriptionId || email}`;
-const isFirstBaja = await ensureOnce('bajasClub', bajaKey);
+const isFirstBaja = await ensureOnce('bajasClub_idx', bajaKey);
 if (!isFirstBaja) {
   console.warn(`⛔️ Baja ya registrada, omito acciones duplicadas (key=${bajaKey})`);
   return { received: true, duplicateBaja: true };
@@ -679,16 +724,20 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
 
     // ⛔️ DEDUPE de BAJA por suscripción/email
     const bajaKey = `baja:${subscriptionId || email}`;
-    const isFirstBaja = await ensureOnce('bajasClub', bajaKey);
+    const isFirstBaja = await ensureOnce('bajasClub_idx', bajaKey);
     if (!isFirstBaja) {
       console.log(`🟡 customer.subscription.deleted duplicado (baja ya procesada) key=${bajaKey}`);
       return { duplicateBaja: true };
     }
 
     // Prioriza metadata propia si tu endpoint de baja la escribe:
-    const motivoFromMeta = subscription?.metadata?.motivo_baja;
-    const origenBaja     = subscription?.metadata?.origen_baja || null; // 'formulario_usuario' si viene de tu form
-    const motivo         = motivoFromMeta || mapCancellationReason(subscription);
+    const motivoFromMeta    = subscription?.metadata?.motivo_baja;
+    const origenBaja        = subscription?.metadata?.origen_baja || null;
+    const comment           = subscription?.cancellation_details?.comment || '';
+    const motivoFromComment = /eliminaci[oó]n[\s_-]*de?[\s_-]*cuenta|eliminacion_cuenta/i.test(comment)
+      ? 'eliminacion_cuenta'
+      : null;
+    const motivo = motivoFromMeta || motivoFromComment || mapCancellationReason(subscription);
     const eraFinDeCiclo  = !!subscription?.cancel_at_period_end; // programada a fin de ciclo
 
     if (email) {
@@ -707,8 +756,30 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
             throw e;
           }
           await enviarAvisoCancelacion(email, nombre, enlacePago);
-        } else if (eraFinDeCiclo || origenBaja === 'formulario_usuario') {
-          // 🟢 VOLUNTARIA ejecutada ahora (llegó el deleted en fin de ciclo)
+         } else if (motivo === 'eliminacion_cuenta') {
+           // 🔴 ELIMINACIÓN DE CUENTA → inmediata (única fila en Sheets)
+          try {
+             await syncMemberpressClub({ email, accion: 'desactivar', membership_id: MEMBERPRESS_IDS['el club laboroteca'] });
+             await firestore.collection('usuariosClub').doc(email).set({ activo: false, fechaBaja: new Date().toISOString() }, { merge: true });
+             const nombreCompleto = await nombreCompletoPorEmail(email, nombre);
+             await registrarBajaClub({ email, nombre: nombreCompleto, motivo: 'eliminacion_cuenta', verificacion: 'CORRECTO' });
+             await logBajaFirestore({
+               email,
+               nombre: nombreCompleto,
+               motivo: 'eliminacion_cuenta',
+               verificacion: 'CORRECTO',
+               fechaSolicitudISO: new Date().toISOString(),
+               fechaEfectosISO: new Date().toISOString(),
+               subscriptionId,
+               source: 'stripe.subscription.deleted'
+             });
+           } catch (e) {
+             await alertAdmin({ area: 'deleted_eliminacion_sync', email, err: e, meta: { subscriptionId } });
+             throw e;
+           }
+            await enviarAvisoCancelacion(email, nombre, enlacePago);
+          } else if (eraFinDeCiclo || origenBaja === 'formulario_usuario') {
+            // 🟢 VOLUNTARIA ejecutada ahora (fin de ciclo)
           await syncMemberpressClub({ email, accion: 'desactivar', membership_id: MEMBERPRESS_IDS['el club laboroteca'] });
           await firestore.collection('usuariosClub').doc(email).set({ activo: false, fechaBaja: new Date().toISOString() }, { merge: true });
 
@@ -720,47 +791,51 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
             motivoFinal: 'voluntaria'
           }, { merge: true });
           // Log consolidado de baja
-          try {
+        try {
+            const nombreCompleto = await nombreCompletoPorEmail(email, nombre);
             await registrarBajaClub({
               email,
-              nombre,
+              nombre: nombreCompleto,
               motivo: 'voluntaria',
               verificacion: 'CORRECTO'
+            });
+            await logBajaFirestore({
+              email,
+              nombre: nombreCompleto,
+              motivo: 'voluntaria',
+              verificacion: 'CORRECTO',
+              fechaSolicitudISO: new Date().toISOString(),
+              fechaEfectosISO: new Date().toISOString(),
+              subscriptionId,
+              source: 'stripe.subscription.deleted'
             });
           } catch (_) {}
 
           // (Sin escritura en Sheets de bajas)
 
           await enviarAvisoCancelacion(email, nombre, enlacePago);
-        } else if (motivoFromMeta === 'eliminacion_cuenta') {
-          // 🔴 ELIMINACIÓN DE CUENTA → inmediata
-          try {
-            await syncMemberpressClub({ email, accion: 'desactivar', membership_id: MEMBERPRESS_IDS['el club laboroteca'] });
-            await firestore.collection('usuariosClub').doc(email).set({ activo: false, fechaBaja: new Date().toISOString() }, { merge: true });
-            await registrarBajaClub({
-              email,
-              nombre,
-              motivo: 'eliminacion_cuenta',
-              verificacion: 'CORRECTO'
-            });
-           
-            // (Sin escritura en Sheets de bajas)
 
-          } catch (e) {
-            await alertAdmin({ area: 'deleted_eliminacion_sync', email, err: e, meta: { subscriptionId } });
-            throw e;
-          }
-          await enviarAvisoCancelacion(email, nombre, enlacePago);
         } else {
           // 🟠 MANUAL INMEDIATA (dashboard u otros) → inmediata
             try {
             await syncMemberpressClub({ email, accion: 'desactivar', membership_id: MEMBERPRESS_IDS['el club laboroteca'] });
             await firestore.collection('usuariosClub').doc(email).set({ activo: false, fechaBaja: new Date().toISOString() }, { merge: true });
+            const nombreCompleto = await nombreCompletoPorEmail(email, nombre);
             await registrarBajaClub({
               email,
-              nombre,
+              nombre: nombreCompleto,
               motivo: 'manual_inmediata',
               verificacion: 'CORRECTO'
+            });
+            await logBajaFirestore({
+              email,
+              nombre: nombreCompleto,
+              motivo: 'manual_inmediata',
+              verificacion: 'CORRECTO',
+              fechaSolicitudISO: new Date().toISOString(),
+              fechaEfectosISO: new Date().toISOString(),
+              subscriptionId,
+              source: 'stripe.subscription.deleted'
             });
            
             // (Sin escritura en Sheets de bajas)
@@ -801,12 +876,24 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
           : 'manual_fin_ciclo';
         // Log en la hoja de bajas (F = PENDIENTE)
         try {
+          const nombreCompleto = await nombreCompletoPorEmail(email);
           await registrarBajaClub({
             email,
-            motivo: tipo,
+            nombre: nombreCompleto,
+            motivo: tipo, // 'voluntaria' | 'manual_fin_ciclo'
             fechaSolicitud: new Date().toISOString(),
             fechaEfectos: fechaEfectosISO,
             verificacion: 'PENDIENTE',
+          });
+          await logBajaFirestore({
+            email,
+            nombre: nombreCompleto,
+            motivo: tipo,
+            verificacion: 'PENDIENTE',
+            fechaSolicitudISO: new Date().toISOString(),
+            fechaEfectosISO: fechaEfectosISO,
+            subscriptionId: sub.id,
+            source: 'stripe.subscription.updated'
           });
         } catch (_) {}
         try {

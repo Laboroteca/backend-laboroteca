@@ -37,7 +37,7 @@ async function cancelarSuscripcionesStripePorEmail(email) {
               metadata: {
                 ...(s.metadata || {}),
                 motivo_baja: 'eliminacion_cuenta',
-                origen_baja: 'formulario_usuario'
+                origen_baja: 'eliminacion_cuenta'
               }
             });
           } catch (_) { /* no bloquea */ }
@@ -84,7 +84,7 @@ async function forzarDesactivacionTotal(email) {
               metadata: {
                 ...(s.metadata || {}),
                 motivo_baja: 'eliminacion_cuenta',
-                origen_baja: 'eliminacion_cuenta_api'
+                origen_baja: 'eliminacion_cuenta'
               }
             });
           } catch (_) {}
@@ -202,20 +202,8 @@ router.post('/confirmar-eliminacion', async (req, res) => {
       if (f.exists) nombre = f.data()?.nombre || '';
     } catch {}
 
-    // 7) Registrar en hoja de bajas unificada (con verificación real)
-    const ahoraISO = new Date().toISOString();
-    try {
-      await registrarBajaClub({
-        email,
-        nombre,
-        motivo: 'eliminacion_cuenta', // clave que espera el MAP
-        fechaSolicitud: ahoraISO,
-        fechaEfectos: ahoraISO,
-        verificacion // CORRECTO | FALLIDA
-      });
-    } catch (e) {
-      await alertAdmin({ area: 'baja_sheet_unificada', email, err: e, meta: { motivo: 'eliminacion_cuenta' } });
-    }
+    // 7) No escribimos en Sheets aquí para evitar duplicados.
+    //    La fila definitiva la escribe el webhook (customer.subscription.deleted).
 
     // 8) Aviso al admin si FALLIDA (el usuario NO ve errores)
     if (verificacion === 'FALLIDA') {

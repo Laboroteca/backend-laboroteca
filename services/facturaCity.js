@@ -231,15 +231,10 @@ if (!codcliente) {
       });
 
       console.log(`🏠 Dirección fiscal añadida para codcliente=${codcliente} email=${datosCliente.email}`);
-} catch (err) {
-  console.warn('⚠️ No se pudo añadir dirección fiscal:', err.message);
-  await alertAdmin({
-    area: 'facturacity_direccion_opcional',
-    email: datosCliente.email,
-    err,
-    meta: { codcliente, email: datosCliente.email }
-  });
-}
+    } catch (err) {
+      console.warn('⚠️ No se pudo añadir dirección fiscal (opcional):', err?.message || err);
+      // Sin alertAdmin: este fallo es benigno y frecuente, no afecta al flujo
+    }
 
 
     // ===== Referencia/Descripción =====

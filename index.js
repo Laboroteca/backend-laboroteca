@@ -2,13 +2,35 @@ if (process.env.NODE_ENV !== 'production') {
   require('dotenv').config();
 }
 
+const { alertAdmin } = require('./utils/alertAdmin'); 
+
+// Utilidad para no mostrar claves en claro
+const crypto = require('crypto');
+const hash8 = v => v ? crypto.createHash('sha256').update(String(v)).digest('hex').slice(0,8) : 'MISSING';
+
 console.log('🧠 INDEX REAL EJECUTÁNDOSE');
 console.log('🌍 NODE_ENV:', process.env.NODE_ENV);
 console.log('🔑 STRIPE_SECRET_KEY presente:', !!process.env.STRIPE_SECRET_KEY);
 console.log('🔐 STRIPE_WEBHOOK_SECRET presente:', !!process.env.STRIPE_WEBHOOK_SECRET);
 
+// Log seguro de MemberPress (sin exponer la clave)
+console.log('🛠 MemberPress config:');
+console.log('   📍 SITE_URL =', process.env.SITE_URL || '(no set)');
+console.log('   🔑 MEMBERPRESS_KEY =', process.env.MEMBERPRESS_KEY ? `present (${hash8(process.env.MEMBERPRESS_KEY)})` : 'MISSING');
+
 if (!process.env.STRIPE_SECRET_KEY) {
+  try {
+  alertAdmin({
+    area: 'startup_env_missing',
+    email: '-',
+    err: new Error('Falta STRIPE_SECRET_KEY'),
+    meta: { hasWebhookSecret: !!process.env.STRIPE_WEBHOOK_SECRET, nodeEnv: process.env.NODE_ENV }
+  }).catch(() => {});
+} catch (_) {}
   throw new Error('❌ Falta STRIPE_SECRET_KEY en variables de entorno');
+}
+if (process.env.NODE_ENV === 'production' && !process.env.STRIPE_WEBHOOK_SECRET) {
+  throw new Error('❌ Falta STRIPE_WEBHOOK_SECRET en producción');
 }
 
 const express = require('express');
@@ -27,7 +49,6 @@ const validarEntrada = require('./entradas/routes/validarEntrada');
 const crearCodigoRegalo = require('./regalos/routes/crear-codigo-regalo');
 const registrarConsentimiento = require('./routes/registrar-consentimiento');
 
-
 const app = express();
 app.set('trust proxy', 1);
 
@@ -35,7 +56,6 @@ app.use((req, _res, next) => {
   if (req.headers.origin) console.log('🌐 Origin:', req.headers.origin);
   next();
 });
-
 
 const allowProd = [
   'https://laboroteca.es',
@@ -71,7 +91,6 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
-
 
 // ⚠️ WEBHOOK: SIEMPRE EL PRIMERO Y EN RAW
 app.use('/webhook', require('./routes/webhook'));
@@ -203,6 +222,19 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
     } catch (error) {
       console.error('❌ Error Stripe (crear-sesion-pago):', error.message || error);
       console.error('❌ Error completo:', error);
+      try {
+        await alertAdmin({
+          area: 'stripe_crear_sesion_pago_error',
+          email: (req.body?.email_autorelleno || req.body?.email || '-').toLowerCase(),
+          err: error,
+          meta: {
+            tipoProducto: req.body?.tipoProducto || '',
+            nombreProducto: req.body?.nombreProducto || '',
+            importe: req.body?.importe || null
+          }
+        });
+      } catch (_) {}
+
       return res.status(500).json({ error: 'Error al crear el pago' });
     }
 
@@ -287,6 +319,18 @@ app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
     return res.json({ url: session.url });
   } catch (error) {
     console.error('❌ Error Stripe (crear-suscripcion-club):', error.message);
+    try {
+      await alertAdmin({
+        area: 'stripe_crear_suscripcion_error',
+        email: (req.body?.email_autorelleno || req.body?.email || '-').toLowerCase(),
+        err: error,
+        meta: {
+          nombreProducto: req.body?.nombreProducto || '',
+          importe: req.body?.importe || null
+        }
+      });
+    } catch (_) {}
+
     return res.status(500).json({ error: 'Error al crear la suscripción' });
   }
 });
@@ -301,6 +345,14 @@ app.post('/activar-membresia-club', async (req, res) => {
     return res.json({ ok: true });
   } catch (error) {
     console.error('❌ Error activar membresía:', error.message);
+    try {
+      await alertAdmin({
+        area: 'activar_membresia_club_error',
+        email: req.body?.email || '-',
+        err: error,
+        meta: {}
+      });
+    } catch (_) {}
     return res.status(500).json({ error: 'Error al activar la membresía' });
   }
 });
@@ -343,6 +395,7 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), async (req, res) => {
         console.warn('⚠️ No se pudo registrar la baja en Sheets:', e.message);
       });
 
+
       return res.json({ cancelada: true });
     }
 
@@ -384,6 +437,15 @@ app.post('/eliminar-cuenta', async (req, res) => {
     return res.json({ eliminada: true });
   } catch (error) {
     console.error('❌ Error al procesar eliminación:', error.message);
+    try {
+      await alertAdmin({
+        area: 'eliminar_cuenta_error',
+        email: req.body?.email || '-',
+        err: error,
+        meta: {}
+      });
+    } catch (_) {}
+
     return res.status(500).json({ eliminada: false, mensaje: 'Error interno del servidor' });
   }
 });
@@ -404,16 +466,43 @@ app.post('/crear-portal-cliente', async (req, res) => {
     return res.json({ url: session.url });
   } catch (error) {
     console.error('❌ Error creando portal cliente Stripe:', error.message);
+    try {
+      await alertAdmin({
+        area: 'stripe_portal_cliente_error',
+        email: req.body?.email || '-',
+        err: error,
+        meta: {}
+      });
+    } catch (_) {}
+
     return res.status(500).json({ error: 'No se pudo crear el portal de cliente Stripe' });
   }
 });
 
-process.on('uncaughtException', err => {
-  console.error('💥 uncaughtException:', err.message);
+process.on('uncaughtException', (err) => {
+  console.error('💥 uncaughtException:', err?.message || String(err));
+  try {
+    alertAdmin({
+      area: 'uncaughtException',
+      email: '-',
+      err,
+      meta: { pid: process.pid, nodeEnv: process.env.NODE_ENV }
+    }).catch(() => {});
+  } catch (_) {}
 });
-process.on('unhandledRejection', err => {
-  console.error('💥 unhandledRejection:', err.message);
+
+process.on('unhandledRejection', (err) => {
+  console.error('💥 unhandledRejection:', err?.message || String(err));
+  try {
+    alertAdmin({
+      area: 'unhandledRejection',
+      email: '-',
+      err,
+      meta: { pid: process.pid, nodeEnv: process.env.NODE_ENV }
+    }).catch(() => {});
+  } catch (_) {}
 });
+
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {

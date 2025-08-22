@@ -5,6 +5,7 @@ const admin = require('../firebase');
 const firestore = admin.firestore();
 
 const { eliminarUsuarioWordPress } = require('../services/eliminarUsuarioWordPress');
+const desactivarMembresiaClub = require('../services/desactivarMembresiaClub'); // ✅ IMPORT CORRECTO (service)
 const { borrarDatosUsuarioFirestore } = require('../services/borrarDatosUsuarioFirestore');
 const { enviarEmailPersonalizado } = require('../services/email');
 const { registrarBajaClub } = require('../services/registrarBajaClub');
@@ -36,38 +37,36 @@ router.post('/confirmar-eliminacion', async (req, res) => {
       return res.status(410).json({ ok: false, mensaje: 'El enlace ha caducado.' });
     }
 
-    // 1. Cancelar membresías y borrar datos
-    // Si tu servicio admite opciones, fuerza cancelación inmediata y marca el motivo:
-    // await desactivarMembresiaClub(email, null, { motivo: 'eliminacion_cuenta', immediate: true });
-    await desactivarMembresiaClub(email); // fallback seguro si no admite options
+    // 1) Cancelar membresía del Club (inmediata) y borrar datos
+    await desactivarMembresiaClub(email);
+
     const resultadoWP = await eliminarUsuarioWordPress(email);
     console.log('[🧹 WP] Resultado eliminación WordPress:', resultadoWP);
-
     if (!resultadoWP.ok) {
       throw new Error('No se pudo eliminar el usuario en WordPress: ' + resultadoWP.mensaje);
     }
+
     await borrarDatosUsuarioFirestore(email);
 
-    // ✅ Registrar baja en Google Sheets por eliminación de cuenta
+    // 2) Registrar baja unificada en Sheets
+    const ahoraISO = new Date().toISOString();
     try {
-      const ahoraISO = new Date().toISOString();
       await registrarBajaClub({
         email,
         nombre: '',
-        motivo: 'eliminacion_cuenta',   // ← clave esperada por el MAP del helper
-        fechaSolicitud: ahoraISO,       // baja inmediata
-        fechaEfectos: ahoraISO,         // baja inmediata
-        verificacion: 'CORRECTO'        // ejecutada ya
+        motivo: 'eliminacion_cuenta',
+        fechaSolicitud: ahoraISO,
+        fechaEfectos: ahoraISO,
+        verificacion: 'CORRECTO'
       });
     } catch (e) {
-      console.warn('⚠️ No se pudo registrar la baja (Sheets):', e?.message || e);
-      // no interrumpimos la eliminación
+      console.warn('⚠️ No se pudo registrar la baja en Sheets:', e?.message || e);
     }
-   
-    // 2. Eliminar el token
+
+    // 3) Eliminar token
     await ref.delete();
 
-    // 3. Email de confirmación
+    // 4) Email de confirmación al usuario
     await enviarEmailPersonalizado({
       to: email,
       subject: 'Cuenta eliminada con éxito',

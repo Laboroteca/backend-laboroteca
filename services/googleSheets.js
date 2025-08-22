@@ -418,7 +418,6 @@ async function guardarEnGoogleSheets(datos) {
   throw error;
 }
 
-
 }
 
 module.exports = { guardarEnGoogleSheets };

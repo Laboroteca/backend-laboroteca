@@ -1,111 +1,76 @@
+// services/registrarBajaClub.js
 const { google } = require('googleapis');
-const { alertAdmin } = require('../utils/alertAdmin'); // 👈 añadido
+const { alertAdmin } = require('../utils/alertAdmin');
 
-// Validar credenciales
-const credentialsBase64 = process.env.GCP_CREDENTIALS_BASE64;
-if (!credentialsBase64) {
-  // 🔔 avisamos y mantenemos el throw original
-  (async () => {
-    try {
-      await alertAdmin({
-        area: 'bajas_sheets_config',
-        email: '-',
-        err: new Error('GCP_CREDENTIALS_BASE64 ausente'),
-        meta: { hasVar: !!process.env.GCP_CREDENTIALS_BASE64 }
-      });
-    } catch (_) {}
-  })();
-  throw new Error('❌ Falta la variable GCP_CREDENTIALS_BASE64');
+const spreadsheetId = '1qM9pM-qkPlR6yCeX7eC8i2wBWmAOI1WIDncf8I7pHMM';
+const range = 'Hoja 1!A2';
+
+function fmtES(iso) {
+  const d = iso ? new Date(iso) : new Date();
+  return d.toLocaleString('es-ES', {
+    timeZone: 'Europe/Madrid',
+    day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit'
+  });
 }
 
-let auth;
-try {
-  const credentials = JSON.parse(Buffer.from(credentialsBase64, 'base64').toString('utf8'));
-  auth = new google.auth.GoogleAuth({
+const VERIF = v => (String(v || 'PENDIENTE').toUpperCase());
+
+async function getSheets() {
+  const b64 = process.env.GCP_CREDENTIALS_BASE64;
+  if (!b64) {
+    try { await alertAdmin({ area: 'bajas_sheets_config', email: '-', err: new Error('GCP_CREDENTIALS_BASE64 ausente') }); } catch {}
+    throw new Error('❌ Falta GCP_CREDENTIALS_BASE64');
+  }
+  const credentials = JSON.parse(Buffer.from(b64, 'base64').toString('utf8'));
+  const auth = new google.auth.GoogleAuth({
     credentials,
     scopes: ['https://www.googleapis.com/auth/spreadsheets'],
   });
-} catch (err) {
-  // 🔔 avisamos y mantenemos el throw original
-  (async () => {
-    try {
-      await alertAdmin({
-        area: 'bajas_sheets_parse_creds',
-        email: '-',
-        err,
-        meta: { samplePrefix: String(credentialsBase64).slice(0, 12) + '...' }
-      });
-    } catch (_) {}
-  })();
-  throw new Error('❌ Error al parsear credenciales de Google Cloud: ' + err.message);
+  return google.sheets({ version: 'v4', auth: await auth.getClient() });
 }
 
-// ID de la hoja de bajas del Club Laboroteca
-const spreadsheetId = '1qM9pM-qkPlR6yCeX7eC8i2wBWmAOI1WIDncf8I7pHMM';
-const rangoDestino = 'A2';
-
 /**
- * Registra una baja del Club Laboroteca en Google Sheets.
- * Se usa en bajas voluntarias y por impago.
- * 
- * @param {Object} opciones
- * @param {string} opciones.email - Email del usuario
- * @param {string} [opciones.nombre] - Nombre del usuario
- * @param {string} [opciones.motivo] - Motivo de la baja ("impago", "baja voluntaria", etc.)
+ * Registra una baja del Club en la hoja de bajas (A..F).
+ * motivo ∈ {impago, voluntaria, manual_fin_ciclo, manual_inmediata, eliminacion_cuenta, desconocido}
+ * verificacion ∈ {PENDIENTE, CORRECTO, FALLIDA}
  */
-async function registrarBajaClub({ email, nombre = '', motivo = 'desconocido' }) {
-  if (!email || typeof email !== 'string' || !email.includes('@')) {
-    console.warn('⚠️ Email inválido al registrar baja en Sheets:', email);
-    return; // 👈 se mantiene el comportamiento original (salir sin lanzar)
-  }
+async function registrarBajaClub({
+  email,
+  nombre = '',
+  motivo = 'desconocido',
+  fechaSolicitud,   // ISO opcional
+  fechaEfectos,     // ISO opcional
+  verificacion = 'PENDIENTE',
+}) {
+  if (!email || !email.includes('@')) return;
+
+  const C = fmtES(fechaSolicitud);   // Col C
+  const E = fmtES(fechaEfectos || fechaSolicitud); // Col E
+  const fila = [
+    String(email).trim().toLowerCase(), // A Email
+    (nombre || '-').trim(),             // B Nombre
+    C,                                  // C Fecha solicitud
+    String(motivo).trim().toLowerCase(),// D Motivo de la baja
+    E,                                  // E Fecha efectos
+    VERIF(verificacion),                // F Verificación (PENDIENTE|CORRECTO|FALLIDA)
+  ];
 
   try {
-    const client = await auth.getClient();
-    const sheets = google.sheets({ version: 'v4', auth: client });
-
-    const fecha = new Date().toLocaleString('es-ES', {
-      timeZone: 'Europe/Madrid',
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-
-    const fila = [
-      email.trim().toLowerCase(),
-      nombre.trim() || '-',
-      fecha,
-      motivo.trim().toLowerCase()
-    ];
-
+    const sheets = await getSheets();
     await sheets.spreadsheets.values.append({
       spreadsheetId,
-      range: rangoDestino,
+      range,
       valueInputOption: 'RAW',
       insertDataOption: 'INSERT_ROWS',
-      requestBody: { values: [fila] }
+      requestBody: { values: [fila] },
     });
-
-    console.log(`📉 Baja registrada en Sheets: ${email} (${motivo})`);
-
-  } catch (error) {
-    console.error('❌ Error al registrar baja en Sheets:', error.message);
-    // 🔔 avisamos pero NO cambiamos el comportamiento (no lanzamos)
-    try {
-      await alertAdmin({
-        area: 'bajas_sheets_append',
-        email: (email || '-').toLowerCase(),
-        err: error,
-        meta: {
-          spreadsheetId,
-          range: rangoDestino,
-          nombre: nombre || '',
-          motivo: motivo || ''
-        }
-      });
-    } catch (_) {}
+    console.log(`📉 Baja registrada: ${email} (${motivo})`);
+  } catch (err) {
+    console.error('❌ registrarBajaClub:', err?.message || err);
+    try { await alertAdmin({ area: 'bajas_sheet_append', email: (email || '-').toLowerCase(), err, meta: { spreadsheetId } }); } catch {}
   }
 }
 
 module.exports = { registrarBajaClub };
+

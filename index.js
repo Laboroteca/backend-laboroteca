@@ -387,16 +387,26 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), async (req, res) => {
 
     // ✅ Si se ha cancelado correctamente
     if (resultado.cancelada === true) {
+      const ahoraISO = new Date().toISOString();
+      const efectosISO =
+        resultado?.fechaEfectosISO ||
+        resultado?.fechaFinCicloISO ||
+        (typeof resultado?.current_period_end === 'number'
+          ? new Date(resultado.current_period_end * 1000).toISOString()
+          : undefined);
+
       registrarBajaClub({
         email,
         nombre: '',
-        motivo: 'baja voluntaria'
+        motivo: 'voluntaria',
+        fechaSolicitud: ahoraISO,
+        fechaEfectos: efectosISO,      // si el servicio te lo devuelve → fin de ciclo
+        verificacion: 'PENDIENTE',     // se confirmará cuando llegue el deleted
       }).catch((e) => {
         console.warn('⚠️ No se pudo registrar la baja en Sheets:', e.message);
       });
 
-
-      return res.json({ cancelada: true });
+      return res.json({ cancelada: true, efectos: efectosISO });
     }
 
     // ⚠️ Si no canceló pero no se marcó como error

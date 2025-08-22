@@ -5,7 +5,6 @@ const admin = require('../firebase');
 const firestore = admin.firestore();
 
 const { eliminarUsuarioWordPress } = require('../services/eliminarUsuarioWordPress');
-const desactivarMembresiaClub = require('./desactivarMembresiaClub');
 const { borrarDatosUsuarioFirestore } = require('../services/borrarDatosUsuarioFirestore');
 const { enviarEmailPersonalizado } = require('../services/email');
 const { registrarBajaClub } = require('../services/registrarBajaClub');
@@ -38,7 +37,9 @@ router.post('/confirmar-eliminacion', async (req, res) => {
     }
 
     // 1. Cancelar membresías y borrar datos
-    await desactivarMembresiaClub(email);
+    // Si tu servicio admite opciones, fuerza cancelación inmediata y marca el motivo:
+    // await desactivarMembresiaClub(email, null, { motivo: 'eliminacion_cuenta', immediate: true });
+    await desactivarMembresiaClub(email); // fallback seguro si no admite options
     const resultadoWP = await eliminarUsuarioWordPress(email);
     console.log('[🧹 WP] Resultado eliminación WordPress:', resultadoWP);
 
@@ -48,13 +49,21 @@ router.post('/confirmar-eliminacion', async (req, res) => {
     await borrarDatosUsuarioFirestore(email);
 
     // ✅ Registrar baja en Google Sheets por eliminación de cuenta
-    await registrarBajaClub({
-      email,
-      nombre: '', // si quieres recuperar el nombre de algún lado, aquí puedes usarlo
-      motivo: 'eliminación de cuenta'
-    });
+    try {
+      const ahoraISO = new Date().toISOString();
+      await registrarBajaClub({
+        email,
+        nombre: '',
+        motivo: 'eliminacion_cuenta',   // ← clave esperada por el MAP del helper
+        fechaSolicitud: ahoraISO,       // baja inmediata
+        fechaEfectos: ahoraISO,         // baja inmediata
+        verificacion: 'CORRECTO'        // ejecutada ya
+      });
+    } catch (e) {
+      console.warn('⚠️ No se pudo registrar la baja (Sheets):', e?.message || e);
+      // no interrumpimos la eliminación
+    }
    
-
     // 2. Eliminar el token
     await ref.delete();
 

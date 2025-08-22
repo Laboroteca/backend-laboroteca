@@ -1,6 +1,8 @@
 // utils/consentLogs.js
 // Guarda consentimientos (Política de Privacidad / Términos y Condiciones)
-// y, si hay bucket, sube snapshot HTML por versión.
+// y sube snapshot HTML a GCS. Soporta dos modos:
+//  - per-version (actual): 1 fichero por versión
+//  - per-accept: 1 fichero por aceptación (carpeta versión / <acceptId>.html)
 // Añade en Firestore: privacyHash/termsHash + privacyBlobPath/termsBlobPath + *SnapshotOk
 
 const admin = require('firebase-admin');
@@ -8,7 +10,10 @@ const crypto = require('crypto');
 const https = require('https');
 const http = require('http');
 const { URL } = require('url');
-const { alertAdmin } = require('./alertAdmin'); // 👈 NUEVO
+const { alertAdmin } = require('./alertAdmin');
+
+// ───────────────────────────── Config ─────────────────────────────
+const SNAPSHOT_MODE = (process.env.CONSENT_SNAPSHOT_MODE || 'per-version').toLowerCase(); // 'per-version' | 'per-accept'
 
 // ───────────────────────────── Firebase Admin ─────────────────────────────
 if (!admin.apps.length) {
@@ -18,7 +23,6 @@ if (!admin.apps.length) {
       admin.initializeApp({ credential: admin.credential.cert(svc) });
     } catch (e) {
       console.warn('⚠️ Firebase Admin init falló:', e?.message || e);
-      // 🔔 Aviso: init fallido (no rompe más de lo que ya rompía)
       try {
         alertAdmin({
           area: 'consent_firebase_init',
@@ -41,7 +45,6 @@ let db;
 try {
   db = getDb();
 } catch (e) {
-  // 🔔 Aviso si Firestore no está disponible
   try {
     alertAdmin({
       area: 'consent_db_init',
@@ -50,7 +53,7 @@ try {
       meta: { appsLength: admin.apps.length }
     });
   } catch (_) {}
-  throw e; // se mantiene el comportamiento original (romper)
+  throw e;
 }
 
 // ───────────────────────────── GCS (opcional) ─────────────────────────────
@@ -65,6 +68,7 @@ const GCS_BUCKET =
   '';
 
 console.log('[CONSENT] GCS_BUCKET =', GCS_BUCKET || '(vacío)');
+console.log('[CONSENT] SNAPSHOT_MODE =', SNAPSHOT_MODE);
 
 let storage = null;
 if (Storage) {
@@ -90,7 +94,6 @@ if (Storage) {
     } catch {
       storage = null;
     }
-    // 🔔 Aviso: problemas inicializando cliente de GCS
     try {
       alertAdmin({
         area: 'consent_gcs_init',
@@ -149,12 +152,11 @@ function fetchHtml(urlStr, timeoutMs = 10000) {
 }
 
 // ───────────────────────────── Snapshots ─────────────────────────────
-async function ensureSnapshot({ type, version, url, htmlOverride }) {
+async function ensureSnapshot({ type, version, url, htmlOverride, acceptId }) {
   if (!GCS_BUCKET || !Storage || !storage) {
     console.warn('[CONSENT] Modo degradado: bucket o @google-cloud/storage ausentes', {
       hasBucket: !!GCS_BUCKET, hasLib: !!Storage, hasClient: !!storage
     });
-    // 🔔 Aviso degradado (dedupe por tipo+versión)
     try {
       await alertAdmin({
         area: 'consent_snapshot_degraded',
@@ -169,38 +171,52 @@ async function ensureSnapshot({ type, version, url, htmlOverride }) {
   }
 
   const bucket = storage.bucket(GCS_BUCKET);
-  // 🔄 Carpeta formal y legible
-  const folder =
-    type === 'pp'
-      ? 'politica-privacidad'
-      : 'terminos-condiciones';
+  const folder = (type === 'pp') ? 'politica-privacidad' : 'terminos-condiciones';
 
-  const blobPath = `${BASE_PATH}/${folder}/${version}.html`;
+  let blobPath;
+  if (SNAPSHOT_MODE === 'per-accept') {
+    // Un fichero por aceptación dentro de la carpeta de versión
+    const safeAccept = (acceptId && /^[a-zA-Z0-9_-]+$/.test(acceptId))
+      ? acceptId
+      : new Date().toISOString().replace(/[:.]/g, '-');
+    blobPath = `${BASE_PATH}/${folder}/${version}/${safeAccept}.html`;
+  } else {
+    // Comportamiento anterior: 1 fichero por versión
+    blobPath = `${BASE_PATH}/${folder}/${version}.html`;
+  }
+
   const file = bucket.file(blobPath);
 
   try {
-    console.log('[CONSENT] Intentando subir snapshot', { type, version, bucket: GCS_BUCKET });
-    const [exists] = await file.exists();
+    console.log('[CONSENT] Intentando subir snapshot', { type, version, bucket: GCS_BUCKET, SNAPSHOT_MODE });
+
     let content = '';
-    if (exists) {
-      const [buf] = await file.download();
-      content = buf.toString('utf8');
-    } else {
-      content = htmlOverride || (url ? await fetchHtml(url) : '');
-      if (!content) {
-        return { hash: 'sha256:' + sha256Hex(`${type}:${version}:${url || ''}`), blobPath: '', snapshotOk: false };
+
+    if (SNAPSHOT_MODE === 'per-version') {
+      // Si ya existe, devolvemos su hash (no reescribimos)
+      const [exists] = await file.exists();
+      if (exists) {
+        const [buf] = await file.download();
+        content = buf.toString('utf8');
+        return { hash: 'sha256:' + sha256Hex(content), blobPath, snapshotOk: true };
       }
-      console.log('[CONSENT] Subiendo a GCS →', blobPath);
-      await file.save(content, {
-        resumable: false,
-        contentType: 'text/html; charset=utf-8',
-        metadata: { cacheControl: 'public, max-age=31536000' }
-      });
     }
+
+    // per-accept (siempre sube) o per-version (cuando no existía)
+    content = htmlOverride || (url ? await fetchHtml(url) : '');
+    if (!content) {
+      return { hash: 'sha256:' + sha256Hex(`${type}:${version}:${url || ''}`), blobPath: '', snapshotOk: false };
+    }
+
+    await file.save(content, {
+      resumable: false,
+      contentType: 'text/html; charset=utf-8',
+      metadata: { cacheControl: 'public, max-age=31536000' }
+    });
+
     return { hash: 'sha256:' + sha256Hex(content), blobPath, snapshotOk: true };
   } catch (e) {
     console.warn(`⚠️ Snapshot ${type}/${version} fallo:`, e?.message || e);
-    // 🔔 Aviso de fallo de snapshot (dedupe por tipo+versión)
     try {
       await alertAdmin({
         area: 'consent_snapshot_fail',
@@ -237,8 +253,25 @@ async function logConsent(opts = {}) {
   const userAgent = req ? (req.headers['user-agent'] || '') : '';
   const emailLower = (email || '').toLowerCase();
 
-  const pp  = await ensureSnapshot({ type: 'pp',  version: privacyVersion, url: privacyUrl, htmlOverride: privacyHtml });
-  const tos = await ensureSnapshot({ type: 'tos', version: termsVersion,   url: termsUrl,   htmlOverride: termsHtml });
+  // Creamos el docRef primero para usar su id como acceptId (único y estable)
+  const docRef = db.collection('consentLogs').doc();
+  const acceptId = docRef.id;
+
+  // Snapshots (pasan acceptId cuando SNAPSHOT_MODE=per-accept, inofensivo en per-version)
+  const pp  = await ensureSnapshot({
+    type: 'pp',
+    version: privacyVersion,
+    url: privacyUrl,
+    htmlOverride: privacyHtml,
+    acceptId
+  });
+  const tos = await ensureSnapshot({
+    type: 'tos',
+    version: termsVersion,
+    url: termsUrl,
+    htmlOverride: termsHtml,
+    acceptId
+  });
 
   const data = {
     userId: uid || null,
@@ -273,7 +306,6 @@ async function logConsent(opts = {}) {
     paymentIntentId
   ].join('|'));
 
-  const docRef = db.collection('consentLogs').doc();
   const idxRef = db.collection('consentLogs_idx').doc(fingerprint);
 
   const batch = db.batch();
@@ -297,10 +329,32 @@ async function logConsent(opts = {}) {
     batch.set(userRef, { ...data, idx: fingerprint });
   }
 
+  // ✅ Validación de campos críticos antes del commit (no bloquea)
+  if (!data.email || !data.privacyHash || !data.termsHash || !data.privacyVersion || !data.termsVersion) {
+    try {
+      await alertAdmin({
+        area: 'consent_log_incomplete',
+        email: data.email || '-',
+        err: new Error('Campos críticos de consentimiento vacíos'),
+        meta: {
+          email: data.email,
+          uid: data.userId,
+          termsVersion: data.termsVersion,
+          privacyVersion: data.privacyVersion,
+          privacyHash: data.privacyHash,
+          termsHash: data.termsHash,
+          checkboxes: data.checkboxes,
+          source: data.source,
+          sessionId: data.sessionId,
+          paymentIntentId: data.paymentIntentId
+        }
+      });
+    } catch (_) { /* no-op */ }
+  }
+
   try {
     await batch.commit();
   } catch (e) {
-    // 🔔 Aviso si falla el commit de Firestore (con dedupe por fingerprint del consentimiento)
     try {
       await alertAdmin({
         area: 'consent_log_commit',
@@ -319,7 +373,7 @@ async function logConsent(opts = {}) {
         dedupeKey: `consent:commit:${fingerprint}`
       });
     } catch (_) {}
-    throw e; // mantener el comportamiento (propagar error)
+    throw e;
   }
 
   return {

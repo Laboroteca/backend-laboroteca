@@ -1,162 +1,219 @@
 // 📁 services/desactivarMembresiaClub.js
+
 const admin = require('../firebase');
 const firestore = admin.firestore();
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const axios = require('axios');
-const { enviarConfirmacionBajaClub } = require('./email');
-const { syncMemberpressClub } = require('./syncMemberpressClub');
-const { alertAdmin } = require('../utils/alertAdmin');  // 👈 añadido
+
+const { enviarConfirmacionBajaClub } = require('./email'); // (no se usa por defecto; ver nota en Paso 4)
+const { syncMemberpressClub } = require('./syncMemberpressClub'); // intencionadamente NO usado aquí (solo al final de ciclo)
+const { alertAdmin } = require('../utils/alertAdmin');
+const { guardarEnGoogleSheets } = require('./googleSheets');
 
 const MEMBERSHIP_ID = parseInt(process.env.MEMBERSHIP_ID || '10663', 10);
+const ACTIVE_STATUSES = ['active', 'trialing', 'incomplete', 'past_due'];
 
+const nowISO = () => new Date().toISOString();
+
+/**
+ * Baja voluntaria del Club (con password):
+ * - Valida credenciales en WP.
+ * - Programa la cancelación en Stripe al final del ciclo (cancel_at_period_end=true).
+ * - Registra en Firestore (bajasClub) y en Google Sheets:
+ *   - C = fechaSolicitud
+ *   - E = fechaEfectos (current_period_end)
+ *   - F = "PENDIENTE"
+ * - NO desactiva MemberPress ni marca Firestore usuariosClub.activo=false ahora.
+ *   (Eso se hará cuando Stripe envíe `customer.subscription.deleted` al final del ciclo,
+ *    o mediante el job de verificación).
+ *
+ * @param {string} email
+ * @param {string} password
+ * @param {boolean} enviarEmailConfirmacion  // ⬅ Mantenido por compatibilidad. No enviamos por defecto para evitar confusión.
+ * @returns {Promise<{ok:boolean, cancelada:boolean, voluntaria:true, suscripciones:number, fechasEfectos?:string[]}>}
+ */
 async function desactivarMembresiaClub(email, password, enviarEmailConfirmacion = true) {
+  // ────────────────────────────────────────────────────────────────────────────
+  // Validación de entrada
+  // ────────────────────────────────────────────────────────────────────────────
   if (!email || typeof email !== 'string' || !email.includes('@')) {
     return { ok: false, mensaje: 'Email inválido.' };
   }
-
   if (!password || typeof password !== 'string' || password.length < 4) {
     return { ok: false, mensaje: 'Contraseña incorrecta.' };
   }
-
   email = email.trim().toLowerCase();
 
-  // ✅ Paso 0: Validar credenciales
+  // ────────────────────────────────────────────────────────────────────────────
+  // Paso 0: Validar credenciales en WP (no elimina usuario, solo verifica acceso)
+  // ────────────────────────────────────────────────────────────────────────────
   try {
-    const resp = await axios.post('https://www.laboroteca.es/wp-json/laboroteca/v1/verificar-login', {
-      email,
-      password
-    }, {
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.LABOROTECA_API_KEY,
+    const resp = await axios.post(
+      'https://www.laboroteca.es/wp-json/laboroteca/v1/verificar-login',
+      { email, password },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.LABOROTECA_API_KEY,
+        },
+        timeout: 15000,
       }
-    });
+    );
 
-    console.log(`[BajaClub] 🔐 Respuesta de validación WP para ${email}:`, resp.data);
-
-    if (!resp.data?.ok) {
-      const msg = resp.data?.mensaje || 'Credenciales no válidas';
+    console.log(`[BajaClub] 🔐 Validación WP para ${email}:`, resp.data);
+    if (!resp?.data?.ok) {
+      const msg = resp?.data?.mensaje || 'Credenciales no válidas';
       console.warn(`[BajaClub] ❌ Validación incorrecta para ${email}: ${msg}`);
       return { ok: false, mensaje: 'Contraseña incorrecta' };
     }
   } catch (err) {
-    const msg = err?.response?.data?.mensaje || err.message || 'Error al validar credenciales.';
+    const msg = err?.response?.data?.mensaje || err?.message || 'Error al validar credenciales.';
     console.error(`[BajaClub] ❌ Error validando en WP: ${msg}`);
     await alertAdmin({
       area: 'desactivarMembresiaClub_login',
       email,
       err,
-      meta: { email }
+      meta: { email },
     });
     return { ok: false, mensaje: 'Contraseña incorrecta' };
   }
 
-  console.log(`[BajaClub] 🔄 Iniciando proceso de baja para ${email}`);
+  console.log(`[BajaClub] 🔄 Iniciando baja VOLUNTARIA (programada fin de ciclo) para ${email}`);
 
-  // 🔻 1. Cancelar suscripciones activas en Stripe
+  // ────────────────────────────────────────────────────────────────────────────
+  // Paso 1: Stripe — Programar cancelación al final del ciclo
+  // ────────────────────────────────────────────────────────────────────────────
+  let suscripcionesActualizadas = 0;
+  const fechasEfectos = [];
+
   try {
     const clientes = await stripe.customers.list({ email, limit: 1 });
-    if (clientes.data.length > 0) {
+    if (!clientes?.data?.length) {
+      console.warn(`⚠️ Stripe: cliente no encontrado (${email})`);
+    } else {
       const customerId = clientes.data[0].id;
       const subs = await stripe.subscriptions.list({
         customer: customerId,
         status: 'all',
-        limit: 10
+        limit: 25,
       });
 
       for (const sub of subs.data) {
-        if (['active', 'trialing', 'incomplete', 'past_due'].includes(sub.status)) {
-          await stripe.subscriptions.cancel(sub.id, {
-            invoice_now: false,
-            prorate: false
+        if (!ACTIVE_STATUSES.includes(sub.status)) continue;
+
+        const upd = await stripe.subscriptions.update(sub.id, {
+          cancel_at_period_end: true,
+          metadata: {
+            ...(sub.metadata || {}),
+            motivo_baja: 'baja_voluntaria',
+            origen_baja: 'formulario_usuario',
+            email, // redundante pero útil para trazas
+          },
+        });
+
+        const cpe = upd?.current_period_end ?? sub.current_period_end; // epoch seconds
+        const fechaEfectosISO = new Date(cpe * 1000).toISOString();
+        fechasEfectos.push(fechaEfectosISO);
+        suscripcionesActualizadas++;
+
+        // Firestore: baja programada
+        try {
+          await firestore.collection('bajasClub').doc(email).set(
+            {
+              tipoBaja: 'voluntaria',
+              origen: 'formulario_usuario',
+              subscriptionId: sub.id,
+              fechaSolicitud: nowISO(),
+              fechaEfectos: fechaEfectosISO,
+              estadoBaja: 'programada', // pendiente/programada/ejecutada/fallida
+              comprobacionFinal: 'pendiente',
+            },
+            { merge: true }
+          );
+        } catch (e) {
+          console.error('❌ Firestore (bajasClub programada):', e?.message || e);
+          await alertAdmin({
+            area: 'desactivarMembresiaClub_firestore_baja',
+            email,
+            err: e,
+            meta: { subscriptionId: sub.id, fechaEfectosISO },
           });
-          console.log(`🛑 Stripe: suscripción ${sub.id} cancelada`);
         }
+
+        // Google Sheets: C/E/F
+        try {
+          await guardarEnGoogleSheets({
+            email,
+            accion: 'baja_voluntaria_programada',
+            fechaSolicitudBaja: nowISO(),     // → Columna C
+            fechaEfectosBaja: fechaEfectosISO, // → Columna E
+            verificacionBaja: 'PENDIENTE',    // → Columna F
+            producto: 'el club laboroteca',
+          });
+        } catch (e) {
+          await alertAdmin({
+            area: 'desactivarMembresiaClub_sheets_baja',
+            email,
+            err: e,
+            meta: { subscriptionId: sub.id, fechaEfectosISO },
+          });
+        }
+
+        console.log(`🟢 Stripe: programada baja voluntaria ${sub.id} (efectos=${fechaEfectosISO})`);
       }
-    } else {
-      console.warn(`⚠️ Stripe: cliente no encontrado para ${email}`);
     }
   } catch (err) {
-    console.error(`❌ Error en Stripe:`, err.message);
+    console.error(`❌ Error Stripe (programar baja voluntaria):`, err?.message || err);
     await alertAdmin({
-      area: 'desactivarMembresiaClub_stripe',
+      area: 'desactivarMembresiaClub_stripe_update',
       email,
       err,
-      meta: { email }
+      meta: { email },
     });
+    // No devolvemos error duro: el cliente podría no tener suscripciones activas.
   }
 
-  // 🔻 2. Marcar como inactivo en Firestore
-  try {
-    const ref = firestore.collection('usuariosClub').doc(email);
-    await ref.set({
-      activo: false,
-      fechaBaja: new Date().toISOString()
-    }, { merge: true });
-    console.log(`📉 Firestore: usuario marcado como inactivo`);
-  } catch (err) {
-    console.error(`❌ Error en Firestore:`, err.message);
-    await alertAdmin({
-      area: 'desactivarMembresiaClub_firestore',
-      email,
-      err,
-      meta: { email }
-    });
-  }
+  // ────────────────────────────────────────────────────────────────────────────
+  // Paso 2: NO marcar inactivo ni tocar MemberPress aquí (se hará al final de ciclo)
+  // ────────────────────────────────────────────────────────────────────────────
+  console.log(`ℹ️ No se desactiva MemberPress ni usuariosClub ahora (baja voluntaria programada).`);
 
-  // 🔻 3. Desactivar en MemberPress
-  try {
-    const mpResp = await syncMemberpressClub({
-      email,
-      accion: 'desactivar',
-      membership_id: MEMBERSHIP_ID
-    });
-    console.log(`🧩 MemberPress desactivado`, mpResp);
-    if (!mpResp.ok) {
-      await alertAdmin({
-        area: 'desactivarMembresiaClub_memberpress',
-        email,
-        err: new Error(mpResp?.error || 'Fallo al desactivar'),
-        meta: { email }
-      });
-      return { ok: false, mensaje: `Error desactivando en MemberPress: ${mpResp?.error || 'Sin mensaje'}` };
-    }
-  } catch (err) {
-    console.error(`❌ Error en MemberPress:`, err.message);
-    await alertAdmin({
-      area: 'desactivarMembresiaClub_memberpress_catch',
-      email,
-      err,
-      meta: { email }
-    });
-    return { ok: false, mensaje: `Error al desactivar en MemberPress: ${err.message}` };
-  }
-
-  // 🔻 4. Email de confirmación (solo si es baja voluntaria o eliminación)
-  if (enviarEmailConfirmacion) {
+  // ────────────────────────────────────────────────────────────────────────────
+  // Paso 3: (Opcional) Email de acuse de solicitud
+  //  Nota: Mantenemos silencio por defecto para evitar confusión con “baja inmediata”.
+  //        Si deseas enviar un acuse, activa el bloque y adapta la plantilla.
+  // ────────────────────────────────────────────────────────────────────────────
+  if (false && enviarEmailConfirmacion) {
     try {
       const ref = firestore.collection('usuariosClub').doc(email);
       const doc = await ref.get();
       const nombre = doc.exists ? (doc.data()?.nombre || '') : '';
-
-      const resultadoEmail = await enviarConfirmacionBajaClub(email, nombre);
-      if (resultadoEmail?.data?.succeeded === 1) {
-        console.log(`📩 Email de baja enviado a ${email}`);
-      } else {
-        console.warn(`⚠️ Email no confirmado para ${email}`);
-      }
+      // OJO: enviarConfirmacionBajaClub puede decir “baja confirmada”.
+      // Cambia por una plantilla de “baja solicitada” si la tienes.
+      await enviarConfirmacionBajaClub(email, nombre);
+      console.log(`📩 Email de solicitud de baja enviado a ${email}`);
     } catch (err) {
-      console.error(`❌ Error al enviar email de baja:`, err.message);
+      console.error(`❌ Error al enviar email de solicitud de baja:`, err?.message || err);
       await alertAdmin({
-        area: 'desactivarMembresiaClub_email_baja',
+        area: 'desactivarMembresiaClub_email_baja_voluntaria',
         email,
         err,
-        meta: { email }
+        meta: { email },
       });
+      // No romper el flujo por el email.
     }
   }
 
-  return { ok: true, cancelada: true };
+  // ────────────────────────────────────────────────────────────────────────────
+  // Resultado
+  // ────────────────────────────────────────────────────────────────────────────
+  return {
+    ok: true,
+    cancelada: true,
+    voluntaria: true,
+    suscripciones: suscripcionesActualizadas,
+    fechasEfectos: fechasEfectos.length ? fechasEfectos : undefined,
+  };
 }
 
 module.exports = desactivarMembresiaClub;

@@ -1,8 +1,11 @@
 // routes/registrar-consentimiento.js
+'use strict';
+
 const express = require('express');
 const router = express.Router();
-const { logConsent } = require('../utils/consentLogs');
-const { alertAdmin } = require('../utils/alertAdmin'); // 👈 NUEVO
+
+const { registrarConsentimiento } = require('../utils/consentLogs'); // ← NUEVO
+const { alertAdmin } = require('../utils/alertAdmin');
 
 /* ───────────── Helpers ───────────── */
 
@@ -11,9 +14,11 @@ function parseConsentData(v) {
   if (!v || typeof v !== 'string') return {};
   try { return JSON.parse(v); } catch { return {}; }
 }
+
 // Normaliza string
 const s = (v, def = '') =>
   (v === undefined || v === null) ? def : String(v).trim();
+
 // Normaliza booleano
 function b(v, def = false) {
   if (v === undefined || v === null) return def;
@@ -24,37 +29,65 @@ function b(v, def = false) {
        : def;
 }
 
-/* ───────────── Ruta (best-effort, nunca bloquea) ───────────── */
+// Obtiene primera coincidencia de varios nombres de campo
+function pick(body, cd, keys = [], def = '') {
+  for (const k of keys) {
+    const val = body?.[k];
+    if (val !== undefined && val !== null && String(val).length) return s(val);
+    const val2 = cd?.[k];
+    if (val2 !== undefined && val2 !== null && String(val2).length) return s(val2);
+  }
+  return def;
+}
+
+/* ───────────── Ruta (best-effort; no bloquea el front) ───────────── */
 
 router.post('/registrar-consentimiento', async (req, res) => {
   try {
-    // Telemetría ligera: detectar formularios sin consentData
+    // Nota/telemetría ligera si no viene el hidden JSON
     if (!req.body?.consentData) {
       const srcHint = s(req.body?.source || req.body?.formularioId || '');
       const emailHint = s((req.body?.email || '').toLowerCase());
       console.log(`[CONSENT] sin consentData; source=${srcHint} email=${emailHint}`);
-      // (No es un error, así que no avisamos al admin aquí)
+      // no es error: algunos formularios podrían no enviarlo
     }
 
     // Acepta tanto campos sueltos como el blob consentData
     const cd   = parseConsentData(req.body?.consentData);
     const body = { ...(req.body || {}) };
 
-    const uid            = s(body.uid || cd.uid || null) || null;
-    const email          = s((body.email || cd.email || '').toLowerCase());
-    const termsUrlRaw    = s(body.termsUrl       || cd.termsUrl       || '');
-    const privacyUrlRaw  = s(body.privacyUrl     || cd.privacyUrl     || '');
-    const termsVerRaw    = s(body.termsVersion   || cd.termsVersion   || '');
-    const privVerRaw     = s(body.privacyVersion || cd.privacyVersion || '');
+    // Identidad
+    const email = pick(body, cd, ['email','user_email','correo','correo_electronico'], '').toLowerCase();
+    const nombre = pick(body, cd, ['nombre','first_name','name','given_name','nombreCompleto'], '');
+    let apellidos = pick(body, cd, ['apellidos','last_name','surname'], '');
 
-    // Fallbacks robustos de versión (por si el snippet no los envía)
-    const termsVersion   = termsVerRaw || s(process.env.TERMS_VERSION_FALLBACK || '2025-08-15');
-    const privacyVersion = privVerRaw  || s(process.env.PRIVACY_VERSION_FALLBACK || '2025-08-15');
-    const termsUrl       = termsUrlRaw   || s(process.env.TERMS_URL_FALLBACK   || '');
-    const privacyUrl     = privacyUrlRaw || s(process.env.PRIVACY_URL_FALLBACK || '');
+    // Si vino nombreCompleto pero no apellidos, separamos por último espacio
+    if (!apellidos && nombre && nombre.includes(' ')) {
+      const parts = nombre.split(/\s+/);
+      if (parts.length > 1) {
+        apellidos = parts.pop();
+        // nombre = resto (sin el último)
+        body.__nombreOriginal = nombre;
+        body.__apellidosDerivados = apellidos;
+      }
+    }
 
-    const checkboxesIn   = body.checkboxes ?? cd.checkboxes ?? {};
-    const checkboxes     = {
+    const uid = pick(body, cd, ['uid','user_id','userId'], '') || null;
+
+    // URLs y versiones (con fallbacks)
+    const termsUrlRaw    = pick(body, cd, ['termsUrl'], '');
+    const privacyUrlRaw  = pick(body, cd, ['privacyUrl'], '');
+    const termsVerRaw    = pick(body, cd, ['termsVersion'], '');
+    const privVerRaw     = pick(body, cd, ['privacyVersion'], '');
+
+    const termsVersion   = termsVerRaw   || s(process.env.TERMS_VERSION_FALLBACK   || '2025-08-15');
+    const privacyVersion = privVerRaw    || s(process.env.PRIVACY_VERSION_FALLBACK || '2025-08-15');
+    const termsUrl       = termsUrlRaw   || s(process.env.TERMS_URL_FALLBACK       || 'https://www.laboroteca.es/terminos-y-condiciones-de-los-servicios-laboroteca/');
+    const privacyUrl     = privacyUrlRaw || s(process.env.PRIVACY_URL_FALLBACK     || 'https://www.laboroteca.es/politica-de-privacidad-de-datos/');
+
+    // Checkboxes (si no vienen, asumimos true porque son obligatorios en el formulario)
+    const checkboxesIn = body.checkboxes ?? cd.checkboxes ?? {};
+    const checkboxes = {
       terms:   b(checkboxesIn.terms, true),
       privacy: b(checkboxesIn.privacy, true),
       ...Object.keys(checkboxesIn || {}).reduce((acc, k) => {
@@ -63,69 +96,81 @@ router.post('/registrar-consentimiento', async (req, res) => {
       }, {})
     };
 
-    const source         = s(body.source || body.formularioId || cd.source || cd.formularioId || '');
-    const sessionId      = s(body.sessionId || cd.sessionId || '');
-    const paymentIntentId= s(body.paymentIntentId || cd.paymentIntentId || '');
+    // Fuente y trazabilidad
+    const source    = pick(body, cd, ['source','formularioId'], '');
+    const sessionId = pick(body, cd, ['sessionId'], '');
+    const paymentIntentId = pick(body, cd, ['paymentIntentId'], '');
 
     // HTML opcional ya renderizado (si lo pasas, el util evitará el fetch)
-    const termsHtml      = body.termsHtml   || cd.termsHtml   || undefined;
-    const privacyHtml    = body.privacyHtml || cd.privacyHtml || undefined;
+    const termsHtml   = body.termsHtml   || cd.termsHtml   || undefined;
+    const privacyHtml = body.privacyHtml || cd.privacyHtml || undefined;
 
-    // Extras opcionales (trazabilidad de negocio)
+    // Extras de negocio
     const extras = {};
     ['tipoProducto','nombreProducto','descripcionProducto','formularioId','idx'].forEach(k => {
       const val = body[k] ?? cd[k];
       if (val !== undefined && val !== null) extras[k] = s(val);
     });
 
-    // 🔒 Best-effort: NO bloquea la respuesta aunque falle el guardado
-    logConsent({
-      uid, email,
-      termsUrl, privacyUrl,
-      termsVersion, privacyVersion,
-      checkboxes, source, sessionId, paymentIntentId,
-      req, extras,
-      termsHtml, privacyHtml
-    })
-      .then(r => console.log('CONSENT OK:', r.id))
+    // Avisos preventivos (no bloquean)
+    if (!email) {
+      try { await alertAdmin(`⚠️ Consentimiento sin email. source=${source || '-'} form=${extras.formularioId || '-'} ip=${req.ip || '-'}`); } catch {}
+      return res.json({ ok: true, warn: 'missing_email' });
+    }
+    if (!checkboxes.privacy) {
+      try { await alertAdmin(`⚠️ Privacy checkbox NO marcado para ${email} (source=${source || '-'})`); } catch {}
+      // seguimos sin bloquear; el backend registrará igualmente
+    }
+
+    // Payload para el registrador robusto (GCS per-accept + Firestore con nombre/apellidos)
+    const payload = {
+      email,
+      nombre,
+      apellidos,
+      userId: uid,
+
+      formularioId: extras.formularioId || source || '',
+      tipoProducto: extras.tipoProducto || 'Registro',
+      nombreProducto: extras.nombreProducto || 'Alta usuario Laboroteca',
+      descripcionProducto: extras.descripcionProducto || `Registro form ${extras.formularioId || source || ''}`,
+
+      source: source ? `fluentform_${source}` : '',
+      userAgent: req.headers['user-agent'] || '',
+      ip: (req.headers['x-forwarded-for'] || req.connection?.remoteAddress || req.ip || '').toString(),
+
+      checkboxes,
+      privacyUrl, privacyVersion,
+      termsUrl, termsVersion,
+
+      sessionId,
+      paymentIntentId,
+      idx: extras.idx,
+
+      // si viniera HTML pre-renderizado
+      privacyHtml,
+      termsHtml,
+    };
+
+    // 🔒 Best-effort: NO bloqueamos la respuesta; registramos en background
+    registrarConsentimiento(payload)
+      .then(r => {
+        console.log('CONSENT OK:', r.docId);
+      })
       .catch(async e => {
         console.warn('CONSENT WARN (no bloquea):', e?.message || e);
-        // 🔔 Aviso admin si el guardado falla (no bloquea)
         try {
-          await alertAdmin({
-            area: 'consent_log_fail',
-            email: email || '-',
-            err: e,
-            meta: {
-              uid, email, source, sessionId, paymentIntentId,
-              termsVersion, privacyVersion,
-              hasTermsHtml: !!termsHtml, hasPrivacyHtml: !!privacyHtml
-            }
-          });
-        } catch (_) { /* no-op */ }
+          await alertAdmin(`❌ Error guardando consentimiento de ${email}: ${e.message}`);
+        } catch (_) {}
       });
 
-    // ✅ Respuesta inmediata para no afectar al flujo de compra/membresía/registro
+    // ✅ Respuesta inmediata para no afectar checkout/registro
     return res.json({ ok: true });
   } catch (err) {
     console.error('registrar-consentimiento error (handler):', err);
-
-    // 🔔 Aviso admin en error inesperado del handler (no bloquea)
     try {
-      await alertAdmin({
-        area: 'consent_route_error',
-        email: s((req.body?.email || '').toLowerCase()) || '-',
-        err,
-        meta: {
-          hasConsentData: !!req.body?.consentData,
-          source: s(req.body?.source || req.body?.formularioId || ''),
-          ip: req.ip || req.connection?.remoteAddress || null,
-          ua: req.headers['user-agent'] || null
-        }
-      });
-    } catch (_) { /* no-op */ }
-
-    // Incluso ante errores inesperados, no bloqueamos el front/checkout
+      await alertAdmin(`❌ Error en /registrar-consentimiento: ${err.message}`);
+    } catch (_) {}
+    // No rompemos el flujo del front
     return res.json({ ok: true, warn: 'consent_route_failed' });
   }
 });

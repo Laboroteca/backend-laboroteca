@@ -895,32 +895,39 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
         const tipo = (sub.metadata?.origen_baja === 'formulario_usuario')
           ? 'voluntaria'
           : 'manual_fin_ciclo';
-        // Log en la hoja de bajas (F = PENDIENTE)
+
+        // Sheets:
+        //  - VOLUNTARIA → ya la escribió el servicio: NO duplicar
+        //  - MANUAL_FIN_CICLO → SÍ registrar aquí
         try {
-          // Fallback: nombre desde Stripe/Customer
-          let fallbackName = sub.customer_details?.name || '';
-          if (!fallbackName && sub.customer) {
-            try { const c = await stripe.customers.retrieve(sub.customer); fallbackName = c?.name || ''; } catch {}
+          if (tipo === 'manual_fin_ciclo') {
+            // Fallback: nombre desde Stripe/Customer
+            let fallbackName = sub.customer_details?.name || '';
+            if (!fallbackName && sub.customer) {
+              try { const c = await stripe.customers.retrieve(sub.customer); fallbackName = c?.name || ''; } catch {}
+            }
+            const nombreCompleto = await nombreCompletoPorEmail(email, fallbackName);
+            await registrarBajaClub({
+              email,
+              nombre: nombreCompleto,
+              motivo: 'manual_fin_ciclo',
+              fechaSolicitud: new Date().toISOString(),
+              fechaEfectos: fechaEfectosISO,
+              verificacion: 'PENDIENTE',
+            });
+            await logBajaFirestore({
+              email,
+              nombre: nombreCompleto,
+              motivo: 'manual_fin_ciclo',
+              verificacion: 'PENDIENTE',
+              fechaSolicitudISO: new Date().toISOString(),
+              fechaEfectosISO: fechaEfectosISO,
+              subscriptionId: sub.id,
+              source: 'stripe.subscription.updated'
+            });
+          } else {
+            console.log('↪️ Voluntaria programada detectada en webhook: NO se crea otra fila en Sheets.');
           }
-          const nombreCompleto = await nombreCompletoPorEmail(email, fallbackName);
-          await registrarBajaClub({
-            email,
-            nombre: nombreCompleto,
-            motivo: tipo, // 'voluntaria' | 'manual_fin_ciclo'
-            fechaSolicitud: new Date().toISOString(),
-            fechaEfectos: fechaEfectosISO,
-            verificacion: 'PENDIENTE',
-          });
-          await logBajaFirestore({
-            email,
-            nombre: nombreCompleto,
-            motivo: tipo,
-            verificacion: 'PENDIENTE',
-            fechaSolicitudISO: new Date().toISOString(),
-            fechaEfectosISO: fechaEfectosISO,
-            subscriptionId: sub.id,
-            source: 'stripe.subscription.updated'
-          });
         } catch (_) {}
         try {
           await firestore.collection('bajasClub').doc(email).set({

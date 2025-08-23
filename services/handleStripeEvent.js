@@ -1,14 +1,14 @@
 const admin = require('../firebase');
 const firestore = admin.firestore();
 
-const { registrarBajaClub, registrarBajaVoluntariaSolicitud, actualizarVerificacionBaja, fmtES } = require('./registrarBajaClub');
+const { guardarEnGoogleSheets } = require('./googleSheets');
 const { crearFacturaEnFacturaCity } = require('./facturaCity');
-const { enviarFacturaPorEmail, enviarAvisoImpago, enviarConfirmacionBajaClub, enviarAvisoCancelacionManual, enviarEmailPersonalizado, enviarEmailSolicitudBajaVoluntaria } = require('./email');
+const { enviarFacturaPorEmail, enviarAvisoImpago, enviarConfirmacionBajaClub, enviarAvisoCancelacionManual, enviarEmailPersonalizado } = require('./email');
 const { subirFactura } = require('./gcs');
 const { activarMembresiaClub } = require('./activarMembresiaClub');
 const { syncMemberpressClub } = require('./syncMemberpressClub');
 const { syncMemberpressLibro } = require('./syncMemberpressLibro');
-const { alertAdmin } = require('../utils/alertAdmin');
+const { registrarBajaClub } = require('./registrarBajaClub');
 const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 const escapeHtml = s => String(s ?? '')
@@ -19,16 +19,7 @@ const crypto = require('crypto');
 const redact = (v) => (process.env.NODE_ENV === 'production' ? hash12(String(v || '')) : String(v || ''));
 const hash12 = e => crypto.createHash('sha256').update(String(e || '').toLowerCase()).digest('hex').slice(0,12);
 const { ensureOnce } = require('../utils/dedupe');
-
-
-async function getCustomerEmailName(customerId) {
-  try {
-    const c = await stripe.customers.retrieve(customerId);
-    return { email: c?.email || '', name: c?.name || '' };
-  } catch { return { email: '', name: '' }; }
-}
-
-
+const { alertAdmin } = require('../utils/alertAdmin');
 
 // ——— Helpers comunes ———
 async function nombreCompletoPorEmail(email, fallbackNombre = '', fallbackApellidos = '') {
@@ -267,8 +258,19 @@ if (!isFirstBaja) {
       intent.metadata?.email
     )?.toLowerCase().trim();
 
-    console.warn(`⚠️ [Intento fallido] payment_intent ${intent.id} falló para ${email || '[email desconocido]'} (sin envío para evitar duplicados)`);
-    return { noted_payment_intent_failed: true };
+    console.warn(`⚠️ [Intento fallido] payment_intent ${intent.id} falló para ${email || '[email desconocido]'}`);
+
+    if (email && email.includes('@')) {
+      try {
+        await enviarAvisoImpago(email, 'cliente', 1, 'https://www.laboroteca.es/gestion-pago-club/', true);
+        return { aviso_impago_por_payment_intent: true };
+      } catch (err) {
+        console.error('❌ Error al enviar aviso por payment_intent fallido:', err?.message);
+        return { error: 'fallo_email_payment_intent' };
+      }
+    }
+
+    return { warning: 'payment_intent_failed_sin_email' };
   }
 
 
@@ -728,14 +730,11 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
 
   if (event.type === 'customer.subscription.deleted') {
     const subscription = event.data.object;
-    let email = (
+    const email = (
       subscription.metadata?.email ||
       subscription.customer_email ||
       subscription.customer_details?.email
     )?.toLowerCase().trim();
-    if (!email && subscription.customer) {
-      try { const c = await stripe.customers.retrieve(subscription.customer); email = (c?.email || '').toLowerCase().trim(); } catch {}
-    }
 
     const nombre = subscription.customer_details?.name || '';
     const enlacePago = 'https://www.laboroteca.es/membresia-club-laboroteca/';
@@ -799,41 +798,42 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
              throw e;
            }
             // No enviar email adicional: el flujo de eliminación ya avisa por su canal propio
-        } else if (eraFinDeCiclo || origenBaja === 'formulario_usuario') {
+          } else if (eraFinDeCiclo || origenBaja === 'formulario_usuario') {
             // 🟢 VOLUNTARIA ejecutada ahora (fin de ciclo)
-            // 1) Desactivar en WP y marcar usuario inactivo
-            let okWP = false;
-            try {
-              const r = await syncMemberpressClub({ email, accion: 'desactivar', membership_id: MEMBERPRESS_IDS['el club laboroteca'] });
-              okWP = !!r?.ok || true; // ajusta según tu helper
-            } catch { okWP = false; }
-            await firestore.collection('usuariosClub').doc(email).set({ activo: false, fechaBaja: new Date().toISOString() }, { merge: true });
-            await firestore.collection('bajasClub').doc(email).set({
-              estadoBaja: 'ejecutada',
-              comprobacionFinal: okWP ? 'correcto' : 'fallida',
-              fechaEjecucion: new Date().toISOString(),
-              motivoFinal: 'voluntaria'
-            }, { merge: true });
+          await syncMemberpressClub({ email, accion: 'desactivar', membership_id: MEMBERPRESS_IDS['el club laboroteca'] });
+          await firestore.collection('usuariosClub').doc(email).set({ activo: false, fechaBaja: new Date().toISOString() }, { merge: true });
 
-            // 2) Actualizar Sheets (col F) → ✅/❌ en la fila de T0
-            const fechaEfectosISO = new Date((subscription.ended_at || subscription.current_period_end) * 1000).toISOString();
-            const okStripe = subscription.status === 'canceled';
-            const estado = (okStripe && okWP) ? 'ok' : 'fail';
-            await actualizarVerificacionBaja({ email, fechaEfectosISO, estado })
-              .catch(e => alertAdmin({ area: 'baja_voluntaria_update_sheets', email, err: e, meta: { subId: subscription.id, estado } }));
+          // Firestore baja: ejecutada + correcto
+          await firestore.collection('bajasClub').doc(email).set({
+            estadoBaja: 'ejecutada',
+            comprobacionFinal: 'correcto',
+            fechaEjecucion: new Date().toISOString(),
+            motivoFinal: 'voluntaria'
+          }, { merge: true });
+          // Log consolidado de baja
+        try {
+            const nombreCompleto = await nombreCompletoPorEmail(email, nombre);
+            await registrarBajaClub({
+              email,
+              nombre: nombreCompleto,
+              motivo: 'voluntaria',
+              verificacion: 'CORRECTO'
+            });
+            await logBajaFirestore({
+              email,
+              nombre: nombreCompleto,
+              motivo: 'voluntaria',
+              verificacion: 'CORRECTO',
+              fechaSolicitudISO: new Date().toISOString(),
+              fechaEfectosISO: new Date().toISOString(),
+              subscriptionId,
+              source: 'stripe.subscription.deleted'
+            });
+          } catch (_) {}
 
-            // 3) Alertar siempre si FALLIDA (obligatorio)
-            if (estado === 'fail') {
-              await alertAdmin({
-                area: 'baja_voluntaria_fallida',
-                email,
-                err: new Error('Baja voluntaria no materializada en Stripe o WP'),
-                meta: { subId: subscription.id, okStripe, okWP, fechaEfectosISO }
-              });
-            }
+          // (Sin escritura en Sheets de bajas)
 
-            // 4) (Opcional) email confirmación al usuario
-            await enviarConfirmacionBajaClub(email, nombre);
+          await enviarConfirmacionBajaClub(email, nombre);
 
         } else {
           // 🟠 MANUAL INMEDIATA (dashboard u otros) → inmediata
@@ -880,78 +880,50 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
     }
     return { success: true, baja: true };
    }
-
-// 🆕 Detectar programación de baja voluntaria (transición false → true en cancel_at_period_end)
+ 
+  // 🆕 Detectar programación de baja voluntaria (cancel_at_period_end=true)
   if (event.type === 'customer.subscription.updated') {
     const sub = event.data.object;
-    const prev = event.data.previous_attributes || {};
-    const antesCAE = !!prev.cancel_at_period_end;
-    const ahoraCAE = !!sub.cancel_at_period_end;
-    if (ahoraCAE && !antesCAE) {
+    if (sub.cancel_at_period_end) {
       // Registrar/actualizar baja programada (puede venir del dashboard o del formulario)
-      let email = (
+      const email = (
         sub.metadata?.email ||
         sub.customer_email ||
         sub.customer_details?.email
       )?.toLowerCase().trim();
-      if (!email && sub.customer) {
-        try { const c = await stripe.customers.retrieve(sub.customer); email = (c?.email || '').toLowerCase().trim(); } catch {}
-      }
 
       if (email) {
-        
-     const fechaSolicitudISO = new Date().toISOString();
-        const fechaEfectosISO   = new Date(sub.current_period_end * 1000).toISOString();
-        const tipo = (sub.metadata?.origen_baja === 'formulario_usuario') ? 'voluntaria' : 'manual_fin_ciclo';
-
-        // Dedupe de solicitud (evita dobles filas por updates repetidos)
-        const k = `bajaSolicitud:${sub.id}:${sub.current_period_end}`;
-        const first = await ensureOnce('bajasClub_solicitud', k);
-        if (first) {
-          // Nombre fallback desde Stripe/metadata → Firestore si existe
+        const fechaEfectosISO = new Date((sub.current_period_end) * 1000).toISOString();
+        const tipo = (sub.metadata?.origen_baja === 'formulario_usuario')
+          ? 'voluntaria'
+          : 'manual_fin_ciclo';
+        // Log en la hoja de bajas (F = PENDIENTE)
+        try {
+          // Fallback: nombre desde Stripe/Customer
           let fallbackName = sub.customer_details?.name || '';
           if (!fallbackName && sub.customer) {
             try { const c = await stripe.customers.retrieve(sub.customer); fallbackName = c?.name || ''; } catch {}
           }
-          const nombreCompleto = await nombreCompletoPorEmail(email, sub.metadata?.nombre || fallbackName, sub.metadata?.apellidos || '');
-
-          // 1) Sheets: fila T0 (F=PENDIENTE) usando tu helper específico
-          await registrarBajaVoluntariaSolicitud({
+          const nombreCompleto = await nombreCompletoPorEmail(email, fallbackName);
+          await registrarBajaClub({
             email,
             nombre: nombreCompleto,
-            fechaSolicitudISO,
-            fechaEfectosISO
-          }).catch(e => alertAdmin({ area: 'baja_voluntaria_solicitud_sheets', email, err: e, meta: { subId: sub.id } }));
-
-          // 2) Firestore: marca programada
-          try {
-            await firestore.collection('bajasClub').doc(email).set({
-              tipoBaja: tipo,
-              origen: sub.metadata?.origen_baja || 'dashboard_admin',
-              subscriptionId: sub.id,
-              fechaSolicitud: fechaSolicitudISO,
-             fechaEfectos: fechaEfectosISO,
-              estadoBaja: 'programada',
-              comprobacionFinal: 'pendiente'
-            }, { merge: true });
-          } catch (e) {
-            await alertAdmin({ area: 'baja_programada_firestore', email, err: e, meta: { subscriptionId: sub.id, fechaEfectosISO } });
-          }
-
-          // 3) Email al usuario con el TEXTO EXACTO (función dedicada)
-          try {
-            await enviarEmailSolicitudBajaVoluntaria(
-              nombreCompleto,
-              email,
-              fmtES(fechaSolicitudISO),
-              fmtES(fechaEfectosISO)
-            );
-          } catch (e) {
-            await alertAdmin({ area: 'baja_voluntaria_email_usuario', email, err: e, meta: { subId: sub.id } });
-          }
-        } else {
-          console.log('🟡 Solicitud de baja ya registrada (dedupe)', k);
-        }
+            motivo: tipo, // 'voluntaria' | 'manual_fin_ciclo'
+            fechaSolicitud: new Date().toISOString(),
+            fechaEfectos: fechaEfectosISO,
+            verificacion: 'PENDIENTE',
+          });
+          await logBajaFirestore({
+            email,
+            nombre: nombreCompleto,
+            motivo: tipo,
+            verificacion: 'PENDIENTE',
+            fechaSolicitudISO: new Date().toISOString(),
+            fechaEfectosISO: fechaEfectosISO,
+            subscriptionId: sub.id,
+            source: 'stripe.subscription.updated'
+          });
+        } catch (_) {}
         try {
           await firestore.collection('bajasClub').doc(email).set({
             tipoBaja: (sub.metadata?.origen_baja === 'formulario_usuario') ? 'voluntaria' : 'manual_fin_ciclo',

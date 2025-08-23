@@ -1,8 +1,6 @@
 require('dotenv').config();
 const fetch = require('node-fetch');
 const { alertAdmin } = require('../utils/alertAdmin');
-// reutiliza tu transporte (p.ej. enviarEmailPersonalizado)
-
 
 /**
  * Envía un email con o sin factura adjunta (PDF).
@@ -315,23 +313,6 @@ Laboroteca`;
 }
 
 /**
- * EMAIL DE CONFIRMACIÓN DE BAJA VOLUNTARIA
- */
-async function enviarEmailSolicitudBajaVoluntaria(nombre, email, fechaSolicitudTxt, fechaEfectosTxt) {
-  const subject = 'Hemos recibido tu solicitud de baja del Club Laboroteca';
-  const html =
-`Hola ${nombre || ''},<br><br>
-Hemos recibido tu <strong>solicitud de baja voluntaria</strong> del Club Laboroteca el <strong>${fechaSolicitudTxt}</strong>.<br>
-Tu suscripción seguirá activa hasta el <strong>${fechaEfectosTxt}</strong>, que es el fin del periodo mensual que ya has abonado.<br><br>
-En esa fecha tramitaremos la baja y perderás el acceso a los contenidos del Club. Si cambias de opinión puedes volver a darte de alta en cualquier momento y sin ninguna penalización.<br><br> 
-Gracias por haber formado parte del Club Laboroteca.<br>
-Un saludo,<br>
-Equipo Laboroteca`;
-  return enviarEmailPersonalizado(email, subject, html);
-}
-
-
-/**
  * EMAIL DE CONFIRMACIÓN PARA LA ELIMINACIÓN DE LA CUENTA
  */
 async function enviarEmailValidacionEliminacionCuenta(email, token) {
@@ -364,7 +345,6 @@ module.exports = {
   enviarAvisoCancelacion,
   enviarConfirmacionBajaClub,
   enviarEmailValidacionEliminacionCuenta,
-  enviarEmailPersonalizado,
-  enviarEmailSolicitudBajaVoluntaria
+  enviarEmailPersonalizado
 };
 

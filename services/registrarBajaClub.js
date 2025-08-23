@@ -6,9 +6,18 @@ const spreadsheetId = '1qM9pM-qkPlR6yCeX7eC8i2wBWmAOI1WIDncf8I7pHMM'; // Resumen
 const RANGE_BASE = 'Hoja 1';
 const RANGE_APPEND = `${RANGE_BASE}!A2`; // A..F
 
-function fmtES(iso) {
+  function fmtES(iso) {
   const d = iso ? new Date(iso) : new Date();
-  return d.toLocaleDateString('es-ES', { timeZone: 'Europe/Madrid' }); // dd/mm/aaaa
+  const parts = new Intl.DateTimeFormat('es-ES', {
+    timeZone: 'Europe/Madrid',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  }).formatToParts(d);
+  const dd = parts.find(p => p.type === 'day')?.value ?? '';
+  const mm = parts.find(p => p.type === 'month')?.value ?? '';
+  const yyyy = parts.find(p => p.type === 'year')?.value ?? '';
+  return `${dd}/${mm}/${yyyy}`; // XX/XX/XXXX
 }
 
 const VERIF = (v) => String(v || 'PENDIENTE').toUpperCase();

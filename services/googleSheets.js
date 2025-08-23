@@ -70,6 +70,21 @@ function normalizarImporte(str) {
   return Number.isFinite(n) ? n.toFixed(2) : s;
 }
 
+// Fecha siempre en formato XX/XX/XXXX (con ceros a la izquierda)
+function fmtES(dateLike) {
+  const d = dateLike ? new Date(dateLike) : new Date();
+  const parts = new Intl.DateTimeFormat('es-ES', {
+    timeZone: 'Europe/Madrid',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  }).formatToParts(d);
+  const dd = parts.find(p => p.type === 'day')?.value ?? '';
+  const mm = parts.find(p => p.type === 'month')?.value ?? '';
+  const yyyy = parts.find(p => p.type === 'year')?.value ?? '';
+  return `${dd}/${mm}/${yyyy}`;
+}
+
 // Siembra encabezados si faltan (no pisa los ya presentes)
 async function seedHeadersIfMissing(sheets, sheetId, header) {
   const map = { [UID_COL_INDEX]: 'uid', [GROUP_COL_INDEX]: 'groupid', [DUP_COL_INDEX]: 'duplicado' };

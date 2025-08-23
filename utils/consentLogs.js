@@ -1,9 +1,10 @@
 // utils/consentLogs.js
-// Guarda consentimientos (Política de Privacidad / Términos y Condiciones)
-// y sube snapshot HTML a GCS. Soporta dos modos:
-//  - per-version (actual): 1 fichero por versión
-//  - per-accept: 1 fichero por aceptación (carpeta versión / <acceptId>.html)
-// Añade en Firestore: privacyHash/termsHash + privacyBlobPath/termsBlobPath + *SnapshotOk
+// Registra consentimientos (Política de Privacidad / Términos) en Firestore
+// y sube snapshot HTML "per-accept" a GCS con metadatos para trazabilidad.
+// Guarda nombre y apellidos para búsquedas. Enlaza Firestore <-> GCS por blobPath único.
+// Dispara alertas a admin ante errores relevantes.
+
+'use strict';
 
 const admin = require('firebase-admin');
 const crypto = require('crypto');
@@ -13,378 +14,398 @@ const { URL } = require('url');
 const { alertAdmin } = require('./alertAdmin');
 
 // ───────────────────────────── Config ─────────────────────────────
-const SNAPSHOT_MODE = (process.env.CONSENT_SNAPSHOT_MODE || 'per-version').toLowerCase(); // 'per-version' | 'per-accept'
+const SNAPSHOT_MODE = (process.env.CONSENT_SNAPSHOT_MODE || 'per-accept').toLowerCase(); // 'per-accept' | 'per-version'
+const BUCKET_NAME =
+  (process.env.GCS_CONSENTS_BUCKET || process.env.GCS_BUCKET || process.env.GCLOUD_STORAGE_BUCKET || '').trim();
+
+const PROJECT_TIMEZONE = process.env.PROJECT_TZ || 'Europe/Madrid'; // usado para formateo de fecha visible
 
 // ───────────────────────────── Firebase Admin ─────────────────────────────
 if (!admin.apps.length) {
-  if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-    try {
-      const svc = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
-      admin.initializeApp({ credential: admin.credential.cert(svc) });
-    } catch (e) {
-      console.warn('⚠️ Firebase Admin init falló:', e?.message || e);
-      try {
-        alertAdmin({
-          area: 'consent_firebase_init',
-          email: '-',
-          err: e,
-          meta: { hasSvcVar: !!process.env.FIREBASE_SERVICE_ACCOUNT_JSON }
-        });
-      } catch (_) {}
-    }
-  }
-}
-function getDb() {
+  // La inicialización real se hace en tu módulo ../firebase, pero por seguridad:
   try {
-    return admin.firestore();
-  } catch (e) {
-    throw new Error('Firestore no inicializado (falta admin.initializeApp).');
-  }
-}
-let db;
-try {
-  db = getDb();
-} catch (e) {
-  try {
-    alertAdmin({
-      area: 'consent_db_init',
-      email: '-',
-      err: e,
-      meta: { appsLength: admin.apps.length }
-    });
-  } catch (_) {}
-  throw e;
+    admin.initializeApp();
+  } catch (_) { /* ignore */ }
 }
 
-// ───────────────────────────── GCS (opcional) ─────────────────────────────
-let Storage = null;
-try { ({ Storage } = require('@google-cloud/storage')); } catch {}
+const firestore = admin.firestore();
 
-const GCS_BUCKET =
-  process.env.GOOGLE_CLOUD_BUCKET ||
-  process.env.GCS_BUCKET ||
-  process.env.GCS_BUCKET_NAME ||
-  process.env.GCLOUD_STORAGE_BUCKET ||
-  '';
+// ───────────────────────────── Helpers ─────────────────────────────
+const safe = v => (v === undefined || v === null) ? '' : String(v);
 
-console.log('[CONSENT] GCS_BUCKET =', GCS_BUCKET || '(vacío)');
-console.log('[CONSENT] SNAPSHOT_MODE =', SNAPSHOT_MODE);
+const sha256Hex = (str) =>
+  crypto.createHash('sha256').update(String(str || ''), 'utf8').digest('hex');
 
-let storage = null;
-if (Storage) {
-  try {
-    let creds = null;
-
-    if (process.env.GCP_CREDENTIALS_BASE64) {
-      const raw = Buffer.from(process.env.GCP_CREDENTIALS_BASE64, 'base64').toString('utf8');
-      creds = JSON.parse(raw);
-      console.log('[CONSENT] usando credenciales de GCP_CREDENTIALS_BASE64');
-    } else if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-      creds = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
-      console.log('[CONSENT] usando credenciales de FIREBASE_SERVICE_ACCOUNT_JSON');
-    } else {
-      console.log('[CONSENT] usando ADC (GOOGLE_APPLICATION_CREDENTIALS o metadatos)');
-    }
-
-    storage = creds ? new Storage({ credentials: creds, projectId: creds.project_id }) : new Storage();
-  } catch (e) {
-    console.warn('[CONSENT] GCS creds parse/init error:', e?.message || e);
-    try {
-      storage = new Storage();
-    } catch {
-      storage = null;
-    }
-    try {
-      alertAdmin({
-        area: 'consent_gcs_init',
-        email: '-',
-        err: e,
-        meta: { hasBucket: !!GCS_BUCKET, hasLib: !!Storage }
-      });
-    } catch (_) {}
-  }
+function nowISO() {
+  return new Date().toISOString();
 }
 
-const BASE_PATH = 'consents';
-
-// ───────────────────────────── Utils ─────────────────────────────
-function sha256Hex(s) {
-  return crypto.createHash('sha256').update(String(s || ''), 'utf8').digest('hex');
-}
-function getIp(req) {
-  const fwd = String(req?.headers?.['x-forwarded-for'] || '');
-  return fwd ? fwd.split(',')[0].trim() : (req?.ip || req?.connection?.remoteAddress || '');
-}
-
-function fetchHtml(urlStr, timeoutMs = 10000) {
+/**
+ * Descarga HTML bruto de una URL (http/https)
+ */
+function fetchHtml(rawUrl) {
   return new Promise((resolve, reject) => {
-    if (!urlStr) return reject(new Error('URL vacía'));
-    let lib = https;
-    try {
-      const u = new URL(urlStr);
-      lib = u.protocol === 'http:' ? http : https;
-    } catch {
-      return reject(new Error(`URL inválida: ${urlStr}`));
-    }
+    if (!rawUrl) return reject(new Error('URL vacía para snapshot'));
+    let parsed;
+    try { parsed = new URL(rawUrl); } catch (e) { return reject(e); }
 
-    const req = lib.get(
-      urlStr,
-      {
-        headers: {
-          'User-Agent': 'LaborotecaBot/1.0 (+https://www.laboroteca.es)',
-          'Accept': 'text/html,application/xhtml+xml'
-        }
-      },
-      (res) => {
-        if (res.statusCode < 200 || res.statusCode >= 300) {
-          res.resume();
-          return reject(new Error(`HTTP ${res.statusCode} al descargar ${urlStr}`));
-        }
-        res.setEncoding('utf8');
-        let data = '';
-        res.on('data', (c) => (data += c));
-        res.on('end', () => resolve(data));
+    const mod = parsed.protocol === 'http:' ? http : https;
+    const req = mod.get(parsed, (res) => {
+      const ok = res.statusCode && res.statusCode >= 200 && res.statusCode < 300;
+      if (!ok) {
+        return reject(new Error(`HTTP ${res.statusCode} al descargar ${rawUrl}`));
       }
-    );
+      const chunks = [];
+      res.on('data', (d) => chunks.push(d));
+      res.on('end', () => resolve(Buffer.concat(chunks)));
+    });
+
     req.on('error', reject);
-    req.setTimeout(timeoutMs, () => req.destroy(new Error(`Timeout ${timeoutMs}ms en ${urlStr}`)));
+    req.setTimeout(15000, () => {
+      req.destroy(new Error('Timeout al descargar snapshot HTML'));
+    });
   });
 }
 
-// ───────────────────────────── Snapshots ─────────────────────────────
-async function ensureSnapshot({ type, version, url, htmlOverride, acceptId }) {
-  if (!GCS_BUCKET || !Storage || !storage) {
-    console.warn('[CONSENT] Modo degradado: bucket o @google-cloud/storage ausentes', {
-      hasBucket: !!GCS_BUCKET, hasLib: !!Storage, hasClient: !!storage
-    });
-    try {
-      await alertAdmin({
-        area: 'consent_snapshot_degraded',
-        email: '-',
-        err: new Error('Snapshot en modo degradado'),
-        meta: { type, version, url, hasBucket: !!GCS_BUCKET, hasLib: !!Storage, hasClient: !!storage },
-        dedupeKey: `consent:degraded:${type}:${version}`
-      });
-    } catch (_) {}
-    const basis = htmlOverride || url || `${type}:${version}`;
-    return { hash: 'sha256:' + sha256Hex(basis), blobPath: '', snapshotOk: false };
-  }
-
-  const bucket = storage.bucket(GCS_BUCKET);
-  const folder = (type === 'pp') ? 'politica-privacidad' : 'terminos-condiciones';
-
-  let blobPath;
-  if (SNAPSHOT_MODE === 'per-accept') {
-    // Un fichero por aceptación dentro de la carpeta de versión
-    const safeAccept = (acceptId && /^[a-zA-Z0-9_-]+$/.test(acceptId))
-      ? acceptId
-      : new Date().toISOString().replace(/[:.]/g, '-');
-    blobPath = `${BASE_PATH}/${folder}/${version}/${safeAccept}.html`;
-  } else {
-    // Comportamiento anterior: 1 fichero por versión
-    blobPath = `${BASE_PATH}/${folder}/${version}.html`;
-  }
-
-  const file = bucket.file(blobPath);
-
+/**
+ * Devuelve bucket de GCS (o null si no hay nombre)
+ */
+function getBucket() {
+  if (!BUCKET_NAME) return null;
   try {
-    console.log('[CONSENT] Intentando subir snapshot', { type, version, bucket: GCS_BUCKET, SNAPSHOT_MODE });
-
-    let content = '';
-
-    if (SNAPSHOT_MODE === 'per-version') {
-      // Si ya existe, devolvemos su hash (no reescribimos)
-      const [exists] = await file.exists();
-      if (exists) {
-        const [buf] = await file.download();
-        content = buf.toString('utf8');
-        return { hash: 'sha256:' + sha256Hex(content), blobPath, snapshotOk: true };
-      }
-    }
-
-    // per-accept (siempre sube) o per-version (cuando no existía)
-    content = htmlOverride || (url ? await fetchHtml(url) : '');
-    if (!content) {
-      return { hash: 'sha256:' + sha256Hex(`${type}:${version}:${url || ''}`), blobPath: '', snapshotOk: false };
-    }
-
-    await file.save(content, {
-      resumable: false,
-      contentType: 'text/html; charset=utf-8',
-      metadata: { cacheControl: 'public, max-age=31536000' }
-    });
-
-    return { hash: 'sha256:' + sha256Hex(content), blobPath, snapshotOk: true };
+    return admin.storage().bucket(BUCKET_NAME);
   } catch (e) {
-    console.warn(`⚠️ Snapshot ${type}/${version} fallo:`, e?.message || e);
-    try {
-      await alertAdmin({
-        area: 'consent_snapshot_fail',
-        email: '-',
-        err: e,
-        meta: { type, version, url, bucket: GCS_BUCKET, path: blobPath },
-        dedupeKey: `consent:snapshotFail:${type}:${version}`
-      });
-    } catch (_) {}
-    return { hash: 'sha256:' + sha256Hex(`${type}:${version}:${url || ''}`), blobPath: '', snapshotOk: false };
+    return null;
   }
 }
 
-// ───────────────────────────── Guardar consentimiento ─────────────────────────────
-async function logConsent(opts = {}) {
+/**
+ * Sube un HTML a GCS con metadatos
+ */
+async function uploadHtmlToGCS({ path, htmlBuffer, metadata }) {
+  const bucket = getBucket();
+  if (!bucket) {
+    throw new Error('No hay bucket configurado para consents (GCS_CONSENTS_BUCKET/GCS_BUCKET).');
+  }
+  const file = bucket.file(path);
+  await file.save(htmlBuffer, {
+    resumable: false,
+    contentType: 'text/html; charset=utf-8',
+    metadata: {
+      metadata: {
+        ...metadata,
+      },
+    },
+    public: false,
+    validation: 'md5',
+  });
+  return path;
+}
+
+/**
+ * Genera HTML de snapshot con una cabecera mínima de auditoría
+ */
+function buildSnapshotHtml({ rawHtmlBuffer, title, acceptedAtISO, email, ip, userAgent, extra = {} }) {
+  const raw = rawHtmlBuffer ? rawHtmlBuffer.toString('utf8') : '';
+  const banner = `
+<!doctype html><html lang="es"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Snapshot: ${title || ''}</title>
+</head><body>
+<!-- Snapshot Laboroteca (solo evidencia) -->
+<div style="border:1px solid #ddd;padding:12px;margin:12px 0;font-family:system-ui,Segoe UI,Arial,sans-serif;font-size:14px;background:#fafafa">
+  <div><strong>Este es un snapshot de evidencia</strong> (no operativo).</div>
+  <div>Acceptado: <code>${acceptedAtISO}</code></div>
+  <div>Email: <code>${email || ''}</code> · IP: <code>${ip || ''}</code></div>
+  <div>User-Agent: <code>${userAgent || ''}</code></div>
+  <div>Extra: <code>${JSON.stringify(extra)}</code></div>
+</div>
+<hr>
+`;
+  // Insertamos el HTML original tal cual tras el banner
+  // Cerramos body/html solo si el original no lo hiciera
+  const suffix = raw.includes('</body>') ? '' : '</body>';
+  const suffix2 = raw.includes('</html>') ? '' : '</html>';
+  return Buffer.from(banner + raw + suffix + suffix2, 'utf8');
+}
+
+/**
+ * Normaliza inputs básicos
+ */
+function normalizeInput(payload = {}) {
   const {
-    uid = null,
-    email = '',
-    termsUrl = '',
-    privacyUrl = '',
-    termsVersion = '',
-    privacyVersion = '',
-    checkboxes = { terms: true, privacy: true },
-    source = '',
-    sessionId = '',
-    paymentIntentId = '',
-    req = null,
-    extras = {},
-    termsHtml,
-    privacyHtml
-  } = opts;
+    // identidad
+    email,
+    nombre,
+    apellidos,
+    userId,
 
-  const ip = req ? getIp(req) : '';
-  const userAgent = req ? (req.headers['user-agent'] || '') : '';
-  const emailLower = (email || '').toLowerCase();
+    // contexto formulario / producto
+    formularioId,
+    tipoProducto,
+    nombreProducto,
+    descripcionProducto,
 
-  // Creamos el docRef primero para usar su id como acceptId (único y estable)
-  const docRef = db.collection('consentLogs').doc();
-  const acceptId = docRef.id;
-
-  // Snapshots (pasan acceptId cuando SNAPSHOT_MODE=per-accept, inofensivo en per-version)
-  const pp  = await ensureSnapshot({
-    type: 'pp',
-    version: privacyVersion,
-    url: privacyUrl,
-    htmlOverride: privacyHtml,
-    acceptId
-  });
-  const tos = await ensureSnapshot({
-    type: 'tos',
-    version: termsVersion,
-    url: termsUrl,
-    htmlOverride: termsHtml,
-    acceptId
-  });
-
-  const data = {
-    userId: uid || null,
-    email: emailLower,
-    acceptedAt: admin.firestore.FieldValue.serverTimestamp(),
-    termsUrl, privacyUrl, termsVersion, privacyVersion,
-
-    privacyHash: pp.hash,
-    privacyBlobPath: pp.blobPath,
-    privacySnapshotOk: !!pp.snapshotOk,
-    termsHash: tos.hash,
-    termsBlobPath: tos.blobPath,
-    termsSnapshotOk: !!tos.snapshotOk,
-
-    ip,
-    userAgent,
-    source,
+    // técnicos
     sessionId,
     paymentIntentId,
+    userAgent,
+    ip,
+    source,
 
-    checkboxes: { terms: !!(checkboxes?.terms), privacy: !!(checkboxes?.privacy) },
-    ...extras
+    // consentimiento
+    checkboxes = { privacy: true, terms: true },
+    acceptedAt, // Date | ISO | timestamp | undefined
+
+    // versiones de documentos
+    privacyUrl,
+    privacyVersion,
+    termsUrl,
+    termsVersion,
+
+    // índice/hash externo opcional
+    idx,
+  } = payload;
+
+  // Fecha aceptación
+  let acceptedAtISO = nowISO();
+  try {
+    if (acceptedAt instanceof Date) acceptedAtISO = acceptedAt.toISOString();
+    else if (typeof acceptedAt === 'string' && acceptedAt) acceptedAtISO = new Date(acceptedAt).toISOString();
+    else if (typeof acceptedAt === 'number') acceptedAtISO = new Date(acceptedAt).toISOString();
+  } catch (_) { /* use now */ }
+
+  const doc = {
+    email: safe(email).toLowerCase().trim(),
+    nombre: safe(nombre).trim(),
+    apellidos: safe(apellidos).trim(),
+    userId: safe(userId),
+
+    formularioId: safe(formularioId),
+    tipoProducto: safe(tipoProducto),
+    nombreProducto: safe(nombreProducto),
+    descripcionProducto: safe(descripcionProducto),
+
+    sessionId: safe(sessionId),
+    paymentIntentId: safe(paymentIntentId),
+    userAgent: safe(userAgent),
+    ip: safe(ip),
+    source: safe(source),
+
+    checkboxes: {
+      privacy: !!(checkboxes && (checkboxes.privacy !== false)),
+      terms: !!(checkboxes && (checkboxes.terms !== false)),
+    },
+
+    acceptedAt: admin.firestore.Timestamp.fromDate(new Date(acceptedAtISO)),
+    acceptedAtISO, // campo redundante útil para logs rápidos
+
+    privacyUrl: safe(privacyUrl),
+    privacyVersion: safe(privacyVersion),
+    termsUrl: safe(termsUrl),
+    termsVersion: safe(termsVersion),
+
+    idx: safe(idx),
+
+    // se completan tras subir snapshots:
+    privacyBlobPath: '',
+    privacyHash: '',
+    privacySnapshotOk: false,
+
+    termsBlobPath: '',
+    termsHash: '',
+    termsSnapshotOk: false,
   };
 
-  const fingerprint = sha256Hex([
-    data.email,
-    uid,
-    termsVersion,
-    privacyVersion,
-    source,
-    sessionId,
-    paymentIntentId
-  ].join('|'));
+  // Hash de versión (contenido URL) a nivel de texto, como traías
+  if (doc.privacyUrl) doc.privacyHash = `sha256:${sha256Hex(doc.privacyUrl)}`;
+  if (doc.termsUrl) doc.termsHash = `sha256:${sha256Hex(doc.termsUrl)}`;
 
-  const idxRef = db.collection('consentLogs_idx').doc(fingerprint);
+  return doc;
+}
 
-  const batch = db.batch();
-  batch.set(docRef, { ...data, idx: fingerprint });
-  batch.set(idxRef, {
-    lastAt: admin.firestore.FieldValue.serverTimestamp(),
-    ref: docRef.id,
-    idx: fingerprint,
-    hash: fingerprint,
-    email: data.email,
-    userId: data.userId,
-    termsVersion,
-    privacyVersion,
-    source,
-    sessionId: data.sessionId,
-    paymentIntentId: data.paymentIntentId
-  }, { merge: true });
+// ───────────────────────────── Core ─────────────────────────────
 
-  if (uid) {
-    const userRef = db.collection('users').doc(uid).collection('consents').doc(docRef.id);
-    batch.set(userRef, { ...data, idx: fingerprint });
-  }
+/**
+ * Registra consentimiento y sube snapshots a GCS (per-accept por defecto)
+ * @param {object} payload  Campos descritos en normalizeInput + urls y versiones
+ * @returns {Promise<{docId: string, privacyBlobPath?: string, termsBlobPath?: string}>}
+ */
+async function registrarConsentimiento(payload) {
+  const data = normalizeInput(payload);
 
-  // ✅ Validación de campos críticos antes del commit (no bloquea)
-  if (!data.email || !data.privacyHash || !data.termsHash || !data.privacyVersion || !data.termsVersion) {
-    try {
-      await alertAdmin({
-        area: 'consent_log_incomplete',
-        email: data.email || '-',
-        err: new Error('Campos críticos de consentimiento vacíos'),
-        meta: {
-          email: data.email,
-          uid: data.userId,
-          termsVersion: data.termsVersion,
-          privacyVersion: data.privacyVersion,
-          privacyHash: data.privacyHash,
-          termsHash: data.termsHash,
-          checkboxes: data.checkboxes,
-          source: data.source,
-          sessionId: data.sessionId,
-          paymentIntentId: data.paymentIntentId
-        }
-      });
-    } catch (_) { /* no-op */ }
-  }
+  // 1) Crear doc inicial en Firestore (para obtener docId y usarlo en la ruta del HTML)
+  const col = firestore.collection('consentLogs');
+  const initialDocRef = col.doc(); // id aleatorio
+  const consentDocId = initialDocRef.id;
 
-  try {
-    await batch.commit();
-  } catch (e) {
-    try {
-      await alertAdmin({
-        area: 'consent_log_commit',
-        email: emailLower || '-',
-        err: e,
-        meta: {
-          uid,
-          termsVersion,
-          privacyVersion,
-          source,
-          sessionId,
-          paymentIntentId,
-          privacySnapshotOk: !!pp.snapshotOk,
-          termsSnapshotOk: !!tos.snapshotOk
-        },
-        dedupeKey: `consent:commit:${fingerprint}`
-      });
-    } catch (_) {}
+  // Guardado inicial (sin blobPath aún)
+  await initialDocRef.set({
+    ...data,
+    insertadoEn: nowISO(),
+  }).catch(async (e) => {
+    await alertAdmin(`❌ Error al crear doc de consentLogs (${data.email}): ${e.message}`);
     throw e;
+  });
+
+  // 2) Decidir fileId para snapshots por aceptación
+  const fileId = data.idx || consentDocId; // preferimos tu idx si existe
+
+  // 3) Si hay bucket, intentar snapshots
+  let privacyBlobPath = '';
+  let termsBlobPath = '';
+  let privacySnapshotOk = false;
+  let termsSnapshotOk = false;
+
+  if (getBucket()) {
+    // PRIVACY
+    try {
+      if (data.privacyUrl && data.privacyVersion) {
+        const rawHtml = await fetchHtml(data.privacyUrl);
+        const htmlBuf = buildSnapshotHtml({
+          rawHtmlBuffer: rawHtml,
+          title: `Política de Privacidad v${data.privacyVersion}`,
+          acceptedAtISO: data.acceptedAtISO,
+          email: data.email,
+          ip: data.ip,
+          userAgent: data.userAgent,
+          extra: {
+            docId: consentDocId,
+            idx: data.idx,
+            formularioId: data.formularioId,
+            version: data.privacyVersion,
+          },
+        });
+
+        // rutas: per-accept / per-version
+        const path =
+          (SNAPSHOT_MODE === 'per-version')
+            ? `consents/politica-privacidad/${data.privacyVersion}.html`
+            : `consents/politica-privacidad/${data.privacyVersion}/${fileId}.html`;
+
+        await uploadHtmlToGCS({
+          path,
+          htmlBuffer: htmlBuf,
+          metadata: {
+            kind: 'privacy',
+            email: data.email,
+            consentDocId,
+            idx: data.idx,
+            ip: data.ip,
+            formularioId: data.formularioId,
+            version: data.privacyVersion,
+            source: data.source,
+            userId: data.userId,
+          },
+        });
+
+        privacyBlobPath = path;
+        privacySnapshotOk = true;
+      }
+    } catch (e) {
+      await alertAdmin(`⚠️ Error subiendo snapshot PRIVACY a GCS (${data.email}): ${e.message}`);
+    }
+
+    // TERMS
+    try {
+      if (data.termsUrl && data.termsVersion) {
+        const rawHtml = await fetchHtml(data.termsUrl);
+        const htmlBuf = buildSnapshotHtml({
+          rawHtmlBuffer: rawHtml,
+          title: `Términos y Condiciones v${data.termsVersion}`,
+          acceptedAtISO: data.acceptedAtISO,
+          email: data.email,
+          ip: data.ip,
+          userAgent: data.userAgent,
+          extra: {
+            docId: consentDocId,
+            idx: data.idx,
+            formularioId: data.formularioId,
+            version: data.termsVersion,
+          },
+        });
+
+        const path =
+          (SNAPSHOT_MODE === 'per-version')
+            ? `consents/terminos-condiciones/${data.termsVersion}.html`
+            : `consents/terminos-condiciones/${data.termsVersion}/${fileId}.html`;
+
+        await uploadHtmlToGCS({
+          path,
+          htmlBuffer: htmlBuf,
+          metadata: {
+            kind: 'terms',
+            email: data.email,
+            consentDocId,
+            idx: data.idx,
+            ip: data.ip,
+            formularioId: data.formularioId,
+            version: data.termsVersion,
+            source: data.source,
+            userId: data.userId,
+          },
+        });
+
+        termsBlobPath = path;
+        termsSnapshotOk = true;
+      }
+    } catch (e) {
+      await alertAdmin(`⚠️ Error subiendo snapshot TERMS a GCS (${data.email}): ${e.message}`);
+    }
+  } else {
+    // No hay bucket -> avisamos una sola vez por aceptación
+    await alertAdmin(`ℹ️ Consentimiento sin snapshot (sin bucket): ${data.email} · docId=${consentDocId}`);
+  }
+
+  // 4) Actualizar doc con blob paths + flags (y asegurar nombre/apellidos)
+  const updatePayload = {
+    privacyBlobPath: privacyBlobPath || data.privacyBlobPath || '',
+    privacySnapshotOk: privacySnapshotOk,
+    termsBlobPath: termsBlobPath || data.termsBlobPath || '',
+    termsSnapshotOk: termsSnapshotOk,
+
+    // garantizamos que se guardan nombre y apellidos (para tus búsquedas)
+    nombre: data.nombre,
+    apellidos: data.apellidos,
+  };
+
+  await initialDocRef.update(updatePayload).catch(async (e) => {
+    await alertAdmin(`❌ Error actualizando consentLogs (blobPaths) ${consentDocId}: ${e.message}`);
+    throw e;
+  });
+
+  // 5) Índice secundario opcional (para búsquedas rápidas)
+  try {
+    const idxCol = firestore.collection('consentLogs_idx');
+    await idxCol.doc(consentDocId).set({
+      email: data.email,
+      nombreCompleto: `${data.nombre} ${data.apellidos}`.trim(),
+      acceptedAt: admin.firestore.Timestamp.fromDate(new Date(data.acceptedAtISO)),
+      consentId: consentDocId,
+      formularioId: data.formularioId,
+      idx: data.idx || '',
+      privacyVersion: data.privacyVersion,
+      termsVersion: data.termsVersion,
+      createdAt: nowISO(),
+    }, { merge: false });
+  } catch (e) {
+    await alertAdmin(`⚠️ Error creando índice consentLogs_idx para ${consentDocId}: ${e.message}`);
+    // no interrumpimos el flujo principal
+  }
+
+  // 6) Señal final si faltó algún snapshot cuando debía
+  if ((data.privacyUrl && !privacySnapshotOk) || (data.termsUrl && !termsSnapshotOk)) {
+    await alertAdmin(`⚠️ Consent regist. con snapshots incompletos: email=${data.email}, docId=${consentDocId}, privacyOk=${privacySnapshotOk}, termsOk=${termsSnapshotOk}`);
   }
 
   return {
-    id: docRef.id,
-    idx: fingerprint,
-    privacyHash: pp.hash,
-    termsHash: tos.hash,
-    privacyBlobPath: pp.blobPath,
-    termsBlobPath: tos.blobPath,
-    snapshotOk: !!pp.snapshotOk && !!tos.snapshotOk
+    docId: consentDocId,
+    privacyBlobPath,
+    termsBlobPath,
   };
 }
 
-module.exports = { logConsent };
+// ───────────────────────────── Exports ─────────────────────────────
+module.exports = {
+  registrarConsentimiento,
+};

@@ -7,16 +7,26 @@ const { alertAdmin } = require('../utils/alertAdmin');
  * @param {Object} opciones - { to, subject, html, text, pdfBuffer, enviarACopy, attachments }
  * @returns {Promise<string>}
  */
-async function enviarEmailPersonalizado({ to, subject, html, text, pdfBuffer = null, enviarACopy = false, attachments = [] }) {
+async function enviarEmailPersonalizado({
+  to,
+  subject,
+  html,
+  text,
+  pdfBuffer = null,
+  enviarACopy = false,
+  attachments = []
+}) {
   const destinatarios = Array.isArray(to) ? [...to] : [to];
+
+  // Copia al admin opcional controlada por env
   const SEND_ADMIN_COPY = String(process.env.SEND_ADMIN_COPY || 'false').toLowerCase() === 'true';
   if (enviarACopy && SEND_ADMIN_COPY && !destinatarios.includes('laboroteca@gmail.com')) {
     destinatarios.push('laboroteca@gmail.com');
   }
 
   const pieHtml = `
-    <hr style="margin-top: 40px; margin-bottom: 10px;" />
-    <div style="font-size: 12px; color: #777; line-height: 1.5;">
+    <hr style="margin-top:40px;margin-bottom:10px;" />
+    <div style="font-size:12px;color:#777;line-height:1.5;">
       En cumplimiento del Reglamento (UE) 2016/679, le informamos que su dirección de correo electrónico forma parte de la base de datos de Ignacio Solsona Fernández-Pedrera, DNI 20481042W, con domicilio en calle Enmedio nº 22, piso 3, puerta E, Castellón de la Plana, CP 12001.<br /><br />
       Su dirección se utiliza con la finalidad de prestarle servicios jurídicos. Usted tiene derecho a retirar su consentimiento en cualquier momento.<br /><br />
       Puede ejercer sus derechos de acceso, rectificación, supresión, portabilidad, limitación y oposición contactando con: laboroteca@gmail.com. También puede presentar una reclamación ante la autoridad de control competente.
@@ -40,18 +50,22 @@ También puede reclamar ante la autoridad de control si lo considera necesario.
     text_body: text + '\n\n' + pieText
   };
 
-  // Adjuntos
+  // Adjuntos: prioriza attachments explícitos; si no, adjunta el PDF si existe
   if (Array.isArray(attachments) && attachments.length > 0) {
     body.attachments = attachments;
   } else if (pdfBuffer && Buffer.isBuffer(pdfBuffer) && pdfBuffer.length > 5000) {
-    body.attachments = [{
-      filename: 'Factura Laboroteca.pdf',
-      fileblob: pdfBuffer.toString('base64'),
-      mimetype: 'application/pdf'
-    }];
+    body.attachments = [
+      {
+        filename: 'Factura Laboroteca.pdf',
+        fileblob: pdfBuffer.toString('base64'),
+        mimetype: 'application/pdf'
+      }
+    ];
   }
 
-  let response, resultado, successReal;
+  let response;
+  let resultado;
+  let successReal;
 
   try {
     response = await fetch('https://api.smtp2go.com/v3/email/send', {
@@ -70,7 +84,10 @@ También puede reclamar ante la autoridad de control si lo considera necesario.
     successReal = resultado?.data?.succeeded === 1 && resultado?.data?.failed === 0;
 
     if (!resultado.success && !successReal) {
-      console.error('Error real desde SMTP2GO:', typeof resultado.raw === 'string' ? resultado.raw : JSON.stringify(resultado, null, 2));
+      console.error(
+        'Error real desde SMTP2GO:',
+        typeof resultado.raw === 'string' ? resultado.raw : JSON.stringify(resultado, null, 2)
+      );
 
       try {
         await alertAdmin({
@@ -94,10 +111,7 @@ También puede reclamar ante la autoridad de control si lo considera necesario.
         area: 'smtp2go_network',
         email: Array.isArray(to) ? to.join(', ') : to,
         err: e,
-        meta: {
-          subject,
-          provider: 'smtp2go'
-        }
+        meta: { subject, provider: 'smtp2go' }
       });
     } catch (_) {}
     throw e;
@@ -112,20 +126,27 @@ También puede reclamar ante la autoridad de control si lo considera necesario.
   return 'OK';
 }
 
-// ENVÍO DE FACTURA (Club: ALTA/RENOVACIÓN; Otros productos: no entradas)
+/** Utilidad: formatea € con coma */
+function euros(v) {
+  return typeof v === 'number' ? `${Number(v).toFixed(2).replace('.', ',')} €` : 'importe no disponible';
+}
+
+/**
+ * ENVÍO DE FACTURA (Club: ALTA/RENOVACIÓN; otros productos —no entradas—)
+ */
 async function enviarFacturaPorEmail(datos, pdfBuffer) {
   const email = datos.email;
-  const importeTexto = datos.importe ? `${Number(datos.importe).toFixed(2)} €` : 'importe no disponible';
+  const importeTexto = euros(datos.importe);
   const nombre = datos.nombre || '';
 
   const esClub =
-    (datos.tipoProducto && datos.tipoProducto.toString().toLowerCase() === 'club') ||
+    (datos.tipoProducto && String(datos.tipoProducto).toLowerCase() === 'club') ||
     [datos.producto, datos.nombreProducto, datos.descripcionProducto]
       .filter(Boolean)
-      .map(s => s.toString().toLowerCase())
+      .map(s => String(s).toLowerCase())
       .some(s => s.includes('club laboroteca'));
 
-  const etiqueta = `${datos.nombreProducto || ''} ${datos.descripcionProducto || ''}`.toLowerCase();
+  const etiqueta = `${String(datos.nombreProducto || '')} ${String(datos.descripcionProducto || '')}`.toLowerCase();
   const esAltaClub = esClub && /(alta y primera cuota|alta)/i.test(etiqueta);
   const esRenovClub = esClub && /(renovación mensual|renovacion mensual|subscription_cycle|renovación)/i.test(etiqueta);
 
@@ -136,60 +157,66 @@ async function enviarFacturaPorEmail(datos, pdfBuffer) {
   let text = '';
 
   if (esClub && esAltaClub) {
+    // ALTA INICIAL
     subject = 'Tu suscripción al Club Laboroteca está activada';
     html = `
-      <div style="font-family: Arial, sans-serif; font-size: 16px; color: #333;">
+      <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;">
         <p>Estimado ${nombre || 'cliente'},</p>
         <p>Ya tienes activada tu suscripción al Club Laboroteca. Puedes acceder a todo el contenido exclusivo a través de https://www.laboroteca.es/club-laboroteca/.</p>
         <p>Adjunto a este correo la factura correspondiente a tu suscripción mensual.</p>
-        <p>Importe: <strong>${importeTexto}</strong></p>
-        <p>Muchas gracias por pertenecer al Club Laboroteca.</p>
+        <p>Importe: ${importeTexto}</p>
+        <p><strong>Muchas gracias por pertenecer al Club Laboroteca.</strong></p>
+        <p>(Recuerda que en cualquier momento puedes cancelar tu suscripción sin ninguna penalización en: https://www.laboroteca.es/cancelar-suscripcion-club-laboroteca/)</p>
         <p>Ignacio Solsona<br/>Abogado</p>
       </div>`;
     text = `Estimado ${nombre || 'cliente'},
-
 Ya tienes activada tu suscripción al Club Laboroteca. Puedes acceder a todo el contenido exclusivo a través de https://www.laboroteca.es/club-laboroteca/.
 Adjunto a este correo la factura correspondiente a tu suscripción mensual.
 Importe: ${importeTexto}
 
 Muchas gracias por pertenecer al Club Laboroteca.
+(Recuerda que en cualquier momento puedes cancelar tu suscripción sin ninguna penalización en: https://www.laboroteca.es/cancelar-suscripcion-club-laboroteca/)
 Ignacio Solsona
 Abogado`;
   } else if (esClub && esRenovClub) {
+    // RENOVACIÓN
     subject = 'Se ha renovado tu suscripción al Club Laboroteca';
     html = `
-      <div style="font-family: Arial, sans-serif; font-size: 16px; color: #333;">
+      <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;">
         <p>Estimado ${nombre || 'cliente'},</p>
         <p>Se ha renovado tu suscripción al Club Laboroteca. Puedes acceder a todo el contenido exclusivo a través de https://www.laboroteca.es/club-laboroteca/.</p>
         <p>Adjunto a este correo la factura correspondiente a tu suscripción mensual.</p>
-        <p>Importe: <strong>${importeTexto}</strong></p>
-        <p>Muchas gracias por pertenecer al Club Laboroteca.</p>
+        <p>Importe: ${importeTexto}</p>
+        <p><strong>Muchas gracias por pertenecer al Club Laboroteca.</strong></p>
+        <p>(Recuerda que en cualquier momento puedes cancelar tu suscripción sin ninguna penalización en: https://www.laboroteca.es/cancelar-suscripcion-club-laboroteca/)</p>
         <p>Ignacio Solsona<br/>Abogado</p>
       </div>`;
     text = `Estimado ${nombre || 'cliente'},
-
 Se ha renovado tu suscripción al Club Laboroteca. Puedes acceder a todo el contenido exclusivo a través de https://www.laboroteca.es/club-laboroteca/.
 Adjunto a este correo la factura correspondiente a tu suscripción mensual.
 Importe: ${importeTexto}
 
 Muchas gracias por pertenecer al Club Laboroteca.
+(Recuerda que en cualquier momento puedes cancelar tu suscripción sin ninguna penalización en: https://www.laboroteca.es/cancelar-suscripcion-club-laboroteca/)
 Ignacio Solsona
 Abogado`;
   } else {
+    // OTROS PRODUCTOS (NO entradas)
     subject = `Has comprado ${nombreProductoMostrar}`;
     html = `
-      <div style="font-family: Arial, sans-serif; font-size: 16px; color: #333;">
+      <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;">
         <p>Hola ${nombre || 'cliente'},</p>
-        <p>Gracias por tu compra. Ya tienes acceso a ${nombreProductoMostrar}. Puedes acceder desde:</p>
-        <p>www.laboroteca.es/mi-cuenta</p>
+        <p>Gracias por tu compra.</p>
+        <p><strong>${nombreProductoMostrar}.</strong></p>
+        <p>Puedes acceder a tu contenido desde: www.laboroteca.es/mi-cuenta</p>
         <p>Adjuntamos en este correo la factura correspondiente al producto:</p>
-        <p>Importe: <strong>${importeTexto}</strong></p>
+        <p>Importe: ${importeTexto}</p>
         <p>Un afectuoso saludo,<br/>Ignacio Solsona<br/>Abogado</p>
       </div>`;
     text = `Hola ${nombre || 'cliente'},
-
-Gracias por tu compra. Ya tienes acceso a ${nombreProductoMostrar}. Puedes acceder desde:
-www.laboroteca.es/mi-cuenta
+Gracias por tu compra.
+${nombreProductoMostrar}.
+Puedes acceder a tu contenido desde: www.laboroteca.es/mi-cuenta
 Adjuntamos en este correo la factura correspondiente al producto:
 Importe: ${importeTexto}
 
@@ -203,13 +230,18 @@ Abogado`;
     subject,
     html,
     text,
-    pdfBuffer,            // ← pasa el PDF a la función que realmente envía
+    pdfBuffer, // adjunta la factura siempre que llegue
     enviarACopy: false
   });
 }
 
 // AVISO DE IMPAGO
-async function enviarAvisoImpago(email, nombre, intento, enlacePago = "https://www.laboroteca.es/membresia-club-laboroteca/") {
+async function enviarAvisoImpago(
+  email,
+  nombre,
+  intento,
+  enlacePago = 'https://www.laboroteca.es/membresia-club-laboroteca/'
+) {
   const subject = 'Tu suscripción al Club Laboroteca ha sido cancelada por impago';
   const html = `
     <p>Hola ${nombre || ''},</p>
@@ -231,7 +263,7 @@ Si crees que se trata de un error, revisa tu método de pago o tarjeta.`;
   return enviarEmailPersonalizado({ to: email, subject, html, text });
 }
 
-// CANCELACIÓN POR IMPAGO (no-op para evitar duplicados)
+// CANCELACIÓN POR IMPAGO (evitar duplicados de correos)
 async function enviarAvisoCancelacion(email, nombre, enlacePago) {
   console.log('enviarAvisoCancelacion omitido (duplicación evitada)');
   return 'OK';
@@ -245,7 +277,7 @@ async function enviarConfirmacionBajaClub(email, nombre = '') {
     <p><strong>Te confirmamos que se ha cursado correctamente tu baja del Club Laboroteca</strong>.</p>
     <p>Puedes volver a hacerte miembro en cualquier momento, por el mismo precio y sin compromiso de permanencia.</p>
     <p>Reactivar: https://www.laboroteca.es/membresia-club-laboroteca/</p>
-    <p>Un saludo,<br>Laboroteca</p>`;
+    <p>Un saludo,<br/>Laboroteca</p>`;
   const text = `Hola ${nombre},
 
 Te confirmamos que se ha cursado correctamente tu baja del Club Laboroteca.
@@ -253,7 +285,7 @@ Te confirmamos que se ha cursado correctamente tu baja del Club Laboroteca.
 Puedes volver a hacerte miembro en cualquier momento, por el mismo precio y sin compromiso de permanencia.
 Reactivar: https://www.laboroteca.es/membresia-club-laboroteca/
 
-Un saludo,
+Un saludo
 Laboroteca`;
 
   return enviarEmailPersonalizado({ to: [email], subject, html, text, enviarACopy: false });
@@ -267,40 +299,42 @@ async function enviarAvisoCancelacionManual(email, nombre = '') {
     <p>Tu suscripción al Club Laboroteca ha sido cancelada.</p>
     <p>Puedes volver a hacerte miembro cuando quieras, por el mismo precio y sin compromiso de permanencia.</p>
     <p>Reactivar: https://www.laboroteca.es/membresia-club-laboroteca/</p>
-    <p>Un saludo,<br>Laboroteca</p>
-  `;
+    <p>Un saludo,<br/>Laboroteca</p>`;
   const text = `Hola ${nombre},
 
 Tu suscripción al Club Laboroteca ha sido cancelada manualmente.
 Puedes volver a hacerte miembro cuando quieras, por el mismo precio y sin compromiso de permanencia.
 Reactivar: https://www.laboroteca.es/membresia-club-laboroteca/
 
-Un saludo,
+Un saludo
 Laboroteca`;
 
-  return enviarEmailPersonalizado({
-    to: [email],
-    subject,
-    html,
-    text,
-  });
+  return enviarEmailPersonalizado({ to: [email], subject, html, text });
 }
 
-// EMAIL VALIDACIÓN ELIMINACIÓN CUENTA
+/**
+ * EMAIL DE CONFIRMACIÓN PARA LA ELIMINACIÓN DE LA CUENTA
+ */
 async function enviarEmailValidacionEliminacionCuenta(email, token) {
   const enlace = `https://www.laboroteca.es/confirmar-eliminacion-cuenta/?token=${token}`;
-  const subject = 'Confirmación de eliminación de tu cuenta en Laboroteca';
+  const subject = 'Confirma la eliminación de tu cuenta en Laboroteca';
   const html = `
     <p>Hola,</p>
-    <p>Has solicitado eliminar tu cuenta en Laboroteca. Para confirmar esta acción, pulsa en el siguiente enlace:</p>
-    <p><a href="${enlace}" style="font-weight: bold;">Confirmar eliminación de cuenta</a></p>
-    <p>Si no has solicitado esta acción, ignora este correo. El enlace caducará en 2 horas.</p>`;
-  const text = `Has solicitado eliminar tu cuenta en Laboroteca.
+    <p>Has solicitado eliminar tu cuenta en Laboroteca. Necesitamos que confirmes que has sido tú quien lo ha solicitado. Si estás suscrito al Club Laboroteca, se eliminará también tu membresía.</p>
+    <p>Para confirmar la eliminación, pulsa en el siguiente enlace:</p>
+    <p><a href="${enlace}" style="font-weight:bold;">Confirmar eliminación de cuenta</a></p>
+    <p>Si no has solicitado esta acción, ignora este correo. El enlace caducará en 2 horas.</p>
+    <p>Un saludo<br/>Laboroteca</p>`;
+  const text = `Hola,
 
-Para confirmar esta acción, accede a este enlace (válido 2 horas):
-${enlace}
+Has solicitado eliminar tu cuenta en Laboroteca. Necesitamos que confirmes que has sido tú quien lo ha solicitado. Si estás suscrito al Club Laboroteca, se eliminará también tu membresía.
 
-Si no lo has solicitado tú, ignora este mensaje.`;
+Para confirmar la eliminación, pulsa en el siguiente enlace:
+Confirmar eliminación de cuenta -> ${enlace}
+
+Si no has solicitado esta acción, ignora este correo. El enlace caducará en 2 horas.
+Un saludo
+Laboroteca`;
 
   return enviarEmailPersonalizado({ to: email, subject, html, text, enviarACopy: false });
 }
@@ -313,3 +347,4 @@ module.exports = {
   enviarEmailValidacionEliminacionCuenta,
   enviarEmailPersonalizado
 };
+

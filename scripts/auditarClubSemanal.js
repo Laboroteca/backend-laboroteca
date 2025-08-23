@@ -6,7 +6,8 @@
 const { google } = require('googleapis');
 const admin = require('../firebase'); // inicialización Firebase Admin en tu proyecto
 const firestore = admin.firestore();
-const { enviarEmailPersonalizado } = require('../services/email');
+// Lazy import para evitar warnings por dependencias circulares
+// (no importamos hasta el momento de enviar)
 
 // ───────────── Config ─────────────
 const SHEET_COMPRAS_ID   = '1Mtffq42G7Q0y44ekzvy7IWPS8obvN4pNahA-08igdGk'; // Altas/Renovaciones (A:Nombre, B:Apellidos, C:DNI, D:Descripción, E:Importe, F:Fecha, G:Email)

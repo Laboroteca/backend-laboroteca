@@ -6,7 +6,8 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const axios = require('axios');
 
 const { syncMemberpressClub } = require('../services/syncMemberpressClub');
-const { guardarEnGoogleSheets } = require('../services/googleSheets');
+const { registrarBajaClub, actualizarVerificacionBaja } = require('../services/registrarBajaClub');
+const { enviarEmailSolicitudBajaVoluntaria } = require('../services/email');
 const { alertAdmin } = require('../utils/alertAdmin');
 
 const MEMBERPRESS_ID = 10663;
@@ -118,23 +119,36 @@ async function desactivarMembresiaClub(email, password) {
             await alertAdmin({ area: 'baja_voluntaria_firestore', email, err: e, meta: { subscriptionId: sub.id } });
           }
 
-          // Sheets: C (solicitud), E (efectos), F (PENDIENTE)
+          // Registrar UNA SOLA FILA en la solicitud, con nombre y apellidos, F = PENDIENTE
           try {
-            await guardarEnGoogleSheets({
+            // obtener nombre/apellidos desde datos fiscales o usuariosClub
+            let nombre = '';
+            try {
+              const df = await firestore.collection('datosFiscalesPorEmail').doc(email).get();
+              if (df.exists) {
+                const d = df.data() || {};
+                nombre = [d.nombre, d.apellidos].filter(Boolean).join(' ').trim();
+              }
+              if (!nombre) {
+                const uc = await firestore.collection('usuariosClub').doc(email).get();
+                if (uc.exists) {
+                  const u = uc.data() || {};
+                  nombre = [u.nombre, u.apellidos].filter(Boolean).join(' ').trim();
+                }
+              }
+            } catch (_) {}
+            await registrarBajaClub({
               email,
-              accion: 'baja_voluntaria_programada',
-              fechaSolicitudBaja: nowISO(),  // → Columna C
-              fechaEfectosBaja: fechaEfectosISO, // → Columna E
-              verificacionBaja: 'PENDIENTE', // → Columna F
-              producto: 'el club laboroteca',
+              nombre,
+              motivo: 'voluntaria',
+              fechaSolicitud: nowISO(),
+              fechaEfectos: fechaEfectosISO,
+              verificacion: 'PENDIENTE'
             });
+            // Email inmediato al usuario
+            await enviarEmailSolicitudBajaVoluntaria(nombre, email, nowISO(), fechaEfectosISO);
           } catch (e) {
-            await alertAdmin({
-              area: 'sheets_baja_voluntaria',
-              email,
-              err: e,
-              meta: { subscriptionId: sub.id },
-            });
+            await alertAdmin({ area: 'baja_voluntaria_registro_o_email', email, err: e, meta: { subscriptionId: sub.id } });
           }
 
           console.log(`🟢 Stripe: programada baja voluntaria ${sub.id} (efectos=${fechaEfectosISO})`);

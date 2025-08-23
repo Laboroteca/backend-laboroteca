@@ -91,3 +91,49 @@ async function registrarBajaClub({
 
 module.exports = { registrarBajaClub };
 
+/**
+ * Actualiza la verificación (columna F) en la ÚLTIMA fila cuyo email (col A) coincida.
+ * Escribe exactamente: 'CORRECTO ✅' o 'FALLIDA ❌' o 'PENDIENTE'
+ */
+async function actualizarVerificacionBaja({ email, verificacion = 'PENDIENTE' }) {
+  if (!email || !email.includes('@')) return;
+  const estado = String(verificacion).toUpperCase().includes('FALLIDA')
+    ? 'FALLIDA ❌'
+    : String(verificacion).toUpperCase().includes('CORRECTO')
+      ? 'CORRECTO ✅'
+      : 'PENDIENTE';
+  try {
+    const sheets = await getSheets();
+    // Leer A..F para localizar última coincidencia por email
+    const getRes = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: 'Hoja 1!A2:F',
+    });
+    const values = getRes.data.values || [];
+    let rowIndex = -1;
+    for (let i = values.length - 1; i >= 0; i--) {
+      if ((values[i][0] || '').toLowerCase().trim() === email.toLowerCase().trim()) {
+        rowIndex = i; break;
+      }
+    }
+    if (rowIndex === -1) {
+      // No existe fila (fallback: no romper; opcionalmente registra)
+      await alertAdmin({ area: 'bajas_sheet_update_missing_row', email, err: new Error('Fila no encontrada para actualizar F') });
+      return;
+    }
+    // Rango de la columna F (A2 es fila 2 => offset + 2)
+    const targetRange = `Hoja 1!F${rowIndex + 2}`;
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: targetRange,
+      valueInputOption: 'RAW',
+      requestBody: { values: [[estado]] },
+    });
+    console.log(`📝 Actualizada verificación baja (F) para ${email}: ${estado}`);
+  } catch (err) {
+    console.error('❌ actualizarVerificacionBaja:', err?.message || err);
+    try { await alertAdmin({ area: 'bajas_sheet_update', email, err }); } catch {}
+  }
+}
+
+module.exports = { registrarBajaClub, actualizarVerificacionBaja };

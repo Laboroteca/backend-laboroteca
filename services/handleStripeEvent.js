@@ -810,15 +810,15 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
             fechaEjecucion: new Date().toISOString(),
             motivoFinal: 'voluntaria'
           }, { merge: true });
-          // Log consolidado de baja
-        try {
+          
+          // ✅ Actualizar la MISMA fila en Sheets (col F) con 'CORRECTO ✅' (sin crear otra)
+          try {
+            const { actualizarVerificacionBaja } = require('./registrarBajaClub');
+            await actualizarVerificacionBaja({ email, verificacion: 'CORRECTO ✅' });
+          } catch (_) {}
+          // Log consolidado opcional
+          try {
             const nombreCompleto = await nombreCompletoPorEmail(email, nombre);
-            await registrarBajaClub({
-              email,
-              nombre: nombreCompleto,
-              motivo: 'voluntaria',
-              verificacion: 'CORRECTO'
-            });
             await logBajaFirestore({
               email,
               nombre: nombreCompleto,
@@ -830,8 +830,6 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
               source: 'stripe.subscription.deleted'
             });
           } catch (_) {}
-
-          // (Sin escritura en Sheets de bajas)
 
           await enviarConfirmacionBajaClub(email, nombre);
 

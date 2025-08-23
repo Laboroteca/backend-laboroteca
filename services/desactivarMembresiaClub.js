@@ -8,7 +8,8 @@ const axios = require('axios');
 const { enviarConfirmacionBajaClub } = require('./email'); // (no se usa por defecto; ver nota en Paso 4)
 const { syncMemberpressClub } = require('./syncMemberpressClub'); // intencionadamente NO usado aquí (solo al final de ciclo)
 const { alertAdmin } = require('../utils/alertAdmin');
-const { guardarEnGoogleSheets } = require('./googleSheets');
+const { registrarBajaClub } = require('./registrarBajaClub');
+const { enviarEmailSolicitudBajaVoluntaria } = require('./email');
 
 const MEMBERSHIP_ID = parseInt(process.env.MEMBERSHIP_ID || '10663', 10);
 const ACTIVE_STATUSES = ['active', 'trialing', 'incomplete', 'past_due'];
@@ -140,23 +141,35 @@ async function desactivarMembresiaClub(email, password, enviarEmailConfirmacion 
           });
         }
 
-        // Google Sheets: C/E/F
+        // Registrar UNA fila y enviar email inmediato al usuario
         try {
-          await guardarEnGoogleSheets({
+          // nombre/apellidos
+          let nombre = '';
+          try {
+            const df = await firestore.collection('datosFiscalesPorEmail').doc(email).get();
+            if (df.exists) {
+              const d = df.data() || {};
+              nombre = [d.nombre, d.apellidos].filter(Boolean).join(' ').trim();
+            }
+            if (!nombre) {
+              const uc = await firestore.collection('usuariosClub').doc(email).get();
+              if (uc.exists) {
+                const u = uc.data() || {};
+                nombre = [u.nombre, u.apellidos].filter(Boolean).join(' ').trim();
+              }
+            }
+          } catch (_) {}
+          await registrarBajaClub({
             email,
-            accion: 'baja_voluntaria_programada',
-            fechaSolicitudBaja: nowISO(),     // → Columna C
-            fechaEfectosBaja: fechaEfectosISO, // → Columna E
-            verificacionBaja: 'PENDIENTE',    // → Columna F
-            producto: 'el club laboroteca',
+            nombre,
+            motivo: 'voluntaria',
+            fechaSolicitud: nowISO(),
+            fechaEfectos: fechaEfectosISO,
+            verificacion: 'PENDIENTE'
           });
+          await enviarEmailSolicitudBajaVoluntaria(nombre, email, nowISO(), fechaEfectosISO);
         } catch (e) {
-          await alertAdmin({
-            area: 'desactivarMembresiaClub_sheets_baja',
-            email,
-            err: e,
-            meta: { subscriptionId: sub.id, fechaEfectosISO },
-          });
+          await alertAdmin({ area: 'desactivarMembresiaClub_registro_o_email', email, err: e, meta: { subscriptionId: sub.id, fechaEfectosISO } });
         }
 
         console.log(`🟢 Stripe: programada baja voluntaria ${sub.id} (efectos=${fechaEfectosISO})`);
@@ -183,7 +196,7 @@ async function desactivarMembresiaClub(email, password, enviarEmailConfirmacion 
   //  Nota: Mantenemos silencio por defecto para evitar confusión con “baja inmediata”.
   //        Si deseas enviar un acuse, activa el bloque y adapta la plantilla.
   // ────────────────────────────────────────────────────────────────────────────
-  if (false && enviarEmailConfirmacion) {
+  if (false && enviarEmailConfirmacion) { // (bloque heredado, lo mantenemos desactivado)
     try {
       const ref = firestore.collection('usuariosClub').doc(email);
       const doc = await ref.get();

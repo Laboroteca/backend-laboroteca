@@ -269,6 +269,37 @@ async function enviarAvisoCancelacion(email, nombre, enlacePago) {
   return 'OK';
 }
 
+// 📧 ACUSE DE SOLICITUD DE BAJA VOLUNTARIA (en el momento de solicitarla)
+async function enviarEmailSolicitudBajaVoluntaria(nombre = '', email, fechaSolicitudISO, fechaEfectosISO) {
+  const fmt = iso => {
+    try {
+      return new Date(iso).toLocaleString('es-ES', { timeZone: 'Europe/Madrid', day:'2-digit', month:'2-digit', year:'numeric' });
+    } catch { return iso || ''; }
+  };
+  const FECHA_SOLICITUD = fmt(fechaSolicitudISO);
+  const FECHA_EFECTOS   = fmt(fechaEfectosISO);
+  const subject = 'Hemos recibido tu solicitud de baja del Club Laboroteca';
+  const html = `
+Hola ${nombre || 'cliente'},<br><br>
+Hemos recibido tu <strong>solicitud de baja voluntaria</strong> del Club Laboroteca el <strong>${FECHA_SOLICITUD}</strong>.<br>
+Tu suscripción seguirá activa hasta el <strong>${FECHA_EFECTOS}</strong>, que es el fin de tu periodo de facturación actual.<br><br>
+En esa fecha tramitaremos la baja y perderás el acceso a los contenidos del Club. 
+Si cambias de opinión puedes volver a darte de alta en cualquier momento y sin ninguna penalización.<br><br>
+Gracias por haber formado parte del Club Laboroteca.<br>
+`.trim();
+  const text = `Hola ${nombre || 'cliente'},
+
+Hemos recibido tu solicitud de baja voluntaria del Club Laboroteca el ${FECHA_SOLICITUD}.
+Tu suscripción seguirá activa hasta el ${FECHA_EFECTOS}, que es el fin de tu periodo de facturación actual.
+
+En esa fecha tramitaremos la baja y perderás el acceso a los contenidos del Club.
+Si cambias de opinión puedes volver a darte de alta en cualquier momento y sin ninguna penalización.
+
+Gracias por haber formado parte del Club Laboroteca.`;
+  return enviarEmailPersonalizado({ to: email, subject, html, text, enviarACopy: false });
+}
+
+
 // CONFIRMACIÓN DE BAJA VOLUNTARIA
 async function enviarConfirmacionBajaClub(email, nombre = '') {
   const subject = 'Confirmación de baja del Club Laboroteca';
@@ -345,6 +376,7 @@ module.exports = {
   enviarAvisoCancelacion,
   enviarConfirmacionBajaClub,
   enviarEmailValidacionEliminacionCuenta,
-  enviarEmailPersonalizado
+  enviarEmailPersonalizado,
+  enviarEmailSolicitudBajaVoluntaria
 };
 

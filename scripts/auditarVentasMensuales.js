@@ -324,9 +324,9 @@ async function enviarInformeEmailDoble(payload) {
     ${htmlBarras12m(serie12MesesFB)}
   `;
 
-  const htmlSH = `
+   const htmlSH = `
     <h2 style="margin:28px 0 12px 0; font-size:20px;">
-      Informe de ventas — ${monthLabel} <span style="font-weight:normal;">(Según Google Sheets)</span>
+      Informe de ventas — ${monthLabel} según <span style="color:#188038;font-weight:bold;">GOOGLE SHEETS</span>
     </h2>
     <p style="font-size:18px; font-weight:bold;">Total ingresos ${monthLabel}: ${fmtEUR(totalMesSH)}</p>
     <h3 style="margin:18px 0 8px;">Desglose por producto (ordenado por importe, desc.)</h3>

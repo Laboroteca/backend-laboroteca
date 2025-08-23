@@ -5,7 +5,6 @@ const firestore = admin.firestore();
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const axios = require('axios');
 
-const { enviarConfirmacionBajaClub } = require('../services/email');
 const { syncMemberpressClub } = require('../services/syncMemberpressClub');
 const { guardarEnGoogleSheets } = require('../services/googleSheets');
 const { alertAdmin } = require('../utils/alertAdmin');
@@ -195,20 +194,12 @@ async function desactivarMembresiaClub(email, password) {
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 🔻 Paso 4: Email
-  //  - Inmediata: confirmar baja al usuario (como antes).
-  //  - Voluntaria: opcional (recomendado enviar “acuse de solicitud”, pero aquí mantenemos silencio).
+  // 🔻 Paso 4: Email 
+  // Evitamos enviar emails desde esta ruta para no duplicar notificaciones.
+  //  Los webhooks de Stripe (`invoice.payment_failed` y `customer.subscription.deleted`)
+  //  ya envían el email correcto según el motivo (impago / voluntaria / eliminación / manual).
   // ─────────────────────────────────────────────────────────────────────────────
-  try {
-    if (!esVoluntaria) {
-      await enviarConfirmacionBajaClub(email, '');
-      console.log(`📩 Email de baja inmediata enviado a ${email}`);
-    }
-  } catch (errEmail) {
-    console.error('❌ Error al enviar email:', errEmail?.message || errEmail);
-    await alertAdmin({ area: 'email_confirmacion_baja', email, err: errEmail });
-    // no rompemos el flujo
-  }
+// no-op
 
   // 🔚 No eliminamos usuario en WordPress en este endpoint.
   //     (La eliminación de cuenta es otro flujo diferente.)

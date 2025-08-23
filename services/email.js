@@ -1,20 +1,18 @@
-require('dotenv').config(); 
+require('dotenv').config();
 const fetch = require('node-fetch');
 const { alertAdmin } = require('../utils/alertAdmin');
 
-
 /**
  * Envía un email con o sin factura adjunta (PDF).
- * @param {Object} opciones - { to, subject, html, text, pdfBuffer, enviarACopy }
+ * @param {Object} opciones - { to, subject, html, text, pdfBuffer, enviarACopy, attachments }
  * @returns {Promise<string>}
  */
 async function enviarEmailPersonalizado({ to, subject, html, text, pdfBuffer = null, enviarACopy = false, attachments = [] }) {
   const destinatarios = Array.isArray(to) ? [...to] : [to];
   const SEND_ADMIN_COPY = String(process.env.SEND_ADMIN_COPY || 'false').toLowerCase() === 'true';
-    if (enviarACopy && SEND_ADMIN_COPY && !destinatarios.includes('laboroteca@gmail.com')) {
-      destinatarios.push('laboroteca@gmail.com');
-    }
-
+  if (enviarACopy && SEND_ADMIN_COPY && !destinatarios.includes('laboroteca@gmail.com')) {
+    destinatarios.push('laboroteca@gmail.com');
+  }
 
   const pieHtml = `
     <hr style="margin-top: 40px; margin-bottom: 10px;" />
@@ -42,84 +40,81 @@ También puede reclamar ante la autoridad de control si lo considera necesario.
     text_body: text + '\n\n' + pieText
   };
 
-// 🔁 Añadir adjuntos si vienen por `attachments` o por `pdfBuffer`
-    if (Array.isArray(attachments) && attachments.length > 0) {
-      body.attachments = attachments;
-    } else if (pdfBuffer && Buffer.isBuffer(pdfBuffer) && pdfBuffer.length > 5000) {
-      body.attachments = [{
-        filename: 'Factura Laboroteca.pdf',
-        fileblob: pdfBuffer.toString('base64'),
-        mimetype: 'application/pdf'
-      }];
+  // Adjuntos
+  if (Array.isArray(attachments) && attachments.length > 0) {
+    body.attachments = attachments;
+  } else if (pdfBuffer && Buffer.isBuffer(pdfBuffer) && pdfBuffer.length > 5000) {
+    body.attachments = [{
+      filename: 'Factura Laboroteca.pdf',
+      fileblob: pdfBuffer.toString('base64'),
+      mimetype: 'application/pdf'
+    }];
+  }
+
+  let response, resultado, successReal;
+
+  try {
+    response = await fetch('https://api.smtp2go.com/v3/email/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+
+    const raw = await response.text();
+    try {
+      resultado = JSON.parse(raw);
+    } catch {
+      resultado = { success: false, data: {}, raw };
     }
 
-let response, resultado, successReal;
+    successReal = resultado?.data?.succeeded === 1 && resultado?.data?.failed === 0;
 
-try {
-  response = await fetch('https://api.smtp2go.com/v3/email/send', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
+    if (!resultado.success && !successReal) {
+      console.error('Error real desde SMTP2GO:', typeof resultado.raw === 'string' ? resultado.raw : JSON.stringify(resultado, null, 2));
 
-  // Leemos como texto y luego intentamos parsear a JSON (para capturar respuestas no-JSON)
-  const raw = await response.text();
-  try {
-    resultado = JSON.parse(raw);
-  } catch {
-    resultado = { success: false, data: {}, raw };
-  }
+      try {
+        await alertAdmin({
+          area: 'smtp2go_send',
+          email: Array.isArray(to) ? to.join(', ') : to,
+          err: new Error('Fallo SMTP2GO al enviar email'),
+          meta: {
+            subject,
+            provider: 'smtp2go',
+            httpStatus: response?.status ?? null,
+            responseSnippet: (resultado?.raw || raw || '').slice(0, 500)
+          }
+        });
+      } catch (_) {}
 
-  successReal = resultado?.data?.succeeded === 1 && resultado?.data?.failed === 0;
-
-  if (!resultado.success && !successReal) {
-    console.error('❌ Error real desde SMTP2GO:', typeof resultado.raw === 'string' ? resultado.raw : JSON.stringify(resultado, null, 2));
-
-    // 🔔 Aviso al admin (no rompe el flujo adicionalmente; igualmente lanzamos el mismo error)
+      throw new Error('Error al enviar email con SMTP2GO');
+    }
+  } catch (e) {
     try {
       await alertAdmin({
-        area: 'smtp2go_send',
+        area: 'smtp2go_network',
         email: Array.isArray(to) ? to.join(', ') : to,
-        err: new Error('Fallo SMTP2GO al enviar email'),
+        err: e,
         meta: {
           subject,
-          provider: 'smtp2go',
-          httpStatus: response?.status ?? null,
-          responseSnippet: (resultado?.raw || raw || '').slice(0, 500)
+          provider: 'smtp2go'
         }
       });
-    } catch (_) { /* nunca romper por fallo en alertAdmin */ }
-
-    throw new Error('Error al enviar email con SMTP2GO');
+    } catch (_) {}
+    throw e;
   }
-} catch (e) {
-  // Errores de red/timeout/parseo → también avisamos
-  try {
-    await alertAdmin({
-      area: 'smtp2go_network',
-      email: Array.isArray(to) ? to.join(', ') : to,
-      err: e,
-      meta: {
-        subject,
-        provider: 'smtp2go'
-      }
-    });
-  } catch (_) { /* no-op */ }
-  throw e; // ✅ mismo comportamiento original
+
+  if (successReal) {
+    console.log(`Email "${subject}" enviado correctamente a ${destinatarios.join(', ')}`);
+  } else {
+    console.warn(`Advertencia: Email "${subject}" enviado pero con posibles incidencias:`, resultado);
+  }
+
+  return 'OK';
 }
 
-if (successReal) {
-  console.log(`✅ Email "${subject}" enviado correctamente a ${destinatarios.join(', ')}`);
-} else {
-  console.warn(`⚠️ Advertencia: Email "${subject}" enviado pero con posibles incidencias:`, resultado);
-}
-
-return 'OK';
-
-}
-
-// ✅ ENVÍO DE FACTURA CON PDF
+// ENVÍO DE FACTURA (Club: ALTA/RENOVACIÓN; Otros productos: no entradas)
 async function enviarFacturaPorEmail(datos, pdfBuffer) {
+  const email = datos.email;
   const importeTexto = datos.importe ? `${Number(datos.importe).toFixed(2)} €` : 'importe no disponible';
   const nombre = datos.nombre || '';
 
@@ -130,114 +125,78 @@ async function enviarFacturaPorEmail(datos, pdfBuffer) {
       .map(s => s.toString().toLowerCase())
       .some(s => s.includes('club laboroteca'));
 
-  // 👉 Nombre del producto a mostrar cuando NO es Club
+  const etiqueta = `${datos.nombreProducto || ''} ${datos.descripcionProducto || ''}`.toLowerCase();
+  const esAltaClub = esClub && /(alta y primera cuota|alta)/i.test(etiqueta);
+  const esRenovClub = esClub && /(renovación mensual|renovacion mensual|subscription_cycle|renovación)/i.test(etiqueta);
+
   const nombreProductoMostrar = datos.nombreProducto || datos.descripcionProducto || 'Producto Laboroteca';
 
-  const subject = esClub
-    ? 'Factura mensual de tu suscripción al Club Laboroteca'
-    : 'Factura de tu compra en Laboroteca';
+  let subject = '';
+  let html = '';
+  let text = '';
 
-  const html = esClub
-    ? `
+  if (esClub && esAltaClub) {
+    subject = 'Tu suscripción al Club Laboroteca está activada';
+    html = `
       <div style="font-family: Arial, sans-serif; font-size: 16px; color: #333;">
-        <p>Estimado miembro del Club Laboroteca,</p>
-        <p>Adjuntamos a este correo la factura correspondiente a tu suscripción mensual.</p>
+        <p>Estimado ${nombre || 'cliente'},</p>
+        <p>Ya tienes activada tu suscripción al Club Laboroteca. Puedes acceder a todo el contenido exclusivo a través de https://www.laboroteca.es/club-laboroteca/.</p>
+        <p>Adjunto a este correo la factura correspondiente a tu suscripción mensual.</p>
         <p>Importe: <strong>${importeTexto}</strong></p>
         <p>Muchas gracias por pertenecer al Club Laboroteca.</p>
-        <p>Puedes acceder a todas las novedades desde:<br>
-        <a href="https://www.laboroteca.es/club-laboroteca/">https://www.laboroteca.es/club-laboroteca/</a></p>
-        <p>Un saludo,<br>Ignacio Solsona<br>Abogado</p>
-      </div>
-    `
-    : `
-      <div style="font-family: Arial, sans-serif; font-size: 16px; color: #333;">
-        <p>Hola ${nombre},</p>
-        <p>Gracias por tu compra. Adjuntamos en este correo la factura correspondiente al producto:</p>
-        <p><strong>${nombreProductoMostrar}</strong></p>
-        <p>Importe: <strong>${importeTexto}</strong></p>
-        <p>Puedes acceder a tu contenido desde <a href="https://laboroteca.es/mi-cuenta">www.laboroteca.es/mi-cuenta</a></p>
-        <p>Un afectuoso saludo,<br>Ignacio Solsona</p>
-      </div>
-    `;
+        <p>Ignacio Solsona<br/>Abogado</p>
+      </div>`;
+    text = `Estimado ${nombre || 'cliente'},
 
-  const text = esClub
-    ? `Estimado miembro del Club Laboroteca,
-
-Adjuntamos a este correo la factura correspondiente a tu suscripción mensual.
+Ya tienes activada tu suscripción al Club Laboroteca. Puedes acceder a todo el contenido exclusivo a través de https://www.laboroteca.es/club-laboroteca/.
+Adjunto a este correo la factura correspondiente a tu suscripción mensual.
 Importe: ${importeTexto}
 
 Muchas gracias por pertenecer al Club Laboroteca.
-Puedes acceder a todas las novedades desde: https://www.laboroteca.es/club-laboroteca/
-
-Un saludo,
 Ignacio Solsona
-Abogado`
-    : `Hola ${nombre},
+Abogado`;
+  } else if (esClub && esRenovClub) {
+    subject = 'Se ha renovado tu suscripción al Club Laboroteca';
+    html = `
+      <div style="font-family: Arial, sans-serif; font-size: 16px; color: #333;">
+        <p>Estimado ${nombre || 'cliente'},</p>
+        <p>Se ha renovado tu suscripción al Club Laboroteca. Puedes acceder a todo el contenido exclusivo a través de https://www.laboroteca.es/club-laboroteca/.</p>
+        <p>Adjunto a este correo la factura correspondiente a tu suscripción mensual.</p>
+        <p>Importe: <strong>${importeTexto}</strong></p>
+        <p>Muchas gracias por pertenecer al Club Laboroteca.</p>
+        <p>Ignacio Solsona<br/>Abogado</p>
+      </div>`;
+    text = `Estimado ${nombre || 'cliente'},
 
-Gracias por tu compra. Adjuntamos en este correo la factura correspondiente al producto:
-- ${nombreProductoMostrar}
-- Importe: ${importeTexto}
+Se ha renovado tu suscripción al Club Laboroteca. Puedes acceder a todo el contenido exclusivo a través de https://www.laboroteca.es/club-laboroteca/.
+Adjunto a este correo la factura correspondiente a tu suscripción mensual.
+Importe: ${importeTexto}
 
-Puedes acceder a tu contenido desde: https://laboroteca.es/mi-cuenta
+Muchas gracias por pertenecer al Club Laboroteca.
+Ignacio Solsona
+Abogado`;
+  } else {
+    subject = `Has comprado ${nombreProductoMostrar}`;
+    html = `
+      <div style="font-family: Arial, sans-serif; font-size: 16px; color: #333;">
+        <p>Hola ${nombre || 'cliente'},</p>
+        <p>Gracias por tu compra. Ya tienes acceso a ${nombreProductoMostrar}. Puedes acceder desde:</p>
+        <p>www.laboroteca.es/mi-cuenta</p>
+        <p>Adjuntamos en este correo la factura correspondiente al producto:</p>
+        <p>Importe: <strong>${importeTexto}</strong></p>
+        <p>Un afectuoso saludo,<br/>Ignacio Solsona<br/>Abogado</p>
+      </div>`;
+    text = `Hola ${nombre || 'cliente'},
+
+Gracias por tu compra. Ya tienes acceso a ${nombreProductoMostrar}. Puedes acceder desde:
+www.laboroteca.es/mi-cuenta
+Adjuntamos en este correo la factura correspondiente al producto:
+Importe: ${importeTexto}
 
 Un afectuoso saludo,
-Ignacio Solsona`;
-
-    return enviarEmailPersonalizado({
-      to: [email],
-      subject,
-      html,
-      text,
-      enviarACopy: false
-    });
-
-}
-
-
-// ✅ AVISO DE IMPAGO (cancelación inmediata, sin reintentos)
-async function enviarAvisoImpago(email, nombre, intento, enlacePago = "https://www.laboroteca.es/membresia-club-laboroteca/", cancelarYa = false) {
-  let subject, html, text;
-
-  subject = 'Tu suscripción al Club Laboroteca ha sido CANCELADA por fallo en el pago';
-  html = `
-    <p>Hola ${nombre || ''},</p>
-<p>No hemos podido procesar el cobro de tu suscripción mensual al Club Laboroteca.</p>
-<p><b>Tu suscripción ha sido cancelada automáticamente.</b></p>
-<p>
-  <span style="color:#279052;">
-    Puedes reactivarla en cualquier momento desde este enlace, <b>sin penalización y con el mismo precio</b>:
-  </span>
-</p>
-<p>
-  <a href="https://www.laboroteca.es/membresia-club-laboroteca/">https://www.laboroteca.es/membresia-club-laboroteca/</a>
-</p>
-<p>Si crees que se trata de un error, revisa tu método de pago o tarjeta.</p>
-
-  `;
-  text = `Hola ${nombre || ''},
-
-No hemos podido cobrar tu suscripción mensual al Club Laboroteca y ha sido cancelada automáticamente.
-
-Puedes reactivarla cuando quieras (sin penalización) aquí: https://www.laboroteca.es/membresia-club-laboroteca/
-
-Si necesitas ayuda, contacta con Laboroteca.`;
-
-  // Siempre enviamos el aviso único (no hay reintentos)
-  return enviarEmailPersonalizado({ to: email, subject, html, text });
-}
-
-// ✅ CANCELACIÓN POR IMPAGO (puede usarse también si quieres notificar al admin)
-async function enviarAvisoCancelacion(email, nombre, enlacePago = "https://www.laboroteca.es/membresia-club-laboroteca/") {
-  const subject = 'Tu suscripción Club Laboroteca ha sido cancelada por impago';
-  const html = `
-    <p>Hola ${nombre},</p>
-    <p>Tu suscripción ha sido cancelada por impago. Puedes reactivarla en cualquier momento por el mismo precio, sin ninguna penalización.</p>
-    <p>Enlace para reactivación:<br><a href="https://www.laboroteca.es/membresia-club-laboroteca/">https://www.laboroteca.es/membresia-club-laboroteca/</a></p>
-  `;
-  const text = `Hola ${nombre},
-
-Tu suscripción ha sido cancelada por impago. Puedes reactivarla en cualquier momento por el mismo precio, sin ninguna penalización.
-Enlace: https://www.laboroteca.es/membresia-club-laboroteca/`;
+Ignacio Solsona
+Abogado`;
+  }
 
   return enviarEmailPersonalizado({
     to: [email],
@@ -248,16 +207,44 @@ Enlace: https://www.laboroteca.es/membresia-club-laboroteca/`;
   });
 }
 
-// ✅ CONFIRMACIÓN DE BAJA VOLUNTARIA
+// AVISO DE IMPAGO
+async function enviarAvisoImpago(email, nombre, intento, enlacePago = "https://www.laboroteca.es/membresia-club-laboroteca/") {
+  const subject = 'Tu suscripción al Club Laboroteca ha sido cancelada por impago';
+  const html = `
+    <p>Hola ${nombre || ''},</p>
+    <p>No hemos podido procesar el cobro de tu suscripción mensual al Club Laboroteca.</p>
+    <p>Tu suscripción ha sido cancelada automáticamente.</p>
+    <p>Puedes reactivarla en cualquier momento desde este enlace, sin penalización y con el mismo precio:</p>
+    <p>${enlacePago}</p>
+    <p>Si crees que se trata de un error, revisa tu método de pago o tarjeta.</p>`;
+  const text = `Hola ${nombre || ''},
+
+No hemos podido procesar el cobro de tu suscripción mensual al Club Laboroteca.
+Tu suscripción ha sido cancelada automáticamente.
+
+Puedes reactivarla en cualquier momento desde este enlace, sin penalización y con el mismo precio:
+${enlacePago}
+
+Si crees que se trata de un error, revisa tu método de pago o tarjeta.`;
+
+  return enviarEmailPersonalizado({ to: email, subject, html, text });
+}
+
+// CANCELACIÓN POR IMPAGO (no-op para evitar duplicados)
+async function enviarAvisoCancelacion(email, nombre, enlacePago) {
+  console.log('enviarAvisoCancelacion omitido (duplicación evitada)');
+  return 'OK';
+}
+
+// CONFIRMACIÓN DE BAJA VOLUNTARIA
 async function enviarConfirmacionBajaClub(email, nombre = '') {
   const subject = 'Confirmación de baja del Club Laboroteca';
   const html = `
     <p>Hola ${nombre},</p>
     <p><strong>Te confirmamos que se ha cursado correctamente tu baja del Club Laboroteca</strong>.</p>
     <p>Puedes volver a hacerte miembro en cualquier momento, por el mismo precio y sin compromiso de permanencia.</p>
-    <p>Reactivar: <a href="https://www.laboroteca.es/membresia-club-laboroteca/">https://www.laboroteca.es/membresia-club-laboroteca/</a></p>
-    <p>Un saludo,<br>Laboroteca</p>
-  `;
+    <p>Reactivar: https://www.laboroteca.es/membresia-club-laboroteca/</p>
+    <p>Un saludo,<br>Laboroteca</p>`;
   const text = `Hola ${nombre},
 
 Te confirmamos que se ha cursado correctamente tu baja del Club Laboroteca.
@@ -268,16 +255,37 @@ Reactivar: https://www.laboroteca.es/membresia-club-laboroteca/
 Un saludo,
 Laboroteca`;
 
+  return enviarEmailPersonalizado({ to: [email], subject, html, text, enviarACopy: false });
+}
+
+// AVISO DE CANCELACIÓN MANUAL (por admin/dashboard)
+async function enviarAvisoCancelacionManual(email, nombre = '') {
+  const subject = 'Tu suscripción al Club Laboroteca ha sido cancelada';
+  const html = `
+    <p>Hola ${nombre},</p>
+    <p>Tu suscripción al Club Laboroteca ha sido cancelada.</p>
+    <p>Puedes volver a hacerte miembro cuando quieras, por el mismo precio y sin compromiso de permanencia.</p>
+    <p>Reactivar: https://www.laboroteca.es/membresia-club-laboroteca/</p>
+    <p>Un saludo,<br>Laboroteca</p>
+  `;
+  const text = `Hola ${nombre},
+
+Tu suscripción al Club Laboroteca ha sido cancelada manualmente.
+Puedes volver a hacerte miembro cuando quieras, por el mismo precio y sin compromiso de permanencia.
+Reactivar: https://www.laboroteca.es/membresia-club-laboroteca/
+
+Un saludo,
+Laboroteca`;
+
   return enviarEmailPersonalizado({
     to: [email],
     subject,
     html,
     text,
-    enviarACopy: false
   });
 }
 
-// ✅ EMAIL DE VALIDACIÓN PARA ELIMINAR CUENTA
+// EMAIL VALIDACIÓN ELIMINACIÓN CUENTA
 async function enviarEmailValidacionEliminacionCuenta(email, token) {
   const enlace = `https://www.laboroteca.es/confirmar-eliminacion-cuenta/?token=${token}`;
   const subject = 'Confirmación de eliminación de tu cuenta en Laboroteca';
@@ -285,8 +293,7 @@ async function enviarEmailValidacionEliminacionCuenta(email, token) {
     <p>Hola,</p>
     <p>Has solicitado eliminar tu cuenta en Laboroteca. Para confirmar esta acción, pulsa en el siguiente enlace:</p>
     <p><a href="${enlace}" style="font-weight: bold;">Confirmar eliminación de cuenta</a></p>
-    <p>Si no has solicitado esta acción, ignora este correo. El enlace caducará en 2 horas.</p>
-  `;
+    <p>Si no has solicitado esta acción, ignora este correo. El enlace caducará en 2 horas.</p>`;
   const text = `Has solicitado eliminar tu cuenta en Laboroteca.
 
 Para confirmar esta acción, accede a este enlace (válido 2 horas):
@@ -294,13 +301,7 @@ ${enlace}
 
 Si no lo has solicitado tú, ignora este mensaje.`;
 
-  return enviarEmailPersonalizado({
-    to: email,
-    subject,
-    html,
-    text,
-    enviarACopy: false
-  });
+  return enviarEmailPersonalizado({ to: email, subject, html, text, enviarACopy: false });
 }
 
 module.exports = {
@@ -309,5 +310,5 @@ module.exports = {
   enviarAvisoCancelacion,
   enviarConfirmacionBajaClub,
   enviarEmailValidacionEliminacionCuenta,
-  enviarEmailPersonalizado //
+  enviarEmailPersonalizado
 };

@@ -3,7 +3,7 @@ const firestore = admin.firestore();
 
 const { guardarEnGoogleSheets } = require('./googleSheets');
 const { crearFacturaEnFacturaCity } = require('./facturaCity');
-const { enviarFacturaPorEmail, enviarAvisoImpago, enviarAvisoCancelacion, enviarEmailPersonalizado } = require('./email');
+const { enviarFacturaPorEmail, enviarAvisoImpago, enviarConfirmacionBajaClub, enviarAvisoCancelacionManual, enviarEmailPersonalizado } = require('./email');
 const { subirFactura } = require('./gcs');
 const { activarMembresiaClub } = require('./activarMembresiaClub');
 const { syncMemberpressClub } = require('./syncMemberpressClub');
@@ -149,18 +149,23 @@ if (!firstEvent) {
 
     // --- Recuperar nombre (si hay) ---
     let nombre = invoice.customer_details?.name || '';
+    let nombreCompleto = '';
     if (!nombre && email) {
       try {
         const docSnap = await firestore.collection('datosFiscalesPorEmail').doc(email).get();
         if (docSnap.exists) {
           const doc = docSnap.data();
+          const nComp = [doc.nombre, doc.apellidos].filter(Boolean).join(' ').trim();
           nombre = doc.nombre || '';
+          nombreCompleto = nComp || '';
           console.log(`✅ Nombre recuperado para ${email}: ${nombre}`);
         }
       } catch (err) {
         console.error('❌ Error al recuperar nombre desde Firestore:', err.message);
       }
     }
+    // Completar si no se armó arriba
+    if (!nombreCompleto) nombreCompleto = await nombreCompletoPorEmail(email, nombre || '');
 
     // --- Enviar email y desactivar membresía inmediatamente ---
     try {
@@ -182,9 +187,9 @@ if (!isFirstBaja) {
   return { received: true, duplicateBaja: true };
 }
 
-// 🔔 A partir de aquí SÍ enviamos el aviso/cancelamos (solo primera vez)
-await enviarAvisoImpago(email, nombre, 1, enlacePago, true); // true = email de cancelación inmediata
 
+// 🔔 A partir de aquí SÍ enviamos el aviso/cancelamos (solo primera vez)
+      await enviarAvisoImpago(email, nombreCompleto || nombre, 1, enlacePago, true);
 
       console.log('🧪 Subscription ID extraído del invoice:', subscriptionId);
 
@@ -213,7 +218,7 @@ await enviarAvisoImpago(email, nombre, 1, enlacePago, true); // true = email de 
 
       await registrarBajaClub({
         email,
-        nombre,
+        nombre: nombreCompleto || nombre,
         motivo: 'impago',
         verificacion: 'CORRECTO'
       });
@@ -223,7 +228,7 @@ await enviarAvisoImpago(email, nombre, 1, enlacePago, true); // true = email de 
       await docRefIntento.set({
         invoiceId,
         email,
-        nombre,
+        nombre: nombreCompleto || nombre,
         fecha: new Date().toISOString()
       });
 
@@ -425,6 +430,21 @@ if (isAlta) {
   cp        = (base.cp        || addr.postal_code || '');
 }
 
+    // 🔐 Ficha básica del usuario (sin dirección postal)
+    try {
+      const uRef = firestore.collection('usuariosClub').doc(email);
+      const uSnap = await uRef.get();
+      const ahoraISO = new Date().toISOString();
+      await uRef.set({
+        email,
+        nombre, apellidos, dni,
+        activo: true,
+        ultimaRenovacion: ahoraISO,
+        ...(isAlta && (!uSnap.exists || !uSnap.data()?.fechaAlta) ? { fechaAlta: ahoraISO } : {})
+      }, { merge: true });
+    } catch (e) {
+      console.warn('⚠️ usuariosClub set (invoice.paid):', e?.message || e);
+    }
 
 // 5) Si en ALTA no existía ficha, la guardamos *desde la fuente FF* para futuras renovaciones
 if (isAlta && !snap.exists) {
@@ -755,7 +775,7 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
             await alertAdmin({ area: 'deleted_impago_sync', email, err: e, meta: { subscriptionId } });
             throw e;
           }
-          await enviarAvisoCancelacion(email, nombre, enlacePago);
+          // No enviamos email aquí para evitar duplicados: el aviso de impago ya sale en invoice.payment_failed
          } else if (motivo === 'eliminacion_cuenta') {
            // 🔴 ELIMINACIÓN DE CUENTA → inmediata (única fila en Sheets)
           try {
@@ -777,7 +797,7 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
              await alertAdmin({ area: 'deleted_eliminacion_sync', email, err: e, meta: { subscriptionId } });
              throw e;
            }
-            await enviarAvisoCancelacion(email, nombre, enlacePago);
+            // No enviar email adicional: el flujo de eliminación ya avisa por su canal propio
           } else if (eraFinDeCiclo || origenBaja === 'formulario_usuario') {
             // 🟢 VOLUNTARIA ejecutada ahora (fin de ciclo)
           await syncMemberpressClub({ email, accion: 'desactivar', membership_id: MEMBERPRESS_IDS['el club laboroteca'] });
@@ -813,7 +833,7 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
 
           // (Sin escritura en Sheets de bajas)
 
-          await enviarAvisoCancelacion(email, nombre, enlacePago);
+          await enviarConfirmacionBajaClub(email, nombre);
 
         } else {
           // 🟠 MANUAL INMEDIATA (dashboard u otros) → inmediata
@@ -844,8 +864,11 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
             await alertAdmin({ area: 'deleted_manual_inmediata_sync', email, err: e, meta: { subscriptionId } });
             throw e;
           }
-          await enviarAvisoCancelacion(email, nombre, enlacePago);
-        }
+          // Email específico para manual inmediata (si lo quieres activar)
+          if (typeof enviarAvisoCancelacionManual === 'function') {
+            await enviarAvisoCancelacionManual(email, nombre);
+          }
+         }
 
       } catch (err) {
         console.error('❌ Error al registrar baja:', err?.message);
@@ -876,7 +899,12 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
           : 'manual_fin_ciclo';
         // Log en la hoja de bajas (F = PENDIENTE)
         try {
-          const nombreCompleto = await nombreCompletoPorEmail(email);
+          // Fallback: nombre desde Stripe/Customer
+          let fallbackName = sub.customer_details?.name || '';
+          if (!fallbackName && sub.customer) {
+            try { const c = await stripe.customers.retrieve(sub.customer); fallbackName = c?.name || ''; } catch {}
+          }
+          const nombreCompleto = await nombreCompletoPorEmail(email, fallbackName);
           await registrarBajaClub({
             email,
             nombre: nombreCompleto,

@@ -7,6 +7,7 @@ const { alertAdmin } = require('../utils/alertAdmin');
 const { syncMemberpressClub } = require('../services/syncMemberpressClub');
 
 // 👉 servicio unificado para BAJA VOLUNTARIA (programada fin de ciclo)
+//    (él registra la fila única en Sheets y envía el acuse)
 const desactivarMembresiaVoluntaria = require('../services/desactivarMembresiaClub');
 
 const MEMBERPRESS_ID = parseInt(process.env.MEMBERSHIP_ID || '10663', 10);
@@ -17,11 +18,10 @@ const nowISO = () => new Date().toISOString();
 
 /**
  * Ruta “baja del Club”
- * - Voluntaria (con password): delega TODO en services/desactivarMembresiaClub.js
- * - Inmediata (sin password: impago / eliminación / manual inmediata): corta ya desde aquí
+ * - Voluntaria (con password): delega TODO en services/desactivarMembresiaClub.js (evita duplicados).
+ * - Inmediata (sin password: impago / eliminación / manual inmediata): ejecuta aquí sin tocar Sheets.
  *
- * Nota: La ruta no envía emails por su cuenta para evitar duplicados: el servicio (voluntaria)
- *       ya envía el acuse; los webhooks gestionan el resto de correos (impago, confirmación final, etc.).
+ * La ruta NO envía emails para evitar duplicados: el servicio (voluntaria) y los webhooks (resto) lo hacen.
  */
 async function desactivarMembresiaClub(email, password) {
   // Validación básica del email
@@ -37,10 +37,8 @@ async function desactivarMembresiaClub(email, password) {
   // ────────────────────────────────────────────────────────────────────────────
   if (esVoluntaria) {
     try {
-      const res = await desactivarMembresiaVoluntaria(email, password);
-      // El servicio ya: valida WP, programa Stripe, registra 1 fila (con nombre y fecha efectos),
-      // y envía el acuse inmediato al usuario. Aquí solo devolvemos su resultado.
-      return res;
+      // El servicio valida WP, programa Stripe, escribe UNA fila en Sheets y envía el acuse.
+      return await desactivarMembresiaVoluntaria(email, password);
     } catch (err) {
       await alertAdmin({
         area: 'route_baja_voluntaria_error',
@@ -54,7 +52,8 @@ async function desactivarMembresiaClub(email, password) {
 
   // ────────────────────────────────────────────────────────────────────────────
   // B) BAJA INMEDIATA (impago / eliminación / manual inmediata)
-  //    Se mantiene aquí para no romper flujos ya operativos
+  //    Se mantiene aquí para no romper flujos ya operativos.
+  //    (No escribe en Sheets desde esta ruta).
   // ────────────────────────────────────────────────────────────────────────────
   let huboSuscripciones = false;
 

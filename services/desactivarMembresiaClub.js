@@ -12,7 +12,7 @@ const { registrarBajaClub } = require('./registrarBajaClub');
 const { enviarEmailSolicitudBajaVoluntaria } = require('./email');
 
 const MEMBERSHIP_ID = parseInt(process.env.MEMBERSHIP_ID || '10663', 10);
-const ACTIVE_STATUSES = ['active', 'trialing', 'incomplete', 'past_due'];
+const ACTIVE_STATUSES = ['active', 'trialing', 'past_due']; // fuera 'incomplete'
 
 const nowISO = () => new Date().toISOString();
 
@@ -112,8 +112,24 @@ async function desactivarMembresiaClub(email, password, enviarEmailConfirmacion 
           },
         });
 
-        const cpe = upd?.current_period_end ?? sub.current_period_end; // epoch seconds
-        const fechaEfectosISO = new Date(cpe * 1000).toISOString();
+       // Releer para asegurar current_period_end consistente
+        let refreshed;
+        try { refreshed = await stripe.subscriptions.retrieve(sub.id); } catch {}
+        const cpeSecRaw =
+          Number(upd?.current_period_end) ||
+          Number(refreshed?.current_period_end) ||
+          Number(sub?.current_period_end) || 0;
+        if (!Number.isFinite(cpeSecRaw) || cpeSecRaw <= 0) {
+          // No rompas el flujo por una subs rara; avisa y sigue con las siguientes
+          await alertAdmin({
+            area: 'baja_voluntaria_sin_cpe',
+            email,
+            err: new Error('current_period_end ausente'),
+            meta: { subscriptionId: sub.id, status: sub.status }
+          });
+          continue;
+        }
+        const fechaEfectosISO = new Date(Math.floor(cpeSecRaw) * 1000).toISOString();
         fechasEfectos.push(fechaEfectosISO);
         suscripcionesActualizadas++;
 

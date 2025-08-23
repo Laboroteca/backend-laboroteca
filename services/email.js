@@ -121,6 +121,14 @@ También puede reclamar ante la autoridad de control si lo considera necesario.
     console.log(`Email "${subject}" enviado correctamente a ${destinatarios.join(', ')}`);
   } else {
     console.warn(`Advertencia: Email "${subject}" enviado pero con posibles incidencias:`, resultado);
+    try {
+      await alertAdmin({
+        area: 'smtp2go_warning',
+        email: Array.isArray(to) ? to.join(', ') : to,
+        err: new Error('SMTP2GO warning'),
+        meta: { subject, provider: 'smtp2go', resultado }
+      });
+    } catch (_) {}
   }
 
   return 'OK';

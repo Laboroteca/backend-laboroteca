@@ -203,6 +203,7 @@ Abogado`;
     subject,
     html,
     text,
+    pdfBuffer,            // ← pasa el PDF a la función que realmente envía
     enviarACopy: false
   });
 }

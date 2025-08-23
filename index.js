@@ -44,7 +44,6 @@ const { activarMembresiaClub } = require('./services/activarMembresiaClub');
 const { syncMemberpressClub } = require('./services/syncMemberpressClub');
 const desactivarMembresiaClubForm = require('./routes/desactivarMembresiaClub');
 const desactivarMembresiaClub = require('./services/desactivarMembresiaClub');
-const { registrarBajaClub } = require('./services/registrarBajaClub');
 const validarEntrada = require('./entradas/routes/validarEntrada');
 const crearCodigoRegalo = require('./regalos/routes/crear-codigo-regalo');
 const registrarConsentimiento = require('./routes/registrar-consentimiento');
@@ -388,6 +387,7 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), async (req, res) => {
     // ✅ Si se ha cancelado correctamente
     if (resultado.cancelada === true) {
       const ahoraISO = new Date().toISOString();
+      // (Solo informativo en la respuesta; el registro en Sheets ya lo hace el servicio)
       const efectosISO =
         resultado?.fechaEfectosISO ||
         resultado?.fechaFinCicloISO ||
@@ -396,7 +396,7 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), async (req, res) => {
           : undefined);
 
       try {
-        // Obtener la fecha REAL de efectos (fin de ciclo) desde Stripe
+        // Obtener la fecha REAL de efectos (fin de ciclo) desde Stripe (opcional, solo para devolverla al cliente)
         let fechaEfectosISO = new Date().toISOString(); // fallback (por si fuese inmediata)
         const customers = await stripe.customers.list({ email, limit: 1 });
         if (customers.data.length) {
@@ -412,16 +412,9 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), async (req, res) => {
           }
         }
 
-        await registrarBajaClub({
-          email,
-          nombre: '',
-          motivo: 'voluntaria',                 // clave normalizada
-          fechaSolicitud: new Date().toISOString(),
-          fechaEfectos: fechaEfectosISO,        // ← esto alimenta la COLUMNA E
-          verificacion: 'PENDIENTE'             // pendiente hasta que Stripe mande el deleted
-        });
+
       } catch (e) {
-        console.warn('⚠️ registrarBajaClub:', e?.message || e);
+        console.warn('⚠️ calcular fecha efectos (informativa):', e?.message || e);
       }
 
       return res.json({ cancelada: true, efectos: efectosISO });

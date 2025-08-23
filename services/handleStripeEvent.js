@@ -814,7 +814,12 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
           // ✅ Actualizar la MISMA fila en Sheets (col F) con 'CORRECTO ✅' (sin crear otra)
           try {
             const { actualizarVerificacionBaja } = require('./registrarBajaClub');
-            await actualizarVerificacionBaja({ email, verificacion: 'CORRECTO ✅' });
+            await actualizarVerificacionBaja({
+            email,
+            verificacion: 'CORRECTO ✅',
+            strict: true,          // NO crear si no existe
+            expectExisting: true   // forzar error si no la encuentra
+          });
           } catch (_) {}
           // Log consolidado opcional
           try {

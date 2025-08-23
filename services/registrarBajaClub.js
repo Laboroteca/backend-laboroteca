@@ -68,8 +68,25 @@ async function registrarBajaClub({
     console.log(`📉 Baja registrada: ${email} (${motivo})`);
   } catch (err) {
     console.error('❌ registrarBajaClub:', err?.message || err);
-    try { await alertAdmin({ area: 'bajas_sheet_append', email: (email || '-').toLowerCase(), err, meta: { spreadsheetId } }); } catch {}
+
+    // Silenciar alertas para bajas diferidas en estado pendiente
+    const esPendiente = VERIF(verificacion) === 'PENDIENTE';
+    const motivoStr = String(motivo || '').toLowerCase();
+    const esDiferida = motivoStr === 'voluntaria' || motivoStr === 'manual_fin_ciclo';
+
+    // Solo avisar al admin si NO es baja diferida pendiente
+    if (!(esPendiente && esDiferida)) {
+      try {
+        await alertAdmin({
+          area: 'bajas_sheet_append',
+          email: (email || '-').toLowerCase(),
+          err,
+          meta: { spreadsheetId }
+        });
+      } catch {}
+    }
   }
+
 }
 
 module.exports = { registrarBajaClub };

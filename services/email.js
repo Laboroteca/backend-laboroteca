@@ -10,7 +10,11 @@ const { alertAdmin } = require('../utils/alertAdmin');
  */
 async function enviarEmailPersonalizado({ to, subject, html, text, pdfBuffer = null, enviarACopy = false, attachments = [] }) {
   const destinatarios = Array.isArray(to) ? [...to] : [to];
-  if (enviarACopy) destinatarios.push('laboroteca@gmail.com');
+  const SEND_ADMIN_COPY = String(process.env.SEND_ADMIN_COPY || 'false').toLowerCase() === 'true';
+    if (enviarACopy && SEND_ADMIN_COPY && !destinatarios.includes('laboroteca@gmail.com')) {
+      destinatarios.push('laboroteca@gmail.com');
+    }
+
 
   const pieHtml = `
     <hr style="margin-top: 40px; margin-bottom: 10px;" />
@@ -179,13 +183,14 @@ Puedes acceder a tu contenido desde: https://laboroteca.es/mi-cuenta
 Un afectuoso saludo,
 Ignacio Solsona`;
 
-  return enviarEmailPersonalizado({
-    to: datos.email,
-    subject,
-    html,
-    text,
-    pdfBuffer
-  });
+    return enviarEmailPersonalizado({
+      to: [email],
+      subject,
+      html,
+      text,
+      enviarACopy: false
+    });
+
 }
 
 
@@ -239,7 +244,7 @@ Enlace: https://www.laboroteca.es/membresia-club-laboroteca/`;
     subject,
     html,
     text,
-    enviarACopy: true
+    enviarACopy: false
   });
 }
 
@@ -268,7 +273,7 @@ Laboroteca`;
     subject,
     html,
     text,
-    enviarACopy: true
+    enviarACopy: false
   });
 }
 
@@ -294,7 +299,7 @@ Si no lo has solicitado tú, ignora este mensaje.`;
     subject,
     html,
     text,
-    enviarACopy: true
+    enviarACopy: false
   });
 }
 

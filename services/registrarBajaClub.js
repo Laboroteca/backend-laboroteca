@@ -55,6 +55,30 @@ async function registrarBajaClub({
 
   try {
     const sheets = await getSheets();
+
+    // 🔒 Idempotencia: evita duplicados por (email + motivo + fechaEfectos)
+    const emailKey  = String(email).trim().toLowerCase();
+    const motivoKey = String(motivo).trim().toLowerCase();
+    const efectosKey = E;
+    try {
+      const getRes = await sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: 'Hoja 1!A2:E',
+     });
+      const rows = getRes.data.values || [];
+      const yaExiste = rows.some(r =>
+        (r[0] || '').toLowerCase().trim() === emailKey &&
+        (r[3] || '').toLowerCase().trim() === motivoKey &&
+        (r[4] || '').trim() === efectosKey
+      );
+      if (yaExiste) {
+        console.log(`↪️ registrarBajaClub: ya existe fila para ${emailKey} · ${motivoKey} · ${efectosKey}. No se duplica.`);
+        return;
+      }
+    } catch (eGet) {
+      // Si no se puede leer (cuota API, etc.), seguimos y registramos para no bloquear.
+      console.warn('⚠️ registrarBajaClub: no se pudo comprobar duplicado, continúo:', eGet?.message || eGet);
+    }
     await sheets.spreadsheets.values.append({
       spreadsheetId,
       range,

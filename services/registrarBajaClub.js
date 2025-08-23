@@ -7,11 +7,8 @@ const range = 'Hoja 1!A2';
 
 function fmtES(iso) {
   const d = iso ? new Date(iso) : new Date();
-  return d.toLocaleString('es-ES', {
-    timeZone: 'Europe/Madrid',
-    day: '2-digit', month: '2-digit', year: 'numeric',
-    hour: '2-digit', minute: '2-digit'
-  });
+  // Solo fecha (dd/mm/aaaa) en zona Madrid
+  return d.toLocaleDateString('es-ES', { timeZone: 'Europe/Madrid' });
 }
 
 const VERIF = v => (String(v || 'PENDIENTE').toUpperCase());
@@ -45,7 +42,7 @@ async function registrarBajaClub({
 }) {
   if (!email || !email.includes('@')) return;
 
-  const C = fmtES(fechaSolicitud);   // Col C
+  const C = fmtES(fechaSolicitud);             // Col C
   const E = fmtES(fechaEfectos || fechaSolicitud); // Col E
   const fila = [
     String(email).trim().toLowerCase(), // A Email
@@ -86,10 +83,7 @@ async function registrarBajaClub({
       } catch {}
     }
   }
-
 }
-
-module.exports = { registrarBajaClub };
 
 /**
  * Actualiza la verificación (columna F) en la ÚLTIMA fila cuyo email (col A) coincida.
@@ -117,8 +111,10 @@ async function actualizarVerificacionBaja({ email, verificacion = 'PENDIENTE' })
       }
     }
     if (rowIndex === -1) {
-      // No existe fila (fallback: no romper; opcionalmente registra)
-      await alertAdmin({ area: 'bajas_sheet_update_missing_row', email, err: new Error('Fila no encontrada para actualizar F') });
+      // No existe fila: no rompemos el flujo, pero dejamos alerta para rastreo
+      try {
+        await alertAdmin({ area: 'bajas_sheet_update_missing_row', email, err: new Error('Fila no encontrada para actualizar F') });
+      } catch {}
       return;
     }
     // Rango de la columna F (A2 es fila 2 => offset + 2)

@@ -8,7 +8,10 @@
     "start": "node index.js",
     "dev": "nodemon index.js",
     "audit:facturas": "node scripts/auditarFacturas.js",
-    "audit:ventas": "node scripts/auditarVentasMensuales.js"
+    "audit:ventas": "node scripts/auditarVentasMensuales.js",
+    "audit:club": "node scripts/auditarClubSemanal.js --mode=auto",
+    "audit:club:weekly": "node scripts/auditarClubSemanal.js --mode=weekly",
+    "audit:club:monthly": "node scripts/auditarClubSemanal.js --mode=monthly"
   },
   "engines": {
     "node": "18.x"
@@ -38,3 +41,4 @@
     "nodemon": "^3.1.10"
   }
 }
+

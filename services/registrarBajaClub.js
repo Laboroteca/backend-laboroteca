@@ -2,6 +2,7 @@
 const { google } = require('googleapis');
 const { alertAdmin } = require('../utils/alertAdmin');
 
+// ⚠️ Mantenemos estos valores tal y como los usas hoy:
 const spreadsheetId = '1qM9pM-qkPlR6yCeX7eC8i2wBWmAOI1WIDncf8I7pHMM';
 const range = 'Hoja 1!A2';
 
@@ -13,7 +14,7 @@ function fmtES(iso) {
     hour: '2-digit', minute: '2-digit'
   });
 }
-
+// F (T0) sin emoji; (T1) escribiremos emoji desde la nueva función
 const VERIF = v => (String(v || 'PENDIENTE').toUpperCase());
 
 async function getSheets() {
@@ -31,6 +32,7 @@ async function getSheets() {
 }
 
 /**
+ * T0 (solicitud): añade fila A..F (F='PENDIENTE')
  * Registra una baja del Club en la hoja de bajas (A..F).
  * motivo ∈ {impago, voluntaria, manual_fin_ciclo, manual_inmediata, eliminacion_cuenta, desconocido}
  * verificacion ∈ {PENDIENTE, CORRECTO, FALLIDA}
@@ -89,5 +91,78 @@ async function registrarBajaClub({
 
 }
 
-module.exports = { registrarBajaClub };
+/**
+ * T0 (helper): baja voluntaria ⇒ calcula fechaEfectos (si no viene) y escribe una sola fila con F='PENDIENTE'
+ */
+async function registrarBajaVoluntariaSolicitud({ email, nombre = '', fechaSolicitudISO, fechaEfectosISO }) {
+  return registrarBajaClub({
+    email,
+    nombre,
+    motivo: 'voluntaria',
+    fechaSolicitud: fechaSolicitudISO,
+    fechaEfectos: fechaEfectosISO,
+    verificacion: 'PENDIENTE',
+  });
+}
+
+/**
+ * T1 (ejecución): marcar verificación (columna F) con emoji ✅/❌
+ *  - estado: 'ok' | 'fail'
+ *  - se localiza la fila por (email + fechaEfectos formateada)
+ */
+async function actualizarVerificacionBaja({ email, fechaEfectosISO, estado }) {
+  if (!email || !fechaEfectosISO) return { ok: false, reason: 'missing_params' };
+  const sheets = await getSheets();
+  const hoja = 'Hoja 1'; // misma pestaña que usas en `range`
+  const rangoLectura = `${hoja}!A:F`;
+  const fechaTxt = fmtES(fechaEfectosISO);
+  try {
+    const get = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: rangoLectura,
+    });
+    const rows = get.data.values || [];
+    // rows[0] es la cabecera si existe; como tu range de append es A2,
+    // aquí recorremos todo y calculamos el rowNumber real cuando encontremos la coincidencia.
+    let rowNumber = -1;
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i] || [];
+      const emailOk = (r[0] || '').trim().toLowerCase() === String(email).trim().toLowerCase();
+      const efectosOk = (r[4] || '').trim() === fechaTxt;
+      if (emailOk && efectosOk) {
+        // i=0 → primera fila de datos (porque A2); índice + 2 en A1-notation
+        rowNumber = i + 2;
+        break;
+      }
+    }
+    if (rowNumber < 0) {
+      // Si no encuentro fila, notifico pero no rompo
+      await alertAdmin({
+        area: 'bajas_sheet_find_row',
+        email,
+        err: new Error('No se encontró fila para actualizar F (email+fechaEfectos).'),
+        meta: { fechaTxt }
+      }).catch(()=>{});
+      return { ok: false, reason: 'row_not_found' };
+    }
+    const emoji = (estado === 'ok') ? '✅ CORRECTO' : '❌ FALLIDA';
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `${hoja}!F${rowNumber}`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: [[emoji]] },
+    });
+    return { ok: true };
+  } catch (err) {
+    await alertAdmin({ area: 'bajas_sheet_update_F', email, err, meta: { fechaTxt } }).catch(()=>{});
+    return { ok: false, reason: 'update_error', err };
+  }
+}
+
+module.exports = {
+  registrarBajaClub,
+  registrarBajaVoluntariaSolicitud,
+  actualizarVerificacionBaja,
+  fmtES,
+};
 

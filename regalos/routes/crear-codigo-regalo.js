@@ -1,5 +1,8 @@
 // 📂 regalos/routes/crear-codigo-regalo.js
+'use strict';
+
 const express = require('express');
+const crypto = require('crypto');
 const admin = require('../../firebase');
 const firestore = admin.firestore();
 
@@ -7,6 +10,83 @@ const { google } = require('googleapis');
 const { auth } = require('../../entradas/google/sheetsAuth');
 
 const router = express.Router();
+
+/* =======================
+   Seguridad HMAC (igual que Entradas)
+   Requisitos:
+   - Config .env / entorno:
+       ENTRADAS_API_KEY        (o REGALOS_API_KEY)
+       ENTRADAS_HMAC_SECRET    (o REGALOS_HMAC_SECRET)
+       ENTRADAS_SKEW_MS        (opcional, por defecto ±5 min)
+       FLUENTFORM_TOKEN        (opcional: fallback Bearer)
+   - En app.js debes tener:
+       app.use(express.json({ verify:(req,res,buf)=>{ req.rawBody = buf } }));
+   - El emisor debe firmar:
+       x-api-key: ENTRADAS_API_KEY
+       x-e-ts:    timestamp ms
+       x-e-sig:   HMAC-SHA256( ts + '.POST.' + <pathname> + '.' + sha256(body) )
+     donde <pathname> aquí es: "/regalos/crear-codigo-regalo"
+========================= */
+
+const API_KEY = (process.env.ENTRADAS_API_KEY || process.env.REGALOS_API_KEY || '').trim();
+const HMAC_SECRET = (process.env.ENTRADAS_HMAC_SECRET || process.env.REGALOS_HMAC_SECRET || '').trim();
+const SKEW_MS = Number(process.env.ENTRADAS_SKEW_MS || process.env.REGALOS_SKEW_MS || 5 * 60 * 1000);
+const REGALOS_DEBUG = String(process.env.REGALOS_SYNC_DEBUG || '').trim() === '1';
+
+function verifyRegalosHmac(req, res, next) {
+  // Fallback compat: si llega Bearer correcto, aceptar y salir
+  const bearer = req.headers['authorization'];
+  if (bearer && bearer === process.env.FLUENTFORM_TOKEN) {
+    if (REGALOS_DEBUG) console.log('[REGALOS DEBUG] fallback Bearer OK');
+    return next();
+  }
+
+  if (!API_KEY || !HMAC_SECRET) {
+    return res.status(500).json({ error: 'Config incompleta (ENTRADAS/REGALOS_API_KEY / _HMAC_SECRET)' });
+  }
+
+  const hdrKey = req.headers['x-api-key'];
+  const ts = req.headers['x-e-ts'];
+  const sig = req.headers['x-e-sig'];
+
+  if (hdrKey !== API_KEY) return res.status(401).json({ error: 'Unauthorized (key)' });
+  if (!/^\d+$/.test(String(ts || ''))) return res.status(401).json({ error: 'Unauthorized (ts)' });
+
+  const now = Date.now();
+  if (Math.abs(now - Number(ts)) > SKEW_MS) {
+    return res.status(401).json({ error: 'Unauthorized (skew)' });
+  }
+
+  const bodyStr = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body || {});
+  const bodyHash = crypto.createHash('sha256').update(bodyStr, 'utf8').digest('hex');
+
+  // Path canónico: solo pathname (sin querystring)
+  const pathname = new URL(req.originalUrl, 'http://x').pathname; // → "/regalos/crear-codigo-regalo"
+  const base = `${ts}.POST.${pathname}.${bodyHash}`;
+  const expected = crypto.createHmac('sha256', HMAC_SECRET).update(base).digest('hex');
+
+  if (REGALOS_DEBUG) {
+    const maskTail = s => (s ? `••••${String(s).slice(-4)}` : null);
+    console.log('[REGALOS DEBUG OUT]', {
+      path: pathname,
+      ts,
+      bodyHash10: bodyHash.slice(0, 10),
+      sig10: String(sig || '').slice(0, 10),
+      exp10: expected.slice(0, 10),
+      apiKeyMasked: maskTail(API_KEY),
+    });
+  }
+
+  try {
+    if (!crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(String(sig || '')))) {
+      return res.status(401).json({ error: 'Unauthorized (sig)' });
+    }
+  } catch {
+    return res.status(401).json({ error: 'Unauthorized (sig-len)' });
+  }
+
+  return next();
+}
 
 // 🎨 Colores unificados (RGB 0–1) y texto
 const COLOR_VERDE = { red: 0.20, green: 0.66, blue: 0.33 }; // "NO"
@@ -27,13 +107,8 @@ const SHEET_NAME_CONTROL =
 async function withRetries(fn, { tries = 4, baseMs = 150 } = {}) {
   let lastErr;
   for (let i = 1; i <= tries; i++) {
-    try {
-      return await fn();
-    } catch (e) {
-      lastErr = e;
-      const wait = baseMs * Math.pow(2, i - 1);
-      await new Promise(r => setTimeout(r, wait));
-    }
+    try { return await fn(); }
+    catch (e) { lastErr = e; await new Promise(r => setTimeout(r, baseMs * Math.pow(2, i - 1))); }
   }
   throw lastErr;
 }
@@ -68,7 +143,7 @@ async function ensureCondFormats(sheets, spreadsheetId, sheetTitle) {
         ]
       }
     });
-  } catch { /* si no hay reglas, no pasa nada */ }
+  } catch {}
 
   // Añadir "NO" → verde, "SÍ" → rojo
   await sheets.spreadsheets.batchUpdate({
@@ -105,9 +180,9 @@ async function ensureCondFormats(sheets, spreadsheetId, sheetTitle) {
 }
 
 /**
- * 📌 POST /crear-codigo-regalo
+ * 📌 POST /regalos/crear-codigo-regalo  (protegido por HMAC)
  */
-router.post('/crear-codigo-regalo', async (req, res) => {
+router.post('/crear-codigo-regalo', verifyRegalosHmac, async (req, res) => {
   try {
     const nombre = String(req.body?.nombre || '').trim();
     const email  = String(req.body?.email  || '').trim().toLowerCase();

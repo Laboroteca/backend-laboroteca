@@ -1,15 +1,79 @@
-// entradas/routes/crear-entrada-regalo.js
+// /entradas/routes/crear-entrada-regalo.js
+'use strict';
+
 const express = require('express');
+const crypto = require('crypto');
 const dayjs = require('dayjs');
+
+const generarEntradas = require('../services/generarEntradas');
+const { enviarEmailConEntradas } = require('../services/enviarEmailConEntradas');
+
 const { generarEntradaPDF } = require('../utils/generarEntradaPDF');
 const { generarCodigoEntrada, normalizar } = require('../utils/codigos');
 const { subirEntrada } = require('../utils/gcsEntradas');
 const { registrarEntradaFirestore } = require('../services/registrarEntradaFirestore');
-const { enviarEmailConEntradas } = require('../services/enviarEmailConEntradas');
+
 const { google } = require('googleapis');
 const { auth } = require('../google/sheetsAuth');
 
 const router = express.Router();
+
+const API_KEY = (process.env.ENTRADAS_API_KEY || process.env.FLUENTFORM_TOKEN || '').trim();
+const HMAC_SECRET = (process.env.ENTRADAS_HMAC_SECRET || '').trim();
+const SKEW_MS = Number(process.env.ENTRADAS_SKEW_MS || 5 * 60 * 1000); // ±5 min
+const ENTRADAS_DEBUG = String(process.env.ENTRADAS_DEBUG || '') === '1';
+
+// ───────────────────────── Seguridad ─────────────────────────
+function verifyAuth(req) {
+  // 1) API key: admite "x-api-key" o "Authorization: Bearer ..."
+  const bearer = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim();
+  const headerKey = (req.headers['x-api-key'] || '').trim();
+  const providedKey = headerKey || bearer;
+
+  if (!API_KEY || providedKey !== API_KEY) {
+    return { ok: false, code: 403, msg: 'Unauthorized (key)' };
+  }
+
+  // 2) HMAC opcional (si hay secreto definido)
+  if (!HMAC_SECRET) return { ok: true };
+
+  const ts = String(req.headers['x-e-ts'] || '');
+  const sig = String(req.headers['x-e-sig'] || '');
+
+  if (!/^\d+$/.test(ts) || !sig) {
+    return { ok: false, code: 401, msg: 'Missing HMAC headers' };
+  }
+
+  const now = Date.now();
+  if (Math.abs(now - Number(ts)) > SKEW_MS) {
+    return { ok: false, code: 401, msg: 'Expired token' };
+  }
+
+  // Firmamos: ts.POST.<path>.sha256(body)
+  const path = (req.originalUrl || '').split('?')[0]; // sin query
+  const bodyStr = JSON.stringify(req.body || {});
+  const bodyHash = crypto.createHash('sha256').update(bodyStr, 'utf8').digest('hex');
+  const base = `${ts}.POST.${path}.${bodyHash}`;
+  const expected = crypto.createHmac('sha256', HMAC_SECRET).update(base).digest('hex');
+
+  const okSig = expected.length === sig.length &&
+                crypto.timingSafeEqual(Buffer.from(expected, 'utf8'), Buffer.from(sig, 'utf8'));
+
+  if (ENTRADAS_DEBUG) {
+    const mask = (s) => (s ? `••••${String(s).slice(-4)}` : null);
+    console.log('[ENTRADAS DEBUG IN]', {
+      path,
+      ts,
+      bodyHash10: bodyHash.slice(0, 10),
+      sig10: sig.slice(0, 10),
+      exp10: expected.slice(0, 10),
+      apiKeyMasked: mask(providedKey),
+    });
+  }
+
+  if (!okSig) return { ok: false, code: 401, msg: 'Bad signature' };
+  return { ok: true };
+}
 
 // ── Hoja por formulario (fallback al 22)
 const MAP_SHEETS = {
@@ -21,45 +85,30 @@ const MAP_SHEETS = {
 };
 const FALLBACK_22 = MAP_SHEETS['22'];
 
-// ── Lee metadatos del evento desde variables de entorno por formulario
-//    Soportados (ej. para form 39):
-//      EVENT_39_DESCRIPCION  | EVENT_39_DESC
-//      EVENT_39_NOMBRE
-//      EVENT_39_FECHA
-//      EVENT_39_DIRECCION
-//      EVENT_39_IMG
-//    Opcional global: EVENT_DEFAULT_IMG
+// ── Metadatos de evento desde ENV por formulario
 function getEventoFromEnv(formId) {
   const id = String(formId || '').trim();
   const env = (k) => process.env[k] || '';
   return {
-    descripcionProducto:
-      env(`EVENT_${id}_DESCRIPCION`) || env(`EVENT_${id}_DESC`) || '',
-    nombreProducto:
-      env(`EVENT_${id}_NOMBRE`) || '',
-    fechaActuacion:
-      env(`EVENT_${id}_FECHA`) || '',
-    direccionEvento:
-      env(`EVENT_${id}_DIRECCION`) || '',
-    imagenEvento:
-      env(`EVENT_${id}_IMG`) || env('EVENT_DEFAULT_IMG') || ''
+    descripcionProducto: env(`EVENT_${id}_DESCRIPCION`) || env(`EVENT_${id}_DESC`) || '',
+    nombreProducto:      env(`EVENT_${id}_NOMBRE`) || '',
+    fechaActuacion:      env(`EVENT_${id}_FECHA`) || '',
+    direccionEvento:     env(`EVENT_${id}_DIRECCION`) || '',
+    imagenEvento:        env(`EVENT_${id}_IMG`) || env('EVENT_DEFAULT_IMG') || ''
   };
 }
-
 function getSheetId(formularioId) {
   const id = String(formularioId || '').trim();
   return MAP_SHEETS[id] || FALLBACK_22;
 }
 
 /**
- * Inserta fila en A:G con:
+ * Inserta fila en A:G:
  * A=fecha, B=desc, C=comprador, D=código, E="NO", F="NO", G="REGALO"
- * Sin aplicar ningún formato (fondo blanco, letra normal por defecto).
  */
 async function appendRegaloRow({ spreadsheetId, fecha, desc, comprador, codigo }) {
   const authClient = await auth();
   const sheets = google.sheets({ version: 'v4', auth: authClient });
-
   await sheets.spreadsheets.values.append({
     spreadsheetId,
     range: 'A:G',
@@ -69,13 +118,17 @@ async function appendRegaloRow({ spreadsheetId, fecha, desc, comprador, codigo }
   });
 }
 
-/**
- * POST /entradas/crear-entrada-regalo
- * body:
- *   beneficiarioNombre, beneficiarioEmail, cantidad, formularioId
- *   (opcionalmente puede enviar: descripcionProducto, nombreProducto, fechaActuacion, direccionEvento, imagenEvento)
- */
+// ───────────────────────── Ruta ─────────────────────────
+const processed = new Set(); // dedupe básica en memoria
+
 router.post('/crear-entrada-regalo', async (req, res) => {
+  // Seguridad primero
+  const authRes = verifyAuth(req);
+  if (!authRes.ok) {
+    console.warn('⛔️ /entradas/crear-entrada-regalo auth failed:', authRes.msg);
+    return res.status(authRes.code).json({ ok: false, error: authRes.msg });
+  }
+
   try {
     const beneficiarioNombre = String(req.body?.beneficiarioNombre || '').trim();
     const email              = String(req.body?.beneficiarioEmail || '').trim().toLowerCase();
@@ -86,8 +139,6 @@ router.post('/crear-entrada-regalo', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'Email del beneficiario inválido' });
     }
 
-    // 1) Preferimos SIEMPRE lo que envía el frontend (hidden del formulario)
-    // 2) Si no llegan, usamos ENV por formulario
     const envCfg = getEventoFromEnv(formularioId);
 
     const descripcionProducto = String(
@@ -111,7 +162,7 @@ router.post('/crear-entrada-regalo', async (req, res) => {
     ).trim();
 
     if (!descripcionProducto) {
-      return res.status(400).json({ ok: false, error: 'Falta descripcionProducto (envía hidden o define EVENT_{ID}_DESCRIPCION)' });
+      return res.status(400).json({ ok: false, error: 'Falta descripcionProducto (hidden o EVENT_{ID}_DESCRIPCION)' });
     }
 
     const sheetId = getSheetId(formularioId);
@@ -175,9 +226,10 @@ router.post('/crear-entrada-regalo', async (req, res) => {
       direccion: direccionEvento
     });
 
+    console.log(`✅ Entradas REGALO generadas y enviadas a ${email} (${buffers.length})`);
     res.status(201).json({ ok: true, enviados: buffers.length, codigos, sheetId, formularioId });
   } catch (err) {
-    console.error('crear-entrada-regalo:', err?.message || err);
+    console.error('❌ /entradas/crear-entrada-regalo:', err?.message || err);
     res.status(500).json({ ok: false, error: 'Error interno' });
   }
 });

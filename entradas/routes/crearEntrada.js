@@ -7,22 +7,25 @@ const router = express.Router();
 
 const generarEntradas = require('../services/generarEntradas');
 const { enviarEmailConEntradas } = require('../services/enviarEmailConEntradas');
+const { alertAdmin } = require('../../utils/alertAdmin'); // avisos al admin
 
-// ── Seguridad ─────────────────────────────────────────────────────────────
-const API_KEY      = (process.env.ENTRADAS_API_KEY || '').trim();         // p.ej. L4bo_Entradas_xxx
-const HMAC_SECRET  = (process.env.ENTRADAS_HMAC_SECRET || '').trim();     // 32+ bytes aleatorios
-const LEGACY_TOKEN = (process.env.FLUENTFORM_TOKEN || '').trim();         // compat opcional (Authorization: Bearer …)
-const WINDOW_MS    = 5 * 60 * 1000;                                       // ±5 min
-const ENTRADAS_DEBUG = String(process.env.ENTRADAS_DEBUG || '') === '1';  // logs de verificación
+/* ───────────────────── Seguridad / Flags ───────────────────── */
+const API_KEY        = (process.env.ENTRADAS_API_KEY || '').trim();          // p.ej. L4bo_Entradas_xxx
+const HMAC_SECRET    = (process.env.ENTRADAS_HMAC_SECRET || '').trim();      // 32+ bytes aleatorios
+const LEGACY_TOKEN   = (process.env.FLUENTFORM_TOKEN || '').trim();          // compat opcional
+const WINDOW_MS      = 5 * 60 * 1000;                                        // ±5 min
+const ENTRADAS_DEBUG = String(process.env.ENTRADAS_DEBUG || '') === '1';     // logs extra
+const REQUIRE_HMAC   = String(process.env.ENTRADAS_REQUIRE_HMAC || '0') === '1'; // forzar HMAC si 1
+const IP_ALLOW       = String(process.env.ENTRADAS_IP_ALLOW || '')
+  .split(',').map(s => s.trim()).filter(Boolean);                            // allowlist solo para legacy
 
-// Anti-replay in-memory (usa Redis si puedes en producción)
-const seen = new Map(); // key = `${ts}.${sig}` → expiresAt
+/* ───────────────────── Utils seguridad ───────────────────── */
+const seen = new Map(); // anti-replay en memoria: key = `${ts}.${sig}` → expiresAt
 
 function pruneSeen() {
   const now = Date.now();
   for (const [k, exp] of seen.entries()) if (exp <= now) seen.delete(k);
 }
-
 function timingSafeEqualHex(aHex, bHex) {
   try {
     const a = Buffer.from(String(aHex), 'hex');
@@ -30,12 +33,35 @@ function timingSafeEqualHex(aHex, bHex) {
     return a.length === b.length && crypto.timingSafeEqual(a, b);
   } catch { return false; }
 }
-
 function okBearerOrRaw(authHeader) {
   const v = String(authHeader || '');
   return v.startsWith('Bearer ') ? v.slice(7) : v;
 }
+function clientIp(req) {
+  const xf = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return xf || req.ip || req.connection?.remoteAddress || '';
+}
+function mask(s) {
+  if (!s) return null;
+  const str = String(s);
+  return str.length <= 4 ? '••••' : `••••${str.slice(-4)}`;
+}
 
+/* ───────────────────── alertAdmin seguro ───────────────────── */
+let warnedConfigMissing = false;
+async function safeAlert(mensaje, extra = {}) {
+  try {
+    await alertAdmin({
+      asunto: '⚠️ Entradas – Incidencia',
+      mensaje,
+      contexto: 'entradas/routes/crearEntrada.js',
+      severidad: 'CRITICO',
+      ...extra,
+    });
+  } catch { /* nunca romper el flujo por fallo de alertas */ }
+}
+
+/** Verifica HMAC: devuelve { ok:true, ts, bodyHash10, exp10, sig10 } si válido; si no, { ok:false, code, msg } */
 function verifyHmac(req, expectedPath) {
   const apiKeyHdr = req.get('x-api-key');
   const ts        = req.get('x-entr-ts');
@@ -43,102 +69,113 @@ function verifyHmac(req, expectedPath) {
 
   if (!API_KEY || !HMAC_SECRET) {
     if (ENTRADAS_DEBUG) console.warn('[ENTR HMAC FAIL] cfg-missing');
+    if (!warnedConfigMissing) {
+      warnedConfigMissing = true;
+      safeAlert('❌ [Seguridad] Falta ENTRADAS_API_KEY o ENTRADAS_HMAC_SECRET en el servidor. HMAC inoperativo.', { severidad: 'ALTA' });
+    }
     return { ok: false, code: 500, msg: 'Config incompleta' };
   }
-  if (apiKeyHdr !== API_KEY) {
-    if (ENTRADAS_DEBUG) console.warn('[ENTR HMAC FAIL] bad-api-key');
-    return { ok: false, code: 401, msg: 'Unauthorized' };
-  }
-  if (!/^\d+$/.test(ts || '')) {
-    if (ENTRADAS_DEBUG) console.warn('[ENTR HMAC FAIL] bad-ts');
-    return { ok: false, code: 401, msg: 'Unauthorized' };
-  }
+  if (apiKeyHdr !== API_KEY)  return { ok: false, code: 401, msg: 'Unauthorized' };
+  if (!/^\d+$/.test(ts || '')) return { ok: false, code: 401, msg: 'Unauthorized' };
 
   const tsNum = Number(ts);
   const now   = Date.now();
-  if (Math.abs(now - tsNum) > WINDOW_MS) {
-    if (ENTRADAS_DEBUG) console.warn('[ENTR HMAC FAIL] expired/skew', { ts });
-    return { ok: false, code: 401, msg: 'Expired/Skew' };
-  }
+  if (Math.abs(now - tsNum) > WINDOW_MS) return { ok: false, code: 401, msg: 'Expired/Skew' };
 
   // Firmamos: ts.POST.<path>.sha256(body)
   const body     = req.rawBody ?? JSON.stringify(req.body ?? {});
   const bodyHash = crypto.createHash('sha256').update(body, 'utf8').digest('hex');
   const base     = `${ts}.POST.${expectedPath}.${bodyHash}`;
-  const expectedSig = crypto.createHmac('sha256', HMAC_SECRET).update(base).digest('hex');
+  const expected = crypto.createHmac('sha256', HMAC_SECRET).update(base).digest('hex');
 
-  // Anti-replay
   pruneSeen();
   const k = `${ts}.${sig}`;
-  if (seen.has(k)) {
-    if (ENTRADAS_DEBUG) console.warn('[ENTR HMAC FAIL] replay', { ts });
-    return { ok: false, code: 401, msg: 'Replay' };
-  }
+  if (seen.has(k)) return { ok: false, code: 401, msg: 'Replay' };
 
-  const ok = timingSafeEqualHex(expectedSig, sig);
-  if (ok) {
-    if (ENTRADAS_DEBUG) {
-      console.log('[ENTR HMAC OK]', {
-        path: expectedPath,
-        ts,
-        bodyHash10: bodyHash.slice(0, 10),
-        sig10: String(sig).slice(0, 10)
-      });
-    }
-    seen.set(k, now + WINDOW_MS);
-    return { ok: true };
-  } else {
+  const ok = timingSafeEqualHex(expected, sig);
+  if (!ok) {
     if (ENTRADAS_DEBUG) {
       console.warn('[ENTR HMAC FAIL] bad-signature', {
-        path: expectedPath,
-        ts,
+        path: expectedPath, ts,
         bodyHash10: bodyHash.slice(0, 10),
-        exp10: expectedSig.slice(0, 10),
-        sig10: String(sig).slice(0, 10)
+        exp10: expected.slice(0, 10),
+        sig10: String(sig).slice(0, 10),
       });
     }
     return { ok: false, code: 401, msg: 'Bad signature' };
   }
+
+  seen.set(k, now + WINDOW_MS);
+  return {
+    ok: true,
+    ts,
+    bodyHash10: bodyHash.slice(0, 10),
+    exp10: expected.slice(0, 10),
+    sig10: String(sig).slice(0, 10),
+  };
 }
 
-// Middleware seguro para disponer de req.rawBody aunque ya exista body-parser
+/* Mantener rawBody (si no lo haces ya en app.use(express.json())) */
 router.use((req, _res, next) => {
   if (typeof req.rawBody === 'string' && req.rawBody.length) return next();
   if (req.readable && !req.body) {
-    // No se ha parseado aún: capturamos stream
     let data = '';
     req.setEncoding('utf8');
     req.on('data', chunk => (data += chunk));
     req.on('end', () => { req.rawBody = data || ''; next(); });
     req.on('error', () => { req.rawBody = ''; next(); });
   } else {
-    // Ya parseado por express.json(): reconstruimos
     try { req.rawBody = JSON.stringify(req.body || {}); }
     catch { req.rawBody = ''; }
     next();
   }
 });
 
-// ── Dedupe básica de negocio ─────────────────────────────────────────────
+/* ───────────────────── Dedupe básica ───────────────────── */
 const processed = new Set();
 
-// Handler principal
+/* ───────────────────── Handler principal ───────────────────── */
 router.post('/', async (req, res) => {
   // 1) Seguridad (preferente HMAC). La ruta firmada debe coincidir EXACTAMENTE
-  // con la pública publicada por Node (sin /wp-json).
+  // con la publicada por WP (sin /wp-json).
   const expectedPath = '/entradas/crear';
   const h = verifyHmac(req, expectedPath);
 
-  // Fallback: token legado “Authorization: Bearer <FLUENTFORM_TOKEN>”
   if (h.ok) {
-    if (ENTRADAS_DEBUG) console.log('[ENTR AUTH] method=hmac');
+    // ✅ LOG IRREFUTABLE DE HMAC OK
+    console.log('🛡️ [ENTR HMAC OK]', {
+      ip: clientIp(req),
+      ua: req.get('user-agent') || '',
+      path: expectedPath,
+      ts: h.ts,
+      bodyHash10: h.bodyHash10,
+      exp10: h.exp10,
+      sig10: h.sig10,
+      apiKeyMasked: mask(API_KEY),
+    });
   } else {
+    // Fallback legacy si NO exigimos HMAC
     const provided = okBearerOrRaw(req.headers.authorization);
+    if (REQUIRE_HMAC) {
+      console.warn('[ENTR HMAC FAIL][REQUIRE_HMAC=1]', h.msg || 'legacy disabled');
+      return res.status(h.code || 401).json({ error: 'Unauthorized' });
+    }
     if (!LEGACY_TOKEN || provided !== LEGACY_TOKEN) {
-      console.warn('⛔️ Seguridad entradas fallida:', h.msg || 'legacy token mismatch');
+      console.warn('[ENTR SECURITY FAIL]', h.msg || 'legacy token mismatch');
       return res.status(h.code || 403).json({ error: 'Token inválido' });
     }
-    if (ENTRADAS_DEBUG) console.log('[ENTR AUTH] method=legacy');
+    const ip = clientIp(req);
+    if (IP_ALLOW.length && !IP_ALLOW.includes(ip)) {
+      console.warn('[ENTR LEGACY BLOCKED IP]', { ip, allow: IP_ALLOW });
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    // ✅ LOG IRREFUTABLE DE LEGACY OK
+    console.log('🟡 [ENTR LEGACY OK]', {
+      ip,
+      ua: req.get('user-agent') || '',
+      authLen: provided.length,
+      note: 'Se aceptó Authorization (modo compat).'
+    });
   }
 
   // 2) Parseo y validaciones
@@ -158,6 +195,12 @@ router.post('/', async (req, res) => {
 
   if (!email || !slugEvento || !fechaEvento || !descripcionProducto || !numEntradas) {
     console.warn('⚠️ Datos incompletos para crear entrada');
+    // aviso ALTA (bloquea generación)
+    safeAlert(
+      `⚠️ Datos incompletos en /entradas/crear para ${email || '(sin email)'}: ` +
+      `{slugEvento:${!!slugEvento}, fechaEvento:${!!fechaEvento}, descripcionProducto:${!!descripcionProducto}, numEntradas:${!!numEntradas}}`,
+      { severidad: 'ALTA' }
+    );
     return res.status(400).json({ error: 'Faltan datos obligatorios' });
   }
 
@@ -196,6 +239,10 @@ router.post('/', async (req, res) => {
       });
     } catch (e) {
       console.error('❌ Error enviando email de entradas:', e.message || e);
+      await safeAlert(`❌ Fallo crítico enviando email de entradas a ${email} (${slugEvento}).`, {
+        severidad: 'CRITICO',
+        detalle: e?.message || String(e),
+      });
       return res.status(500).json({ error: 'No se pudo enviar el email con entradas.' });
     }
 
@@ -209,17 +256,22 @@ router.post('/', async (req, res) => {
           text: JSON.stringify({ email, descripcionProducto, fechaEvento, slugEvento, idFormulario, errores }, null, 2)
         });
       } catch (e) {
-        console.error('⚠️ No se pudo avisar al admin:', e.message || e);
+        console.error('⚠️ No se pudo avisar al admin (email personalizado):', e.message || e);
       }
+      // alerta discreta adicional
+      safeAlert(`⚠️ Errores no críticos en generarEntradas para ${email}: ${JSON.stringify(errores)}`, { severidad: 'MEDIA' });
     }
 
     console.log(`✅ Entradas generadas y enviadas a ${email} (${numEntradas})`);
     return res.status(200).json({ ok: true, mensaje: 'Entradas generadas y enviadas' });
   } catch (err) {
     console.error('❌ Error en /entradas/crear:', err.message || err);
+    await safeAlert(`❌ Error generando entradas para ${email} (${slugEvento}).`, {
+      severidad: 'CRITICO',
+      detalle: err?.message || String(err),
+    });
     return res.status(500).json({ error: 'Error generando entradas' });
   }
 });
 
 module.exports = router;
-

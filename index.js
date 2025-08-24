@@ -98,8 +98,9 @@ app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 
-// NUEVO: ruta para registrar consentimiento
-app.use(registrarConsentimiento);
+// NUEVO: ruta para registrar consentimiento (vía /api/…)
+app.use('/api', registrarConsentimiento);
+console.log('📌 Ruta de consentimientos montada en /api/registrar-consentimiento');
 
 
 // DESPUÉS DEL WEBHOOK, LOS BODY PARSERS

@@ -408,4 +408,7 @@ async function registrarConsentimiento(payload) {
 // ───────────────────────────── Exports ─────────────────────────────
 module.exports = {
   registrarConsentimiento,
+  // Compatibilidad hacia atrás: algunos módulos antiguos podrían seguir
+  // importando logConsent. Lo dejamos como alias del nuevo registrador.
+  logConsent: registrarConsentimiento
 };

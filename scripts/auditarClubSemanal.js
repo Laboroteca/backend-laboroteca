@@ -509,7 +509,6 @@ async function enviarInforme({ html, subject }) {
     console.log('ℹ️ SMTP2GO no configurado; no se envía email.');
     return;
   }
-  const { enviarEmailPersonalizado } = require('../services/email'); // lazy-require
   const mode = getMode();
   const send = whatToSendNow();
   const force = isForce();
@@ -523,6 +522,14 @@ async function enviarInforme({ html, subject }) {
   }
 
   const subj = force ? `🔧 [FORZADO] ${subject}` : subject;
+
+  // ← SOLO aquí hacemos el require para evitar la circularidad cuando "no toca"
+  const { enviarEmailPersonalizado } = require('../services/email');
+  if (typeof enviarEmailPersonalizado !== 'function') {
+    console.warn('⚠️ enviarEmailPersonalizado no está disponible (posible dependencia circular).');
+    return;
+  }
+
 
   if (mode === 'weekly' || (mode === 'auto' && send.weekly) || (force && mode === 'weekly')) {
     await enviarEmailPersonalizado({ to: EMAIL_ADMIN, subject: subj, html, text: 'Informe semanal del Club' });

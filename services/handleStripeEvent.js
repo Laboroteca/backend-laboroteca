@@ -644,7 +644,11 @@ Error: ${T(e?.message || e)}`,
 
 if (emailSeguro.includes('@')) {
   try {
-    await activarMembresiaClub(emailSeguro);
+    await activarMembresiaClub(emailSeguro, {
+      activationRef: String(invoiceId),
+      invoiceId: String(invoiceId),
+      via: 'webhook:invoice.paid'
+    });
   } catch (e) {
     console.error('❌ Activación Club (invoice.paid):', e?.message || e);
     await alertAdmin({
@@ -1209,7 +1213,11 @@ try {
         // 🔓 Activación inmediata (no bloqueada por Sheets/Email/GCS/FacturaCity)
     try {
       if (memberpressId === 10663) {
-        await activarMembresiaClub(email);
+        await activarMembresiaClub(email, {
+          activationRef: String(pi || sessionId),
+          paymentIntentId: pi ? String(pi) : null,
+          via: 'webhook:checkout.session.completed'
+        });
         await syncMemberpressClub({ email, accion: 'activar', membership_id: memberpressId, importe: datosCliente.importe });
         console.log('✅ CLUB activado inmediatamente');
       } else if (memberpressId === 7994) {

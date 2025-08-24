@@ -123,6 +123,10 @@ module.exports = async function procesarCompra(datos) {
 
 
   const compraId = `compra-${Date.now()}`;
+  // Ref única para idempotencia de activación (prioriza IDs “fuertes”)
+  const activationRef = String(
+    datos.invoiceId || datos.sessionId || datos.pedidoId || compraId
+  );
   const docRef = firestore.collection('comprasProcesadas').doc(compraId);
   let compRef = null; // ← añadido para tracking por dedupeKey
 
@@ -192,7 +196,11 @@ module.exports = async function procesarCompra(datos) {
 if (membership_id) { // ← robusto: activa CLUB por mapeo del producto, no por texto "club"
   try {
     console.log(`🔓 → Activando membresía CLUB con ID ${membership_id} para ${email}`);
-    await activarMembresiaClub(email);
+    await activarMembresiaClub(email, {
+      activationRef,
+      invoiceId: datos.invoiceId ? String(datos.invoiceId) : null,
+      via: 'service:procesarCompra'
+    });
     await syncMemberpressClub({ email, accion: 'activar', membership_id, importe });
     console.log('✅ Membresía del CLUB activada correctamente');
   } catch (err) {

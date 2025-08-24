@@ -8,6 +8,7 @@ const { alertAdmin } = require('../utils/alertAdmin');
 const API_URL = (process.env.MP_SYNC_API_URL_LIBRO || 'https://www.laboroteca.es/wp-json/laboroteca/v1/libro-membership').trim();
 const API_KEY = (process.env.MP_SYNC_API_KEY || '').trim();
 const HMAC_SECRET = (process.env.MP_SYNC_HMAC_SECRET || '').trim();
+const MP_SYNC_DEBUG = String(process.env.MP_SYNC_DEBUG || '').trim() === '1';
 
 /**
  * Sincroniza la membresía del LIBRO en MemberPress (activar o desactivar).
@@ -59,7 +60,20 @@ async function syncMemberpressLibro({ email, accion, membership_id = 7994, impor
   const baseToSign = `${ts}.POST.${pathname}.${bodyHash}`;
   const sig = crypto.createHmac('sha256', HMAC_SECRET).update(baseToSign).digest('hex');
 
-  // Log mínimo
+  // 🔎 Debug controlado (activar con MP_SYNC_DEBUG=1)
+  if (MP_SYNC_DEBUG) {
+    const maskTail = (s) => (s ? `••••${String(s).slice(-4)}` : null);
+    console.log('[MP DEBUG OUT]', {
+      url: API_URL,
+      path: pathname,
+      ts,
+      bodyHash10: bodyHash.slice(0, 10),
+      sig10: sig.slice(0, 10),
+      apiKeyMasked: maskTail(API_KEY),
+    });
+  }
+
+  // Log mínimo operativo
   console.log(`📡 [syncMemberpressLibro] '${accion}' → ${email} (ID:${membership_id}, €${importeNum})`);
 
   let response;

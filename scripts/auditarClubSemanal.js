@@ -1,13 +1,12 @@
 // scripts/auditarClubSemanal.js
-// Ejecuta manualmente: node scripts/auditarClubSemanal.js --mode=auto|weekly|monthly
+// Ejecuta manualmente: node scripts/auditarClubSemanal.js --mode=auto|weekly|monthly [--force]
 // Un único cron diario (p.ej. 06,07,08 UTC). El script decide si toca enviar
 // según Europe/Madrid: martes 09:00 → admin; día 1 09:00 → Ignacio.
 
 const { google } = require('googleapis');
 const admin = require('../firebase'); // inicialización Firebase Admin en tu proyecto
 const firestore = admin.firestore();
-// Lazy import para evitar warnings por dependencias circulares
-// (no importamos hasta el momento de enviar)
+// Nota: el módulo de email se requiere de forma "perezosa" dentro de enviarInforme() para evitar warnings de dependencias circulares.
 
 // ───────────── Config ─────────────
 const SHEET_COMPRAS_ID   = '1Mtffq42G7Q0y44ekzvy7IWPS8obvN4pNahA-08igdGk'; // Altas/Renovaciones (A:Nombre, B:Apellidos, C:DNI, D:Descripción, E:Importe, F:Fecha, G:Email)
@@ -96,12 +95,12 @@ async function leerComprasSheet() {
     valueRenderOption: 'UNFORMATTED_VALUE',
   });
   return (data.values || []).map(r => {
-    const nombre = (r[0] || '').toString().trim(); // A
-    const apellidos = (r[1] || '').toString().trim(); // B
-    const desc = (r[3] || '').toString().trim();   // D
-    const imp = r[4];                               // E
-    const fec = r[5];                               // F
-    const email = (r[6] || '').toString().trim().toLowerCase(); // G
+    const nombre = (r[0] || '').toString().trim();                 // A
+    const apellidos = (r[1] || '').toString().trim();              // B
+    const desc = (r[3] || '').toString().trim();                   // D
+    const imp = r[4];                                              // E
+    const fec = r[5];                                              // F
+    const email = (r[6] || '').toString().trim().toLowerCase();   // G
     return { nombre, apellidos, email, desc, importe: numberFromImporte(imp), fecha: parseFechaCell(fec) };
   }).filter(x => x.desc && x.fecha);
 }
@@ -271,7 +270,6 @@ function miembrosAntiguosSheets(rowsCompras, atDate) {
     .slice(0, 10);
 }
 function miembrosAntiguosFirebase(usuarios, facturas, atDate) {
-  // index facturas por email
   const byEmail = new Map();
   for (const f of facturas) {
     if (!f.email) continue;
@@ -495,6 +493,9 @@ function getMode() {
   const arg = process.argv.find((a) => a.startsWith('--mode='));
   return arg ? arg.split('=')[1] : 'auto';
 }
+function isForce() {
+  return process.argv.includes('--force') || /^(1|true)$/i.test(process.env.FORCE_SEND || '');
+}
 function whatToSendNow() {
   const now = new Date();
   const hour = Number(new Intl.DateTimeFormat('es-ES', { timeZone: 'Europe/Madrid', hour: '2-digit', hour12: false }).format(now));
@@ -508,17 +509,26 @@ async function enviarInforme({ html, subject }) {
     console.log('ℹ️ SMTP2GO no configurado; no se envía email.');
     return;
   }
+  const { enviarEmailPersonalizado } = require('../services/email'); // lazy-require
   const mode = getMode();
   const send = whatToSendNow();
-  if (mode === 'weekly' && !send.weekly) return console.log('⏱️ No toca (weekly).');
-  if (mode === 'monthly' && !send.monthly) return console.log('⏱️ No toca (monthly).');
-  if (mode === 'auto' && !send.weekly && !send.monthly) return console.log('⏱️ No toca (auto).');
+  const force = isForce();
 
-  if (mode === 'weekly' || (mode === 'auto' && send.weekly)) {
-    await enviarEmailPersonalizado({ to: EMAIL_ADMIN, subject, html, text: 'Informe semanal del Club' });
+  if (!force) {
+    if (mode === 'weekly' && !send.weekly)  return console.log('⏱️ No toca (weekly).');
+    if (mode === 'monthly' && !send.monthly) return console.log('⏱️ No toca (monthly).');
+    if (mode === 'auto' && !send.weekly && !send.monthly) return console.log('⏱️ No toca (auto).');
+  } else {
+    console.log('⚠️ FORCE enabled: enviando aunque no toque.');
   }
-  if (mode === 'monthly' || (mode === 'auto' && send.monthly)) {
-    await enviarEmailPersonalizado({ to: EMAIL_IGNACIO, subject, html, text: 'Informe mensual del Club' });
+
+  const subj = force ? `🔧 [FORZADO] ${subject}` : subject;
+
+  if (mode === 'weekly' || (mode === 'auto' && send.weekly) || (force && mode === 'weekly')) {
+    await enviarEmailPersonalizado({ to: EMAIL_ADMIN, subject: subj, html, text: 'Informe semanal del Club' });
+  }
+  if (mode === 'monthly' || (mode === 'auto' && send.monthly) || (force && mode === 'monthly')) {
+    await enviarEmailPersonalizado({ to: EMAIL_IGNACIO, subject: subj, html, text: 'Informe mensual del Club' });
   }
 }
 
@@ -526,7 +536,7 @@ async function enviarInforme({ html, subject }) {
 (async () => {
   try {
     console.log('🚀 Auditoría semanal Club — inicio');
-    console.log('   Modo:', getMode());
+    console.log('   Modo:', getMode(), 'Force:', isForce());
 
     // Lecturas
     const [rowsCompras, rowsBajasSheet, usuarios, bajasLog, facturas] = await Promise.all([
@@ -538,8 +548,7 @@ async function enviarInforme({ html, subject }) {
     ]);
 
     // Semana objetivo (cerrada anterior)
-    const rng = previousMonSunRange();
-    const { startYMD, endYMD, endDate } = { startYMD: rng.startYMD, endYMD: rng.endYMD, endDate: rng.endDate };
+    const { startYMD, endYMD, endDate } = previousMonSunRange();
     const semanaLbl = `${dmyMadrid(dateFromYMD(...startYMD.split('-').map(Number)))} → ${dmyMadrid(dateFromYMD(...endYMD.split('-').map(Number)))}`;
     const fechaInformeDMY = dmyMadrid(endDate); // domingo de la semana cerrada
 
@@ -644,5 +653,8 @@ async function enviarInforme({ html, subject }) {
   } catch (e) {
     console.error('❌ Error auditoría semanal Club:', e.stack || e.message || e);
     process.exit(1);
+  } finally {
+    // Evita que quede alguna conexión colgando en entornos serverless
+    try { await admin.app().delete(); } catch (_) {}
   }
 })();

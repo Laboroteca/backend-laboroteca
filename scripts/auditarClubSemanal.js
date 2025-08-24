@@ -58,6 +58,11 @@ function monthLabelESFrom(date = new Date()) {
   const { Y, M } = madridParts(date); const dd = dateFromYMD(Y, M, 1);
   return dd.toLocaleDateString('es-ES', { month: 'long', year: 'numeric', timeZone: 'Europe/Madrid' });
 }
+function monthNameES(date){ return date.toLocaleDateString('es-ES',{month:'long', timeZone:'Europe/Madrid'}); }
+function monthNameShortES(date){
+  const s = date.toLocaleDateString('es-ES',{month:'short', timeZone:'Europe/Madrid'}).replace('.','');
+  return s.charAt(0).toUpperCase()+s.slice(1);
+}
 
 // Parseo de fechas (ISO, dd/mm/yyyy, nº Excel, Timestamp Firestore)
 function parseFechaCell(v) {
@@ -328,7 +333,7 @@ function anotarAltaPosteriorFirebase(bajas, facturas) {
   });
 }
 
-// Serie semanal (últimos 12 meses ≈ 52 semanas)
+// Semanas (para listados de 6 semanas)
 function semanasDesde(n = 52) {
   const arr = [];
   const { startDate } = previousMonSunRange(); // lunes pasado
@@ -340,19 +345,71 @@ function semanasDesde(n = 52) {
   }
   return arr.reverse();
 }
-function serieSemanalCounts(source, type) {
-  const weeks = semanasDesde();
-  return weeks.map((w) => {
-    let a = 0, r = 0, b = 0;
-    if (type === 'sheets') {
-      const t = totalesEnRango_Sheets(source.rowsCompras, source.rowsBajas, w.start, w.end);
-      a = t.altas.count; r = t.renov.count; b = t.bajas.count;
-    } else {
-      const t = totalesEnRango_Firebase(source.usuarios, source.facturas, source.bajasLog, w.start, w.end);
-      a = t.altas.count; r = t.renov.count; b = t.bajas.count;
-    }
-    return { week: w, altas: a, renov: r, bajas: b };
+
+// ───────────── Serie MENSUAL (12 meses) + gráfico de barras ─────────────
+function mesesUltimos12(){
+  const today = new Date();
+  const {Y,M} = madridParts(today);
+  const start = new Date(Date.UTC(Y, M-1, 1)); // 1º de este mes (UTC base)
+  const arr=[];
+  for(let i=11;i>=0;i--){
+    const d = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth()-i, 1));
+    const dNext = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth()+1, 1));
+    const dEnd = new Date(dNext.getTime()-86400000);
+    arr.push({start:d, end:dEnd, labelLong: monthNameES(d), labelShort: monthNameShortES(d)});
+  }
+  return arr;
+}
+function mensualFacturacionSheets(rowsCompras){
+  const meses = mesesUltimos12();
+  return meses.map(m=>{
+    const total = rowsCompras
+      .filter(r => (isAlta(r.desc)||isRenov(r.desc)) && inMadridRange(r.fecha,m.start,m.end))
+      .reduce((s,r)=>s+Number(r.importe||0),0);
+    return { label: m.labelShort, labelLong: m.labelLong, value: total };
   });
+}
+function mensualFacturacionFirebase(facturas){
+  const meses = mesesUltimos12();
+  return meses.map(m=>{
+    const total = facturas
+      .filter(f => (isAlta(f.desc)||isRenov(f.desc)) && inMadridRange(f.fecha,m.start,m.end))
+      .reduce((s,f)=>s+Number(f.importe||0),0);
+    return { label: m.labelShort, labelLong: m.labelLong, value: total };
+  });
+}
+
+// SVG: Barras verticales con importe en VERTICAL dentro de la barra
+function barChartMonthlyFact(serie){ // [{label,labelLong,value}]
+  const H=240, W=760, Pleft=40, Pright=20, Ptop=20, Pbottom=50;
+  const n = serie.length;
+  const chartW = W - Pleft - Pright;
+  const chartH = H - Ptop - Pbottom;
+  const barGap = 8;
+  const barW = Math.max(10, Math.floor((chartW - (n-1)*barGap)/n));
+  const max = Math.max(...serie.map(s=>s.value), 1);
+  const x = i => Pleft + i*(barW+barGap);
+  const y = v => Ptop + (chartH - Math.round((v/max)*chartH));
+  const bars = serie.map((s,i)=>{
+    const h = chartH - (y(s.value)-Ptop);
+    const cx = x(i) + Math.floor(barW/2);
+    // Etiqueta vertical (rotada -90º) centrada en la barra
+    const text = `<text x="${cx}" y="${y(s.value)+8}" transform="rotate(-90, ${cx}, ${y(s.value)+8})" font-size="11" fill="#ffffff" text-anchor="start">${fmtEUR(s.value)}</text>`;
+    return `<g>
+      <rect x="${x(i)}" y="${y(s.value)}" width="${barW}" height="${h}" fill="#4F46E5"></rect>
+      ${h>16 ? text : '' }
+    </g>`;
+  }).join('');
+  const axis = serie.map((s,i)=>`<text x="${x(i)+barW/2}" y="${H-12}" font-size="11" text-anchor="middle">${s.label}</text>`).join('');
+  const grid = Array.from({length:5},(_,k)=>{
+    const yy = Ptop + k*(chartH/4);
+    const val = Math.round(max*(1 - k/4));
+    return `<g>
+      <line x1="${Pleft}" y1="${yy}" x2="${W-Pright}" y2="${yy}" stroke="#eee"/>
+      <text x="${Pleft-6}" y="${yy+4}" font-size="10" text-anchor="end">${val?fmtEUR(val):''}</text>
+    </g>`;
+  }).join('');
+  return `<svg width="${W}" height="${H}">${grid}${bars}${axis}</svg>`;
 }
 
 // ───────────── HTML helpers ─────────────
@@ -405,30 +462,6 @@ function barsHorizontal(items) {
   }).join('');
   return `<div style="max-width:740px;">${rows}</div>`;
 }
-function lineChartWeekly(serie) {
-  const H = 180, W = 740, P = 30;
-  const xs = serie.map((_, i) => P + i * ((W - 2 * P) / Math.max(1, serie.length - 1)));
-  const max = Math.max(...serie.flatMap((s) => [s.altas, s.renov, s.bajas]), 1);
-  const y = (v) => H - P - (v / max) * (H - 2 * P);
-  const poly = (arr) => arr.map((v, i) => `${xs[i]},${y(v)}`).join(' ');
-  const grid = Array.from({ length: 5 }, (_, k) => {
-    const yy = P + k * ((H - 2 * P) / 4);
-    return `<line x1="${P}" y1="${yy}" x2="${W - P}" y2="${yy}" stroke="#eee"/>`;
-  }).join('');
-  const labels = xs.map((x, i) =>
-    i % 6 === 0 ? `<text x="${x}" y="${H - 6}" font-size="10" text-anchor="middle">${dmyMadrid(serie[i].week.start)}</text>` : ''
-  ).join('');
-  return `
-  <svg width="${W}" height="${H}">
-    ${grid}
-    <polyline fill="none" stroke="#1f77b4" stroke-width="2" points="${poly(serie.map((s) => s.altas))}"/>
-    <polyline fill="none" stroke="#2ca02c" stroke-width="2" points="${poly(serie.map((s) => s.renov))}"/>
-    <polyline fill="none" stroke="#d62728" stroke-width="2" points="${poly(serie.map((s) => s.bajas))}"/>
-    ${labels}
-  </svg>
-  <div style="font-size:12px;margin-top:6px;">Altas=<span style="color:#1f77b4">━</span> · Renov=<span style="color:#2ca02c">━</span> · Bajas=<span style="color:#d62728">━</span></div>
-  `;
-}
 
 // Tabla miembros antiguos
 function tableAntiguos(rows, mostrarApellidos) {
@@ -451,19 +484,22 @@ function tableAntiguos(rows, mostrarApellidos) {
     <thead>${head}</thead><tbody>${body}</tbody></table>`;
 }
 
-// Banner de activos
+// H2 sección (estandarizamos peso para igualar el banner)
+const H2_STYLE = "margin:18px 0 10px 0;font-size:20px;font-weight:700;";
+
+// Banner de activos: MISMA FUENTE/PESO QUE H2 PERO 2px MENOS
 function bannerActivos(textoFuenteColor, activos, fechaInformeDMY) {
   const [texto, color] = textoFuenteColor; // ['FIREBASE','#c62828'] o ['GOOGLE SHEETS','#188038']
-  return `<div style="font-size:24px;font-weight:900;margin:8px 0 6px;letter-spacing:.4px;text-transform:uppercase;">
+  return `<div style="font-size:18px;font-weight:700;margin:6px 0 6px;letter-spacing:.2px;text-transform:uppercase;">
     ${activos} MIEMBROS ACTIVOS EN FECHA ${fechaInformeDMY}
   </div>
-  <div style="font-size:16px;margin:10px 0 4px;">según <span style="color:${color};font-weight:bold;">${texto}</span></div>`;
+  <div style="font-size:16px;margin:8px 0 6px;">según <span style="color:${color};font-weight:bold;">${texto}</span></div>`;
 }
 
 // Sección por fuente
 function seccionFuente({
-  label, color, semanaLbl, weekStats, bajasDetalleSemana, barrasMes, barrasAnio, serie12m,
-  listado6Semanas, activos, fechaInformeDMY, antiguos, mostrarApellidos
+  label, color, semanaLbl, weekStats, bajasDetalleSemana, barrasMes, barrasAnio,
+  listado6Semanas, activos, fechaInformeDMY, antiguos, mostrarApellidos, serieMensualFact
 }) {
   const kv = [
     { k: `Semana ${semanaLbl} — Nuevas altas (cantidad / importe)`, v: `${weekStats.altas.count} / ${fmtEUR(weekStats.altas.total)}` },
@@ -479,8 +515,8 @@ function seccionFuente({
     ${barsHorizontal(barrasMes)}
     <h3 style="margin:16px 0 6px;">Año ${madridParts().Y} — barras horizontales</h3>
     ${barsHorizontal(barrasAnio)}
-    <h3 style="margin:16px 0 6px;">Evolución semanal — últimos 12 meses</h3>
-    ${lineChartWeekly(serie12m)}
+    <h3 style="margin:16px 0 6px;">Evolución mensual — últimos 12 meses (facturación)</h3>
+    ${barChartMonthlyFact(serieMensualFact)}
     <h3 style="margin:16px 0 6px;">Listado de bajas — últimas 6 semanas</h3>
     ${tableBajas(listado6Semanas)}
     <h3 style="margin:16px 0 6px;">Miembros más antiguos (Top 10)</h3>
@@ -523,13 +559,12 @@ async function enviarInforme({ html, subject }) {
 
   const subj = force ? `🔧 [FORZADO] ${subject}` : subject;
 
-  // ← SOLO aquí hacemos el require para evitar la circularidad cuando "no toca"
+  // require perezoso
   const { enviarEmailPersonalizado } = require('../services/email');
   if (typeof enviarEmailPersonalizado !== 'function') {
     console.warn('⚠️ enviarEmailPersonalizado no está disponible (posible dependencia circular).');
     return;
   }
-
 
   if (mode === 'weekly' || (mode === 'auto' && send.weekly) || (force && mode === 'weekly')) {
     await enviarEmailPersonalizado({ to: EMAIL_ADMIN, subject: subj, html, text: 'Informe semanal del Club' });
@@ -595,9 +630,9 @@ async function enviarInforme({ html, subject }) {
     const barrasAnioFB = (() => { const t = totalesEnRango_Firebase(usuarios, facturas, baseBajasFB, dStartYear, dEndMes);
       return [{ label: 'Nuevas altas', value: t.altas.count }, { label: 'Renovaciones', value: t.renov.count }, { label: 'Bajas', value: t.bajas.count }];})();
 
-    // Serie semanal 12 últimos meses (≈52 semanas)
-    const serieSH = serieSemanalCounts({ rowsCompras, rowsBajas: rowsBajasSheet }, 'sheets');
-    const serieFB = serieSemanalCounts({ usuarios, facturas, bajasLog: baseBajasFB }, 'firebase');
+    // Serie mensual facturación (12 meses)
+    const serieMensualSH = mensualFacturacionSheets(rowsCompras);
+    const serieMensualFB = mensualFacturacionFirebase(facturas);
 
     // Listado últimas 6 semanas (por fuente) + “Alta posterior”
     const last6Weeks = semanasDesde().slice(-6);
@@ -621,36 +656,36 @@ async function enviarInforme({ html, subject }) {
 `<div style="font-family:Arial, sans-serif; font-size:14px; color:#333;">
   ${htmlNote()}
 
-  <h2 style="margin:18px 0 10px 0;font-size:20px;">Informe del Club — según <span style="color:#c62828;font-weight:bold;">FIREBASE</span></h2>
+  <h2 style="${H2_STYLE}">Informe del Club — según <span style="color:#c62828;font-weight:700;">FIREBASE</span></h2>
   ${seccionFuente({
     label: 'FIREBASE', color: '#c62828', semanaLbl,
     weekStats: weekStatsFB,
     bajasDetalleSemana: fbBajasSemana,
     barrasMes: barrasMesFB,
     barrasAnio: barrasAnioFB,
-    serie12m: serieFB,
     listado6Semanas: lista6FB,
     activos: activosFB,
     fechaInformeDMY,
     antiguos: antiguosFB.map((a) => ({ ...a, nombre: a.nombre })), // nombre+apellidos ya combinados
-    mostrarApellidos: true
+    mostrarApellidos: true,
+    serieMensualFact: serieMensualFB
   })}
 
   <hr style="margin:28px 0;border:none;border-top:1px solid #eee;">
 
-  <h2 style="margin:18px 0 10px 0;font-size:20px;">Informe del Club — según <span style="color:#188038;font-weight:bold;">GOOGLE SHEETS</span></h2>
+  <h2 style="${H2_STYLE}">Informe del Club — según <span style="color:#188038;font-weight:700;">GOOGLE SHEETS</span></h2>
   ${seccionFuente({
     label: 'GOOGLE SHEETS', color: '#188038', semanaLbl,
     weekStats: weekStatsSH,
     bajasDetalleSemana: shBajasSemana,
     barrasMes: barrasMesSH,
     barrasAnio: barrasAnioSH,
-    serie12m: serieSH,
     listado6Semanas: lista6SH,
     activos: activosSH,
     fechaInformeDMY,
     antiguos: antiguosSH, // solo nombre (columna A)
-    mostrarApellidos: false
+    mostrarApellidos: false,
+    serieMensualFact: serieMensualSH
   })}
 </div>`;
 

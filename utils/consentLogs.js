@@ -1,33 +1,30 @@
 // utils/consentLogs.js
-// Registra consentimientos (Política de Privacidad / Términos) en Firestore
-// y sube snapshot HTML "per-accept" a GCS con metadatos para trazabilidad.
-// Guarda nombre y apellidos para búsquedas. Enlaza Firestore <-> GCS por blobPath único.
-// Dispara alertas a admin ante errores relevantes.
+// Registra consentimientos (Privacidad / Términos) en Firestore
+// y sube snapshots HTML a GCS: uno GENERAL por versión + uno INDIVIDUAL por aceptación.
+// Maneja registro (solo Privacidad) vs compras (Privacidad + Términos).
 
 'use strict';
 
 const admin = require('firebase-admin');
 const crypto = require('crypto');
-const https = require('https');
-const http = require('http');
+const https  = require('https');
+const http   = require('http');
 const { URL } = require('url');
 const { alertAdmin } = require('./alertAdmin');
 
 // ───────────────────────────── Config ─────────────────────────────
-const SNAPSHOT_MODE = (process.env.CONSENT_SNAPSHOT_MODE || 'per-accept').toLowerCase(); // 'per-accept' | 'per-version'
 const BUCKET_NAME =
-  (process.env.GCS_CONSENTS_BUCKET || process.env.GCS_BUCKET || process.env.GCLOUD_STORAGE_BUCKET || '').trim();
+  (process.env.GCS_CONSENTS_BUCKET ||
+   process.env.GCS_BUCKET ||
+   process.env.GCLOUD_STORAGE_BUCKET ||
+   '').trim();
 
-const PROJECT_TIMEZONE = process.env.PROJECT_TZ || 'Europe/Madrid'; // usado para formateo de fecha visible
+const PROJECT_TIMEZONE = process.env.PROJECT_TZ || 'Europe/Madrid'; // reservado (formateos futuros)
 
 // ───────────────────────────── Firebase Admin ─────────────────────────────
 if (!admin.apps.length) {
-  // La inicialización real se hace en tu módulo ../firebase, pero por seguridad:
-  try {
-    admin.initializeApp();
-  } catch (_) { /* ignore */ }
+  try { admin.initializeApp(); } catch (_) { /* noop */ }
 }
-
 const firestore = admin.firestore();
 
 // ───────────────────────────── Helpers ─────────────────────────────
@@ -36,74 +33,67 @@ const safe = v => (v === undefined || v === null) ? '' : String(v);
 const sha256Hex = (str) =>
   crypto.createHash('sha256').update(String(str || ''), 'utf8').digest('hex');
 
-function nowISO() {
-  return new Date().toISOString();
+const nowISO = () => new Date().toISOString();
+
+function getBucket() {
+  if (!BUCKET_NAME) return null;
+  try { return admin.storage().bucket(BUCKET_NAME); }
+  catch { return null; }
 }
 
 /**
- * Descarga HTML bruto de una URL (http/https)
+ * Descarga HTML de una URL con soporte de redirecciones.
+ * Sigue hasta 5 redirecciones para evitar 301/302.
  */
-function fetchHtml(rawUrl) {
+function fetchHtml(rawUrl, hops = 0) {
   return new Promise((resolve, reject) => {
     if (!rawUrl) return reject(new Error('URL vacía para snapshot'));
     let parsed;
     try { parsed = new URL(rawUrl); } catch (e) { return reject(e); }
 
     const mod = parsed.protocol === 'http:' ? http : https;
-    const req = mod.get(parsed, (res) => {
-      const ok = res.statusCode && res.statusCode >= 200 && res.statusCode < 300;
-      if (!ok) {
-        return reject(new Error(`HTTP ${res.statusCode} al descargar ${rawUrl}`));
+    const req = mod.get({
+      hostname: parsed.hostname,
+      port: parsed.port || (parsed.protocol === 'http:' ? 80 : 443),
+      path: parsed.pathname + (parsed.search || ''),
+      headers: {
+        'User-Agent': 'LaborotecaSnapshot/1.0 (+https://www.laboroteca.es)',
+        'Accept': 'text/html,application/xhtml+xml'
+      },
+      timeout: 15000
+    }, (res) => {
+      const code = res.statusCode || 0;
+
+      // Redirecciones
+      if ([301,302,303,307,308].includes(code) && res.headers.location) {
+        if (hops >= 5) {
+          return reject(new Error(`Demasiadas redirecciones al descargar ${rawUrl}`));
+        }
+        const next = new URL(res.headers.location, rawUrl).toString();
+        res.resume(); // consumir para liberar socket
+        return fetchHtml(next, hops + 1).then(resolve, reject);
       }
-      const chunks = [];
-      res.on('data', (d) => chunks.push(d));
-      res.on('end', () => resolve(Buffer.concat(chunks)));
+
+      // OK
+      if (code >= 200 && code < 300) {
+        const chunks = [];
+        res.on('data', d => chunks.push(d));
+        res.on('end', () => resolve(Buffer.concat(chunks)));
+        return;
+      }
+
+      reject(new Error(`HTTP ${code} al descargar ${rawUrl}`));
     });
 
-    req.on('error', reject);
-    req.setTimeout(15000, () => {
+    req.on('timeout', () => {
       req.destroy(new Error('Timeout al descargar snapshot HTML'));
     });
+    req.on('error', reject);
   });
 }
 
 /**
- * Devuelve bucket de GCS (o null si no hay nombre)
- */
-function getBucket() {
-  if (!BUCKET_NAME) return null;
-  try {
-    return admin.storage().bucket(BUCKET_NAME);
-  } catch (e) {
-    return null;
-  }
-}
-
-/**
- * Sube un HTML a GCS con metadatos
- */
-async function uploadHtmlToGCS({ path, htmlBuffer, metadata }) {
-  const bucket = getBucket();
-  if (!bucket) {
-    throw new Error('No hay bucket configurado para consents (GCS_CONSENTS_BUCKET/GCS_BUCKET).');
-  }
-  const file = bucket.file(path);
-  await file.save(htmlBuffer, {
-    resumable: false,
-    contentType: 'text/html; charset=utf-8',
-    metadata: {
-      metadata: {
-        ...metadata,
-      },
-    },
-    public: false,
-    validation: 'md5',
-  });
-  return path;
-}
-
-/**
- * Genera HTML de snapshot con una cabecera mínima de auditoría
+ * Genera el HTML del snapshot con un banner de auditoría.
  */
 function buildSnapshotHtml({ rawHtmlBuffer, title, acceptedAtISO, email, ip, userAgent, extra = {} }) {
   const raw = rawHtmlBuffer ? rawHtmlBuffer.toString('utf8') : '';
@@ -112,68 +102,71 @@ function buildSnapshotHtml({ rawHtmlBuffer, title, acceptedAtISO, email, ip, use
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Snapshot: ${title || ''}</title>
 </head><body>
-<!-- Snapshot Laboroteca (solo evidencia) -->
+<!-- Snapshot Laboroteca (evidencia de aceptación) -->
 <div style="border:1px solid #ddd;padding:12px;margin:12px 0;font-family:system-ui,Segoe UI,Arial,sans-serif;font-size:14px;background:#fafafa">
-  <div><strong>Este es un snapshot de evidencia</strong> (no operativo).</div>
-  <div>Acceptado: <code>${acceptedAtISO}</code></div>
+  <div><strong>Este es un snapshot de evidencia</strong>; no reemplaza al documento vivo.</div>
+  <div>Aceptado: <code>${acceptedAtISO}</code></div>
   <div>Email: <code>${email || ''}</code> · IP: <code>${ip || ''}</code></div>
-  <div>User-Agent: <code>${userAgent || ''}</code></div>
+  <div>User-Agent: <code>${(userAgent || '').substring(0,160)}</code></div>
   <div>Extra: <code>${JSON.stringify(extra)}</code></div>
 </div>
 <hr>
 `;
-  // Insertamos el HTML original tal cual tras el banner
-  // Cerramos body/html solo si el original no lo hiciera
-  const suffix = raw.includes('</body>') ? '' : '</body>';
+  const suffix  = raw.includes('</body>') ? '' : '</body>';
   const suffix2 = raw.includes('</html>') ? '' : '</html>';
   return Buffer.from(banner + raw + suffix + suffix2, 'utf8');
 }
 
 /**
- * Normaliza inputs básicos
+ * Guarda un HTML en GCS. Si es "general por versión", no lo sobreescribe si ya existe.
+ */
+async function uploadHtmlToGCS({ path, htmlBuffer, metadata, skipIfExists = false }) {
+  const bucket = getBucket();
+  if (!bucket) throw new Error('No hay bucket configurado para consents (GCS_CONSENTS_BUCKET / GCS_BUCKET)');
+
+  const file = bucket.file(path);
+
+  if (skipIfExists) {
+    try {
+      const [exists] = await file.exists();
+      if (exists) return path; // ya estaba
+    } catch (e) {
+      // seguimos e intentamos crear igualmente
+    }
+  }
+
+  await file.save(htmlBuffer, {
+    resumable: false,
+    contentType: 'text/html; charset=utf-8',
+    metadata: { metadata: { ...metadata } },
+    public: false,
+    validation: 'md5'
+  });
+
+  return path;
+}
+
+/**
+ * Normaliza y prepara el documento base.
  */
 function normalizeInput(payload = {}) {
   const {
-    // identidad
-    email,
-    nombre,
-    apellidos,
-    userId,
-
-    // contexto formulario / producto
-    formularioId,
-    tipoProducto,
-    nombreProducto,
-    descripcionProducto,
-
-    // técnicos
-    sessionId,
-    paymentIntentId,
-    userAgent,
-    ip,
-    source,
-
-    // consentimiento
+    email, nombre, apellidos, userId,
+    formularioId, tipoProducto, nombreProducto, descripcionProducto,
+    sessionId, paymentIntentId, userAgent, ip, source,
     checkboxes = { privacy: true, terms: true },
-    acceptedAt, // Date | ISO | timestamp | undefined
-
-    // versiones de documentos
-    privacyUrl,
-    privacyVersion,
-    termsUrl,
-    termsVersion,
-
-    // índice/hash externo opcional
-    idx,
+    acceptedAt,
+    privacyUrl, privacyVersion,
+    termsUrl, termsVersion,
+    idx
   } = payload;
 
-  // Fecha aceptación
   let acceptedAtISO = nowISO();
   try {
     if (acceptedAt instanceof Date) acceptedAtISO = acceptedAt.toISOString();
     else if (typeof acceptedAt === 'string' && acceptedAt) acceptedAtISO = new Date(acceptedAt).toISOString();
     else if (typeof acceptedAt === 'number') acceptedAtISO = new Date(acceptedAt).toISOString();
-  } catch (_) { /* use now */ }
+  } catch { /* keep now */ }
 
   const doc = {
     email: safe(email).toLowerCase().trim(),
@@ -194,11 +187,11 @@ function normalizeInput(payload = {}) {
 
     checkboxes: {
       privacy: !!(checkboxes && (checkboxes.privacy !== false)),
-      terms: !!(checkboxes && (checkboxes.terms !== false)),
+      terms:   !!(checkboxes && (checkboxes.terms   !== false)),
     },
 
     acceptedAt: admin.firestore.Timestamp.fromDate(new Date(acceptedAtISO)),
-    acceptedAtISO, // campo redundante útil para logs rápidos
+    acceptedAtISO,
 
     privacyUrl: safe(privacyUrl),
     privacyVersion: safe(privacyVersion),
@@ -207,85 +200,118 @@ function normalizeInput(payload = {}) {
 
     idx: safe(idx),
 
-    // se completan tras subir snapshots:
+    // Rutas/flags que se rellenan después
+    privacyGeneralBlobPath: '',
     privacyBlobPath: '',
     privacyHash: '',
     privacySnapshotOk: false,
 
+    termsGeneralBlobPath: '',
     termsBlobPath: '',
     termsHash: '',
-    termsSnapshotOk: false,
+    termsSnapshotOk: false
   };
 
-  // Hash de versión (contenido URL) a nivel de texto, como traías
   if (doc.privacyUrl) doc.privacyHash = `sha256:${sha256Hex(doc.privacyUrl)}`;
-  if (doc.termsUrl) doc.termsHash = `sha256:${sha256Hex(doc.termsUrl)}`;
+  if (doc.termsUrl)   doc.termsHash   = `sha256:${sha256Hex(doc.termsUrl)}`;
 
   return doc;
 }
 
-// ───────────────────────────── Core ─────────────────────────────
+function isRegistrationFlow(data) {
+  // Registro si: tipoProducto contiene "registro" OR form 5/14 OR source contiene form_5/14
+  const tp = (data.tipoProducto || '').toLowerCase();
+  const fid = String(data.formularioId || '');
+  const src = (data.source || '').toLowerCase();
 
-/**
- * Registra consentimiento y sube snapshots a GCS (per-accept por defecto)
- * @param {object} payload  Campos descritos en normalizeInput + urls y versiones
- * @returns {Promise<{docId: string, privacyBlobPath?: string, termsBlobPath?: string}>}
- */
+  if (tp.includes('registro')) return true;
+  if (['5','14'].includes(fid)) return true;
+  if (/form[_-]?0*(5|14)\b/.test(src)) return true;
+  return false;
+}
+
+// ───────────────────────────── Core ─────────────────────────────
 async function registrarConsentimiento(payload) {
   const data = normalizeInput(payload);
 
-  // 1) Crear doc inicial en Firestore (para obtener docId y usarlo en la ruta del HTML)
+  // Política siempre; T&C sólo si NO es registro y hay datos.
+  const registro = isRegistrationFlow(data);
+
+  if (registro) {
+    // No registramos T&C en flujos de registro: limpiamos campos de terms para evitar confusiones
+    data.termsUrl = '';
+    data.termsVersion = '';
+    data.termsHash = '';
+  }
+
+  // 1) Crear doc inicial
   const col = firestore.collection('consentLogs');
   const initialDocRef = col.doc(); // id aleatorio
-  const consentDocId = initialDocRef.id;
+  const consentDocId  = initialDocRef.id;
 
-  // Guardado inicial (sin blobPath aún)
-  await initialDocRef.set({
-    ...data,
-    insertadoEn: nowISO(),
-  }).catch(async (e) => {
-    await alertAdmin(`❌ Error al crear doc de consentLogs (${data.email}): ${e.message}`);
-    throw e;
-  });
+  await initialDocRef.set({ ...data, insertadoEn: nowISO() })
+    .catch(async (e) => {
+      await alertAdmin(`❌ Error al crear doc consentLogs (${data.email}): ${e.message}`);
+      throw e;
+    });
 
-  // 2) Decidir fileId para snapshots por aceptación
-  const fileId = data.idx || consentDocId; // preferimos tu idx si existe
+  // 2) Preparar IDs/rutas
+  const fileId = data.idx || consentDocId; // nombre del snapshot individual
 
-  // 3) Si hay bucket, intentar snapshots
+  // 3) Intentar snapshots (si hay bucket)
   let privacyBlobPath = '';
-  let termsBlobPath = '';
+  let privacyGeneralBlobPath = '';
   let privacySnapshotOk = false;
+
+  let termsBlobPath = '';
+  let termsGeneralBlobPath = '';
   let termsSnapshotOk = false;
 
-  if (getBucket()) {
-    // PRIVACY
-    try {
-      if (data.privacyUrl && data.privacyVersion) {
+  const bucket = getBucket();
+
+  if (!bucket) {
+    await alertAdmin(`ℹ️ Consentimiento sin snapshots (bucket no definido) · ${data.email} · docId=${consentDocId}`);
+  } else {
+    // Smoke test de permisos (log suave)
+    try { await bucket.getMetadata(); } catch (e) {
+      await alertAdmin(`❌ No se puede leer metadatos del bucket ${BUCKET_NAME}: ${e.message}`);
+    }
+
+    // PRIVACY (siempre que venga url+versión)
+    if (data.privacyUrl && data.privacyVersion) {
+      try {
         const rawHtml = await fetchHtml(data.privacyUrl);
-        const htmlBuf = buildSnapshotHtml({
+        const htmlBufIndividual = buildSnapshotHtml({
           rawHtmlBuffer: rawHtml,
           title: `Política de Privacidad v${data.privacyVersion}`,
           acceptedAtISO: data.acceptedAtISO,
-          email: data.email,
-          ip: data.ip,
-          userAgent: data.userAgent,
-          extra: {
-            docId: consentDocId,
-            idx: data.idx,
-            formularioId: data.formularioId,
-            version: data.privacyVersion,
-          },
+          email: data.email, ip: data.ip, userAgent: data.userAgent,
+          extra: { docId: consentDocId, idx: data.idx, formularioId: data.formularioId, version: data.privacyVersion }
         });
 
-        // rutas: per-accept / per-version
-        const path =
-          (SNAPSHOT_MODE === 'per-version')
-            ? `consents/politica-privacidad/${data.privacyVersion}.html`
-            : `consents/politica-privacidad/${data.privacyVersion}/${fileId}.html`;
+        // 3.a General por versión (no sobreescribir si ya existe)
+        const generalPath = `consents/politica-privacidad/${data.privacyVersion}.html`;
+        try {
+          await uploadHtmlToGCS({
+            path: generalPath,
+            htmlBuffer: htmlBufIndividual, // vale el mismo contenido con banner
+            metadata: {
+              kind: 'privacy-general',
+              version: data.privacyVersion
+            },
+            skipIfExists: true
+          });
+          privacyGeneralBlobPath = generalPath;
+        } catch (e) {
+          // aviso pero seguimos con el individual
+          await alertAdmin(`⚠️ Error subiendo PRIVACY general (${data.email}): ${e.message}`);
+        }
 
+        // 3.b Individual por aceptación
+        const indivPath = `consents/politica-privacidad/${data.privacyVersion}/${fileId}.html`;
         await uploadHtmlToGCS({
-          path,
-          htmlBuffer: htmlBuf,
+          path: indivPath,
+          htmlBuffer: htmlBufIndividual,
           metadata: {
             kind: 'privacy',
             email: data.email,
@@ -295,44 +321,51 @@ async function registrarConsentimiento(payload) {
             formularioId: data.formularioId,
             version: data.privacyVersion,
             source: data.source,
-            userId: data.userId,
-          },
+            userId: data.userId
+          }
         });
 
-        privacyBlobPath = path;
+        privacyBlobPath = indivPath;
         privacySnapshotOk = true;
+      } catch (e) {
+        await alertAdmin(`⚠️ Error PRIVACY snapshot (${data.email}): ${e.message}`);
       }
-    } catch (e) {
-      await alertAdmin(`⚠️ Error subiendo snapshot PRIVACY a GCS (${data.email}): ${e.message}`);
     }
 
-    // TERMS
-    try {
-      if (data.termsUrl && data.termsVersion) {
+    // TERMS (solo si NO es registro y existe url+versión)
+    if (!registro && data.termsUrl && data.termsVersion) {
+      try {
         const rawHtml = await fetchHtml(data.termsUrl);
-        const htmlBuf = buildSnapshotHtml({
+        const htmlBufIndividual = buildSnapshotHtml({
           rawHtmlBuffer: rawHtml,
           title: `Términos y Condiciones v${data.termsVersion}`,
           acceptedAtISO: data.acceptedAtISO,
-          email: data.email,
-          ip: data.ip,
-          userAgent: data.userAgent,
-          extra: {
-            docId: consentDocId,
-            idx: data.idx,
-            formularioId: data.formularioId,
-            version: data.termsVersion,
-          },
+          email: data.email, ip: data.ip, userAgent: data.userAgent,
+          extra: { docId: consentDocId, idx: data.idx, formularioId: data.formularioId, version: data.termsVersion }
         });
 
-        const path =
-          (SNAPSHOT_MODE === 'per-version')
-            ? `consents/terminos-condiciones/${data.termsVersion}.html`
-            : `consents/terminos-condiciones/${data.termsVersion}/${fileId}.html`;
+        // 3.a General por versión (no sobreescribir)
+        const generalPath = `consents/terminos-condiciones/${data.termsVersion}.html`;
+        try {
+          await uploadHtmlToGCS({
+            path: generalPath,
+            htmlBuffer: htmlBufIndividual,
+            metadata: {
+              kind: 'terms-general',
+              version: data.termsVersion
+            },
+            skipIfExists: true
+          });
+          termsGeneralBlobPath = generalPath;
+        } catch (e) {
+          await alertAdmin(`⚠️ Error subiendo TERMS general (${data.email}): ${e.message}`);
+        }
 
+        // 3.b Individual
+        const indivPath = `consents/terminos-condiciones/${data.termsVersion}/${fileId}.html`;
         await uploadHtmlToGCS({
-          path,
-          htmlBuffer: htmlBuf,
+          path: indivPath,
+          htmlBuffer: htmlBufIndividual,
           metadata: {
             kind: 'terms',
             email: data.email,
@@ -342,42 +375,41 @@ async function registrarConsentimiento(payload) {
             formularioId: data.formularioId,
             version: data.termsVersion,
             source: data.source,
-            userId: data.userId,
-          },
+            userId: data.userId
+          }
         });
 
-        termsBlobPath = path;
+        termsBlobPath = indivPath;
         termsSnapshotOk = true;
+      } catch (e) {
+        await alertAdmin(`⚠️ Error TERMS snapshot (${data.email}): ${e.message}`);
       }
-    } catch (e) {
-      await alertAdmin(`⚠️ Error subiendo snapshot TERMS a GCS (${data.email}): ${e.message}`);
     }
-  } else {
-    // No hay bucket -> avisamos una sola vez por aceptación
-    await alertAdmin(`ℹ️ Consentimiento sin snapshot (sin bucket): ${data.email} · docId=${consentDocId}`);
   }
 
-  // 4) Actualizar doc con blob paths + flags (y asegurar nombre/apellidos)
+  // 4) Actualiza doc con rutas/flags y asegura nombre/apellidos
   const updatePayload = {
-    privacyBlobPath: privacyBlobPath || data.privacyBlobPath || '',
-    privacySnapshotOk: privacySnapshotOk,
-    termsBlobPath: termsBlobPath || data.termsBlobPath || '',
-    termsSnapshotOk: termsSnapshotOk,
+    privacyGeneralBlobPath,
+    privacyBlobPath,
+    privacySnapshotOk,
 
-    // garantizamos que se guardan nombre y apellidos (para tus búsquedas)
+    termsGeneralBlobPath,
+    termsBlobPath,
+    termsSnapshotOk,
+
     nombre: data.nombre,
-    apellidos: data.apellidos,
+    apellidos: data.apellidos
   };
 
-  await initialDocRef.update(updatePayload).catch(async (e) => {
-    await alertAdmin(`❌ Error actualizando consentLogs (blobPaths) ${consentDocId}: ${e.message}`);
-    throw e;
-  });
+  await initialDocRef.update(updatePayload)
+    .catch(async (e) => {
+      await alertAdmin(`❌ Error actualizando consentLogs ${consentDocId}: ${e.message}`);
+      throw e;
+    });
 
-  // 5) Índice secundario opcional (para búsquedas rápidas)
+  // 5) Índice secundario
   try {
-    const idxCol = firestore.collection('consentLogs_idx');
-    await idxCol.doc(consentDocId).set({
+    await firestore.collection('consentLogs_idx').doc(consentDocId).set({
       email: data.email,
       nombreCompleto: `${data.nombre} ${data.apellidos}`.trim(),
       acceptedAt: admin.firestore.Timestamp.fromDate(new Date(data.acceptedAtISO)),
@@ -385,30 +417,31 @@ async function registrarConsentimiento(payload) {
       formularioId: data.formularioId,
       idx: data.idx || '',
       privacyVersion: data.privacyVersion,
-      termsVersion: data.termsVersion,
-      createdAt: nowISO(),
+      termsVersion: registro ? '' : data.termsVersion,
+      createdAt: nowISO()
     }, { merge: false });
   } catch (e) {
-    await alertAdmin(`⚠️ Error creando índice consentLogs_idx para ${consentDocId}: ${e.message}`);
-    // no interrumpimos el flujo principal
+    await alertAdmin(`⚠️ Error creando índice consentLogs_idx ${consentDocId}: ${e.message}`);
   }
 
-  // 6) Señal final si faltó algún snapshot cuando debía
-  if ((data.privacyUrl && !privacySnapshotOk) || (data.termsUrl && !termsSnapshotOk)) {
-    await alertAdmin(`⚠️ Consent regist. con snapshots incompletos: email=${data.email}, docId=${consentDocId}, privacyOk=${privacySnapshotOk}, termsOk=${termsSnapshotOk}`);
+  // 6) Señal si faltó algún snapshot esperado
+  const expectedPrivacy = !!data.privacyUrl && !!data.privacyVersion;
+  const expectedTerms   = !registro && !!data.termsUrl && !!data.termsVersion;
+
+  if ((expectedPrivacy && !privacySnapshotOk) || (expectedTerms && !termsSnapshotOk)) {
+    await alertAdmin(`⚠️ Consent con snapshots incompletos: email=${data.email}, docId=${consentDocId}, privacyOk=${privacySnapshotOk}, termsOk=${termsSnapshotOk}`);
   }
 
   return {
     docId: consentDocId,
+    privacyGeneralBlobPath,
     privacyBlobPath,
-    termsBlobPath,
+    termsGeneralBlobPath,
+    termsBlobPath
   };
 }
 
-// ───────────────────────────── Exports ─────────────────────────────
 module.exports = {
   registrarConsentimiento,
-  // Compatibilidad hacia atrás: algunos módulos antiguos podrían seguir
-  // importando logConsent. Lo dejamos como alias del nuevo registrador.
-  logConsent: registrarConsentimiento
+  logConsent: registrarConsentimiento // alias retrocompatible
 };

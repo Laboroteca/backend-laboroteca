@@ -4,6 +4,8 @@
 const express = require('express');
 const crypto = require('crypto');
 const dayjs = require('dayjs');
+const utc = require('dayjs/plugin/utc');
+dayjs.extend(utc);
 
 const generarEntradas = require('../services/generarEntradas');
 const { enviarEmailConEntradas } = require('../services/enviarEmailConEntradas');

@@ -1,69 +1,218 @@
-// 🔐 VALIDAR ENTRADA QR – Solo uso privado por Ignacio
-// Ruta POST /validar-entrada
-// - Requiere token privado de validador en header X-LABOROTECA-TOKEN
-// - Busca el código en Google Sheets del evento correspondiente
-// - Si no se ha validado, marca como "Usada: SÍ" en Sheets y guarda registro en Firestore
-// - Si ya estaba validada, rechaza
-// - Si no existe el código, rechaza
+// 🔐 VALIDAR ENTRADA QR – Uso privado (Ignacio + 3 personas)
+// POST /validar-entrada
+// Seguridad: x-api-key + HMAC (x-val-ts, x-val-sig) sobre ts.POST.<path>.sha256(body)
+// Fallback opcional: X-LABOROTECA-TOKEN (desaconsejado; puedes desactivarlo)
+
+'use strict';
 
 const express = require('express');
-const router = express.Router();
-const admin = require('../../firebase');
+const crypto  = require('crypto');
+const admin   = require('../../firebase');
 const firestore = admin.firestore();
+
 const { marcarEntradaComoUsada } = require('../utils/sheetsEntradas');
-const dayjs = require('dayjs');
 
-const TOKEN_VALIDACION = process.env.VALIDADOR_ENTRADAS_TOKEN || '123456';
+const router = express.Router();
 
-router.post('/validar-entrada', async (req, res) => {
-  try {
-    const token = req.headers['x-laboroteca-token'];
-    console.log('🔐 Token recibido:', token);
+/* ===============================
+   CONFIG SEGURIDAD
+   =============================== */
+const API_KEY          = (process.env.VALIDADOR_API_KEY || '').trim();            // p.ej. Val_Entradas_xxx
+const HMAC_SECRET      = (process.env.VALIDADOR_HMAC_SECRET || '').trim();        // 32+ bytes
+const SKEW_MS          = Number(process.env.VALIDADOR_SKEW_MS || 5*60*1000);      // ±5 min
+const REQUIRE_HMAC     = String(process.env.VALIDADOR_REQUIRE_HMAC || '1') === '1';
+const LEGACY_TOKEN     = (process.env.VALIDADOR_ENTRADAS_TOKEN || '').trim();     // compat (X-LABOROTECA-TOKEN)
+const IP_ALLOW         = String(process.env.VALIDADOR_IP_ALLOW || '')
+  .split(',').map(s => s.trim()).filter(Boolean);                                 // allowlist opcional
+const RATE_PER_MIN     = Number(process.env.VALIDADOR_RATE_PER_MIN || 60);        // peticiones/min por IP
+const MAX_BODY_BYTES   = Number(process.env.VALIDADOR_MAX_BODY || 12*1024);       // 12KB
+const DEBUG            = String(process.env.VALIDADOR_DEBUG || '') === '1';
 
-    if (token !== TOKEN_VALIDACION) {
-      console.warn('❌ Token no autorizado');
-      return res.status(403).json({ error: 'Token no autorizado.' });
+function maskTail(s){ return s ? `••••${String(s).slice(-4)}` : null; }
+
+/* ===============================
+   RAW BODY (si no lo haces global)
+   =============================== */
+router.use((req, _res, next) => {
+  if (typeof req.rawBody === 'string' || Buffer.isBuffer(req.rawBody)) return next();
+  if (req.readable && !req.body) {
+    let data = '';
+    req.setEncoding('utf8');
+    req.on('data', chunk => (data += chunk));
+    req.on('end',  () => { req.rawBody = data || ''; next(); });
+    req.on('error',() => { req.rawBody = ''; next(); });
+  } else {
+    try { req.rawBody = JSON.stringify(req.body || {}); } catch { req.rawBody = ''; }
+    next();
+  }
+});
+
+/* ===============================
+   RATE LIMIT simple por IP (ventana 1 min)
+   =============================== */
+const rl = new Map(); // key=ip+minute → count
+function clientIp(req){
+  const xf = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return xf || req.ip || req.connection?.remoteAddress || '';
+}
+function rateLimit(req){
+  const ip = clientIp(req);
+  if (!ip) return true;
+  const key = ip + '|' + new Date().toISOString().slice(0,16); // YYYY-MM-DDTHH:MM
+  const count = (rl.get(key) || 0) + 1;
+  rl.set(key, count);
+  return count <= RATE_PER_MIN;
+}
+
+/* ===============================
+   ANTI-REPLAY (nonce en memoria)
+   =============================== */
+const seen = new Map(); // key = ts.sig → expiresAt
+function pruneSeen(){
+  const now = Date.now();
+  for (const [k, exp] of seen.entries()) if (exp <= now) seen.delete(k);
+}
+
+/* ===============================
+   VERIFICACIÓN DE AUTORIZACIÓN
+   =============================== */
+function verifyAuth(req){
+  // 0) Content-Type y tamaño
+  if (!String(req.headers['content-type']||'').toLowerCase().startsWith('application/json')) {
+    return { ok:false, code:415, msg:'Content-Type inválido' };
+  }
+  const rawStr = req.rawBody ? (Buffer.isBuffer(req.rawBody)? req.rawBody.toString('utf8') : String(req.rawBody)) : '';
+  if (Buffer.byteLength(rawStr, 'utf8') > MAX_BODY_BYTES) {
+    return { ok:false, code:413, msg:'Payload demasiado grande' };
+  }
+
+  // 1) Allowlist IP (opcional)
+  const ip = clientIp(req);
+  if (IP_ALLOW.length && !IP_ALLOW.includes(ip)) {
+    return { ok:false, code:401, msg:'IP no autorizada' };
+  }
+
+  // 2) Rate limit
+  if (!rateLimit(req)) {
+    return { ok:false, code:429, msg:'Too Many Requests' };
+  }
+
+  // 3) HMAC preferente
+  const hdrKey = String(req.headers['x-api-key'] || '').trim();
+  const ts     = String(req.headers['x-val-ts'] || req.headers['x-entr-ts'] || req.headers['x-e-ts'] || '');
+  const sig    = String(req.headers['x-val-sig']|| req.headers['x-entr-sig']|| req.headers['x-e-sig']|| '');
+
+  const haveHmacHeaders = API_KEY && HMAC_SECRET && ts && sig && hdrKey;
+
+  if (haveHmacHeaders) {
+    if (hdrKey !== API_KEY)  return { ok:false, code:401, msg:'Unauthorized (key)' };
+    if (!/^\d+$/.test(ts))   return { ok:false, code:401, msg:'Unauthorized (ts)' };
+
+    const now = Date.now();
+    if (Math.abs(now - Number(ts)) > SKEW_MS) {
+      return { ok:false, code:401, msg:'Expired/Skew' };
     }
 
-    const { codigoEntrada, slugEvento } = req.body;
-    console.log('📨 Datos recibidos:', { codigoEntrada, slugEvento });
+    const pathname = new URL(req.originalUrl, 'http://x').pathname; // /validar-entrada
+    const bodyHash = crypto.createHash('sha256').update(rawStr, 'utf8').digest('hex');
+    const base     = `${ts}.POST.${pathname}.${bodyHash}`;
+    const expected = crypto.createHmac('sha256', HMAC_SECRET).update(base).digest('hex');
 
-    if (!codigoEntrada || !slugEvento) {
-      console.warn('⚠️ Faltan campos obligatorios');
+    if (DEBUG) {
+      console.log('[VALIDADOR DEBUG IN]', {
+        ip,
+        path: pathname,
+        ts,
+        bodyHash10: bodyHash.slice(0,10),
+        sig10: String(sig).slice(0,10),
+        exp10: expected.slice(0,10),
+        apiKeyMasked: maskTail(API_KEY)
+      });
+    }
+
+    // anti-replay
+    pruneSeen();
+    const nonceKey = ts + '.' + sig.slice(0,16);
+    if (seen.has(nonceKey)) return { ok:false, code:401, msg:'Replay' };
+
+    let okSig = false;
+    try {
+      const a = Buffer.from(expected, 'utf8');
+      const b = Buffer.from(sig, 'utf8');
+      okSig = a.length === b.length && crypto.timingSafeEqual(a, b);
+    } catch { okSig = false; }
+    if (!okSig) return { ok:false, code:401, msg:'Bad signature' };
+
+    seen.set(nonceKey, now + SKEW_MS);
+    return { ok:true, mode:'HMAC' };
+  }
+
+  // 4) Fallback legacy solo si NO exigimos HMAC
+  if (!REQUIRE_HMAC) {
+    const legacy = String(req.headers['x-laboroteca-token'] || '').trim();
+    if (legacy && LEGACY_TOKEN && legacy === LEGACY_TOKEN) {
+      if (DEBUG) console.log('[VALIDADOR LEGACY OK]', { ip, note:'X-LABOROTECA-TOKEN' });
+      return { ok:true, mode:'LEGACY' };
+    }
+  }
+
+  return { ok:false, code:401, msg:'Unauthorized' };
+}
+
+/* ===============================
+   NORMALIZACIÓN CÓDIGO
+   =============================== */
+function limpiarCodigoEntrada(input){
+  let c = String(input || '').trim();
+  if (!c) return '';
+  if (/^https?:\/\//i.test(c)) {
+    try {
+      const url = new URL(c);
+      c = url.searchParams.get('codigo') || c;
+    } catch { /* usar tal cual */ }
+  }
+  c = c.replace(/\s+/g,'').toUpperCase();
+  // evita inputs claramente rotos
+  if (c.includes('//') || c.length > 80) return '';
+  return c;
+}
+
+/* ============================================================
+ *  HANDLER
+ * ============================================================ */
+router.post('/validar-entrada', async (req, res) => {
+  // Seguridad
+  const auth = verifyAuth(req);
+  if (!auth.ok) {
+    if (DEBUG) console.warn('⛔️ /validar-entrada auth failed:', auth.msg);
+    return res.status(auth.code || 401).json({ error: 'Unauthorized' });
+  }
+
+  try {
+    const slugEventoRaw = String(req.body?.slugEvento || '').trim();
+    const codigoLimpio  = limpiarCodigoEntrada(req.body?.codigoEntrada);
+
+    if (!codigoLimpio || !slugEventoRaw) {
       return res.status(400).json({ error: 'Faltan campos obligatorios.' });
     }
 
-    // Limpieza del código en caso de que venga como URL completa
-    let codigoLimpio = String(codigoEntrada).trim();
-    if (codigoLimpio.startsWith('http')) {
-      try {
-        const url = new URL(codigoLimpio);
-        codigoLimpio = url.searchParams.get('codigo') || codigoLimpio;
-        console.log('🔍 Código extraído de URL:', codigoLimpio);
-      } catch (err) {
-        console.warn('⚠️ No se pudo parsear la URL del código. Se usará valor original.');
-      }
+    // (Opcional) whitelist de slugs para eventos activos, vía ENV
+    const SLUG_ALLOW = String(process.env.VALIDADOR_SLUG_ALLOW || '')
+      .split(',').map(s => s.trim()).filter(Boolean);
+    if (SLUG_ALLOW.length && !SLUG_ALLOW.includes(slugEventoRaw)) {
+      return res.status(401).json({ error: 'Evento no autorizado.' });
     }
 
-    if (!codigoLimpio || codigoLimpio.includes('//')) {
-      console.warn('⚠️ Código de entrada inválido:', codigoLimpio);
-      return res.status(400).json({ error: 'Código de entrada inválido.' });
-    }
-
-    const docRef = firestore.collection('entradasValidadas').doc(codigoLimpio);
+    // Evita revalidaciones: Firestore
+    const docRef  = firestore.collection('entradasValidadas').doc(codigoLimpio);
     const docSnap = await docRef.get();
-
     if (docSnap.exists) {
-      console.warn('⚠️ Entrada ya validada previamente en Firestore');
       return res.status(409).json({ error: 'Entrada ya validada.' });
     }
 
-    console.log('🔍 Buscando código en hoja de Google Sheets...');
-    const resultado = await marcarEntradaComoUsada(codigoLimpio, slugEvento);
-    console.log('📋 Resultado de Sheets:', resultado);
-
+    // Buscar y marcar en Sheets
+    const resultado = await marcarEntradaComoUsada(codigoLimpio, slugEventoRaw);
     if (!resultado || resultado.error) {
-      console.warn('❌ Código no encontrado o error en Sheets:', resultado?.error);
       return res.status(404).json({ error: resultado?.error || 'Código no encontrado.' });
     }
 
@@ -71,18 +220,20 @@ router.post('/validar-entrada', async (req, res) => {
 
     await docRef.set({
       validado: true,
-      fechaValidacion: dayjs().toISOString(),
-      validador: 'Ignacio',
-      emailComprador,
-      nombreAsistente,
+      fechaValidacion: new Date().toISOString(),
+      validador: 'Ignacio', // o saca del header si te interesa log real de usuario
+      emailComprador: emailComprador || null,
+      nombreAsistente: nombreAsistente || null,
       evento: codigoLimpio.split('-')[0] || '',
-      slugEvento
+      slugEvento: slugEventoRaw,
+      authMode: auth.mode || 'HMAC'
     });
 
-    console.log(`✅ Entrada ${codigoLimpio} validada correctamente.`);
+    if (DEBUG) console.log(`✅ Entrada ${codigoLimpio} validada correctamente (modo ${auth.mode}).`);
     return res.json({ ok: true, mensaje: 'Entrada validada correctamente.' });
+
   } catch (err) {
-    console.error('❌ Error en /validar-entrada:', err.stack || err);
+    console.error('❌ Error en /validar-entrada:', err?.stack || err);
     return res.status(500).json({ error: 'Error interno al validar entrada.' });
   }
 });

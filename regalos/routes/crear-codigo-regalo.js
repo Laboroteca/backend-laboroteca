@@ -8,102 +8,101 @@ const firestore = admin.firestore();
 
 const { google } = require('googleapis');
 const { auth } = require('../../entradas/google/sheetsAuth');
+const { enviarEmailPersonalizado } = require('../../services/email'); // email al beneficiario
 
 const router = express.Router();
 
 /* =======================
    Seguridad HMAC (igual que Entradas)
-   Requisitos:
-   - Config .env / entorno:
-       ENTRADAS_API_KEY        (o REGALOS_API_KEY)
-       ENTRADAS_HMAC_SECRET    (o REGALOS_HMAC_SECRET)
-       ENTRADAS_SKEW_MS        (opcional, por defecto ±5 min)
-       FLUENTFORM_TOKEN        (opcional: fallback Bearer)
-   - En app.js debes tener:
-       app.use(express.json({ verify:(req,res,buf)=>{ req.rawBody = buf } }));
-   - El emisor debe firmar:
-       x-api-key: ENTRADAS_API_KEY
-       x-e-ts:    timestamp ms
-       x-e-sig:   HMAC-SHA256( ts + '.POST.' + <pathname> + '.' + sha256(body) )
-     donde <pathname> aquí es: "/regalos/crear-codigo-regalo"
+   Requisitos en app.js:
+   app.use(express.json({ verify:(req,res,buf)=>{ req.rawBody = buf } }));
 ========================= */
 
-const API_KEY = (process.env.ENTRADAS_API_KEY || process.env.REGALOS_API_KEY || '').trim();
-const HMAC_SECRET = (process.env.ENTRADAS_HMAC_SECRET || process.env.REGALOS_HMAC_SECRET || '').trim();
-const SKEW_MS = Number(process.env.ENTRADAS_SKEW_MS || process.env.REGALOS_SKEW_MS || 5 * 60 * 1000);
+const API_KEY       = (process.env.ENTRADAS_API_KEY || process.env.REGALOS_API_KEY || '').trim();
+const HMAC_SECRET   = (process.env.ENTRADAS_HMAC_SECRET || process.env.REGALOS_HMAC_SECRET || '').trim();
+const SKEW_MS       = Number(process.env.ENTRADAS_SKEW_MS || process.env.REGALOS_SKEW_MS || 5 * 60 * 1000);
 const REGALOS_DEBUG = String(process.env.REGALOS_SYNC_DEBUG || '').trim() === '1';
+const LEGACY_TOKEN  = (process.env.FLUENTFORM_TOKEN || '').trim();
+
+function maskTail(s) { return s ? `••••${String(s).slice(-4)}` : null; }
 
 function verifyRegalosHmac(req, res, next) {
-  // Fallback compat: si llega Bearer correcto, aceptar y salir
-  const bearer = req.headers['authorization'];
-  if (bearer && bearer === process.env.FLUENTFORM_TOKEN) {
-    if (REGALOS_DEBUG) console.log('[REGALOS DEBUG] fallback Bearer OK');
+  // 0) Compat legacy: Authorization Bearer
+  const bearer = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim();
+  if (bearer && bearer === LEGACY_TOKEN) {
+    console.log('[REGALOS AUTH] LEGACY Bearer OK');
     return next();
   }
 
   if (!API_KEY || !HMAC_SECRET) {
-    return res.status(500).json({ error: 'Config incompleta (ENTRADAS/REGALOS_API_KEY / _HMAC_SECRET)' });
+    return res.status(500).json({ error: 'Config incompleta (API_KEY/HMAC_SECRET)' });
   }
 
-  const hdrKey = req.headers['x-api-key'];
-  const ts = req.headers['x-e-ts'];
-  const sig = req.headers['x-e-sig'];
+  // 1) Cabeceras HMAC (acepta x-e-* y x-entr-*)
+  const hdrKey = (req.headers['x-api-key'] || '').trim();
+  const ts     = String(req.headers['x-e-ts'] || req.headers['x-entr-ts'] || '');
+  const sig    = String(req.headers['x-e-sig'] || req.headers['x-entr-sig'] || '');
 
   if (hdrKey !== API_KEY) return res.status(401).json({ error: 'Unauthorized (key)' });
-  if (!/^\d+$/.test(String(ts || ''))) return res.status(401).json({ error: 'Unauthorized (ts)' });
+  if (!/^\d+$/.test(ts))  return res.status(401).json({ error: 'Unauthorized (ts)' });
 
   const now = Date.now();
   if (Math.abs(now - Number(ts)) > SKEW_MS) {
     return res.status(401).json({ error: 'Unauthorized (skew)' });
   }
 
-  const bodyStr = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body || {});
-  const bodyHash = crypto.createHash('sha256').update(bodyStr, 'utf8').digest('hex');
+  // 2) Cuerpo exacto y firma
+  const rawStr  = req.rawBody ? req.rawBody.toString('utf8') : '';
+  const jsonStr = rawStr || JSON.stringify(req.body || {});
+  const bodyHash = crypto.createHash('sha256').update(jsonStr, 'utf8').digest('hex');
 
-  // Path canónico: solo pathname (sin querystring)
+  // Path solo pathname (sin query)
   const pathname = new URL(req.originalUrl, 'http://x').pathname; // → "/regalos/crear-codigo-regalo"
-  const base = `${ts}.POST.${pathname}.${bodyHash}`;
+  const base     = `${ts}.POST.${pathname}.${bodyHash}`;
   const expected = crypto.createHmac('sha256', HMAC_SECRET).update(base).digest('hex');
 
+  // Logs de base (siempre)
+  console.log('[REGALOS BASE NODE]', {
+    ts,
+    path: pathname,
+    bodyHash10: bodyHash.slice(0, 10),
+    base10: base.slice(0, 10),
+    sig10: String(sig).slice(0, 10)
+  });
+
   if (REGALOS_DEBUG) {
-    const maskTail = s => (s ? `••••${String(s).slice(-4)}` : null);
-    console.log('[REGALOS DEBUG OUT]', {
+    console.log('[REGALOS DEBUG IN]', {
       path: pathname,
       ts,
-      bodyHash10: bodyHash.slice(0, 10),
-      sig10: String(sig || '').slice(0, 10),
+      sig10: String(sig).slice(0, 10),
       exp10: expected.slice(0, 10),
       apiKeyMasked: maskTail(API_KEY),
+      headerVariant: req.headers['x-e-ts'] ? 'x-e-*' : (req.headers['x-entr-ts'] ? 'x-entr-*' : 'none')
     });
   }
 
   try {
-    if (!crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(String(sig || '')))) {
+    if (!crypto.timingSafeEqual(Buffer.from(expected, 'utf8'), Buffer.from(sig, 'utf8'))) {
       return res.status(401).json({ error: 'Unauthorized (sig)' });
     }
   } catch {
     return res.status(401).json({ error: 'Unauthorized (sig-len)' });
   }
 
+  console.log('[REGALOS AUTH] HMAC OK');
   return next();
 }
 
-// 🎨 Colores unificados (RGB 0–1) y texto
+// 🎨 Formato condicional para Google Sheets
 const COLOR_VERDE = { red: 0.20, green: 0.66, blue: 0.33 }; // "NO"
 const COLOR_ROJO  = { red: 0.90, green: 0.13, blue: 0.13 }; // "SÍ"
 const TEXTO_BLANCO_BOLD = { foregroundColor: { red: 1, green: 1, blue: 1 }, bold: true };
 
-/**
- * 🗒️ Hoja de control de CÓDIGOS REGALO (previos al canje)
- */
-const SHEET_ID_CONTROL =
-  process.env.SHEET_ID_CONTROL ||
-  '1DFZuhJtuQ0y8EHXOkUUifR_mCVfGyxgkCHXRvBoiwfo';
+/** 🗒️ Hoja de control */
+const SHEET_ID_CONTROL   = process.env.SHEET_ID_CONTROL   || '1DFZuhJtuQ0y8EHXOkUUifR_mCVfGyxgkCHXRvBoiwfo';
+const SHEET_NAME_CONTROL = process.env.SHEET_NAME_CONTROL || 'CODIGOS REGALO';
 
-const SHEET_NAME_CONTROL =
-  process.env.SHEET_NAME_CONTROL || 'CODIGOS REGALO';
-
-// Helper: reintentos exponenciales
+// Reintentos exponenciales
 async function withRetries(fn, { tries = 4, baseMs = 150 } = {}) {
   let lastErr;
   for (let i = 1; i <= tries; i++) {
@@ -112,8 +111,6 @@ async function withRetries(fn, { tries = 4, baseMs = 150 } = {}) {
   }
   throw lastErr;
 }
-
-// 🧩 Asegura que exista la pestaña indicada
 async function ensureSheetExists(sheets, spreadsheetId, title) {
   const meta = await sheets.spreadsheets.get({ spreadsheetId });
   const titles = (meta.data.sheets || []).map(s => s.properties.title);
@@ -124,15 +121,11 @@ async function ensureSheetExists(sheets, spreadsheetId, title) {
     });
   }
 }
-
-// 🎨 Reglas condicionales unificadas para la columna E
 async function ensureCondFormats(sheets, spreadsheetId, sheetTitle) {
   const meta = await sheets.spreadsheets.get({ spreadsheetId });
   const sheet = (meta.data.sheets || []).find(s => s.properties.title === sheetTitle);
   if (!sheet) return;
   const sheetId = sheet.properties.sheetId;
-
-  // Borrar reglas previas (si hay)
   try {
     await sheets.spreadsheets.batchUpdate({
       spreadsheetId,
@@ -144,8 +137,6 @@ async function ensureCondFormats(sheets, spreadsheetId, sheetTitle) {
       }
     });
   } catch {}
-
-  // Añadir "NO" → verde, "SÍ" → rojo
   await sheets.spreadsheets.batchUpdate({
     spreadsheetId,
     requestBody: {
@@ -179,9 +170,29 @@ async function ensureCondFormats(sheets, spreadsheetId, sheetTitle) {
   });
 }
 
-/**
+/* =======================
+   Pie RGPD unificado
+========================= */
+const PIE_HTML = `
+  <hr style="margin-top: 40px; margin-bottom: 10px;" />
+  <div style="font-size: 12px; color: #777; line-height: 1.5;">
+    En cumplimiento del Reglamento (UE) 2016/679, le informamos que su dirección de correo electrónico forma parte de la base de datos de Ignacio Solsona Fernández-Pedrera, DNI 20481042W, con domicilio en calle Enmedio nº 22, piso 3, puerta E, Castellón de la Plana, CP 12001.<br /><br />
+    Su dirección se utiliza con la finalidad de prestarle servicios jurídicos. Usted tiene derecho a retirar su consentimiento en cualquier momento.<br /><br />
+    Puede ejercer sus derechos de acceso, rectificación, supresión, portabilidad, limitación y oposición contactando con: <a href="mailto:laboroteca@gmail.com">laboroteca@gmail.com</a>. También puede presentar una reclamación ante la autoridad de control competente.
+  </div>
+`.trim();
+
+const PIE_TEXT = `
+------------------------------------------------------------
+En cumplimiento del Reglamento (UE) 2016/679 (RGPD), su email forma parte de la base de datos de Ignacio Solsona Fernández-Pedrera, DNI 20481042W, con domicilio en calle Enmedio nº 22, piso 3, puerta E, Castellón de la Plana, CP 12001.
+
+Puede ejercer sus derechos en: laboroteca@gmail.com
+También puede reclamar ante la autoridad de control si lo considera necesario.
+`.trim();
+
+/* ============================================================
  * 📌 POST /regalos/crear-codigo-regalo  (protegido por HMAC)
- */
+ * ============================================================ */
 router.post('/crear-codigo-regalo', verifyRegalosHmac, async (req, res) => {
   try {
     const nombre = String(req.body?.nombre || '').trim();
@@ -190,6 +201,7 @@ router.post('/crear-codigo-regalo', verifyRegalosHmac, async (req, res) => {
 
     const otorganteEmail =
       String(req.body?.otorgante_email ||
+             req.body?.otorganteEmail ||
              req.headers['x-user-email'] ||
              req.headers['x-wp-user-email'] ||
              '').trim().toLowerCase();
@@ -219,10 +231,10 @@ router.post('/crear-codigo-regalo', verifyRegalosHmac, async (req, res) => {
       usado: false
     });
 
+    // Google Sheets (registro)
     try {
       const authClient = await auth();
       const sheets = google.sheets({ version: 'v4', auth: authClient });
-
       await ensureSheetExists(sheets, SHEET_ID_CONTROL, SHEET_NAME_CONTROL);
       await ensureCondFormats(sheets, SHEET_ID_CONTROL, SHEET_NAME_CONTROL);
 
@@ -234,12 +246,9 @@ router.post('/crear-codigo-regalo', verifyRegalosHmac, async (req, res) => {
           spreadsheetId: SHEET_ID_CONTROL,
           range,
           valueInputOption: 'USER_ENTERED',
-          requestBody: {
-            values: [[ nombre, email, codigo, otorganteEmail || '', 'NO' ]]
-          }
+          requestBody: { values: [[ nombre, email, codigo, otorganteEmail || '', 'NO' ]] }
         })
       );
-
       if (!result?.data?.updates?.updatedRows) {
         console.warn('⚠️ Sheets no reporta filas/celdas actualizadas');
       }
@@ -247,8 +256,44 @@ router.post('/crear-codigo-regalo', verifyRegalosHmac, async (req, res) => {
       console.warn('⚠️ No se pudo registrar en Sheets:', sheetErr?.message || sheetErr);
     }
 
+    // ✉️ Email al beneficiario (con RGPD)
+    try {
+      const subject = `Tu código de regalo: ${codigo}`;
+      const pageUrl = 'https://www.laboroteca.es/canjear-codigo-regalo/';
+      const saludo = `Un atento saludo,\nIgnacio Solsona.\nAbogado`;
+
+      const textoPlano =
+`Estimado/a ${nombre},
+
+Has recibido un código de regalo: ${codigo}
+
+Puedes canjearlo por cualquiera de mis libros publicados.
+Para el canje, introduce el código en el formulario de esta página:
+${pageUrl}
+
+${saludo}
+
+${PIE_TEXT}`;
+
+      const html =
+        `<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.5;color:#111;">
+           <p>Estimado/a <strong>${nombre}</strong>,</p>
+           <p>Has recibido un <strong>código de regalo</strong>: <strong>${codigo}</strong>.</p>
+           <p>Puedes canjearlo por cualquiera de mis libros publicados. Para el canje, introduce el código en el formulario de esta página:</p>
+           <p><a href="${pageUrl}" target="_blank" rel="noopener">${pageUrl}</a></p>
+           <p style="white-space:pre-line;margin-top:16px;">Un atento saludo,\nIgnacio Solsona.\nAbogado</p>
+           ${PIE_HTML}
+         </div>`;
+
+      await enviarEmailPersonalizado({ to: email, subject, text: textoPlano, html });
+      console.log(`📧 Email de regalo enviado a ${email} (codigo ${codigo})`);
+    } catch (mailErr) {
+      console.warn('⚠️ No se pudo enviar el email al beneficiario:', mailErr?.message || mailErr);
+      // No bloqueamos la creación por fallo de email
+    }
+
     console.log(`🎁 Código REGALO creado → ${codigo} para ${email} | Otorgante: ${otorganteEmail || 'desconocido'}`);
-    return res.status(201).json({ ok: true, codigo, otorgante_email: otorganteEmail || null });
+    return res.status(201).json({ ok: true, codigo, otorgante_email: otorganteEmail || null, emailed: true });
   } catch (err) {
     console.error('❌ Error en /crear-codigo-regalo:', err?.message || err);
     return res.status(500).json({ ok: false, error: 'Error interno del servidor.' });

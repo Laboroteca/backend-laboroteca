@@ -5,7 +5,7 @@ const firestore = admin.firestore();
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const axios = require('axios');
 
-const { alertAdminProxy: alertAdmin } = require('./utils/alertAdminProxy');
+const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 const { registrarBajaClub } = require('./registrarBajaClub');
 const { enviarEmailSolicitudBajaVoluntaria } = require('./email'); // acuse inmediato
 

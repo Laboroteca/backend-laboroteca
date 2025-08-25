@@ -24,19 +24,26 @@ const HMAC_SECRET    = (process.env.ENTRADAS_HMAC_SECRET || '').trim();
 const SKEW_MS        = Number(process.env.ENTRADAS_SKEW_MS || 5 * 60 * 1000); // ±5 min
 const ENTRADAS_DEBUG = String(process.env.ENTRADAS_DEBUG || '') === '1';
 
+// Log de comprobación de secreto (hash, no el valor)
+if (ENTRADAS_DEBUG) {
+  try {
+    const sha10 = crypto.createHash('sha256').update(HMAC_SECRET || '', 'utf8').digest('hex').slice(0, 10);
+    console.log('[ENTR SECRET NODE]', { sha10 });
+  } catch {}
+}
+
 /* ───────────────────── Captura rawBody ─────────────────────
-   MUY IMPORTANTE: intentamos conservar el cuerpo EXACTO recibido. */
+   Firmamos/verificamos con el cuerpo EXACTO recibido. */
 router.use((req, _res, next) => {
   if (typeof req.rawBody === 'string' && req.rawBody.length) return next();
 
   if (req.readable && !req.body) {
     let data = '';
     try { req.setEncoding('utf8'); } catch {}
-    req.on('data', (chunk) => (data += chunk));
+    req.on('data', chunk => (data += chunk));
     req.on('end',  () => { req.rawBody = data || ''; next(); });
     req.on('error', () => { req.rawBody = ''; next(); });
   } else {
-    // Si ya existe req.body, lo serializamos para tener un string estable alternativo
     try { req.rawBody = JSON.stringify(req.body || {}); }
     catch { req.rawBody = ''; }
     next();
@@ -46,9 +53,9 @@ router.use((req, _res, next) => {
 /* ───────────────────── Seguridad ───────────────────── */
 function verifyAuth(req) {
   // 1) API key: "x-api-key" o "Authorization: Bearer …"
-  const bearer       = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim();
-  const headerKey    = (req.headers['x-api-key'] || '').trim();
-  const providedKey  = headerKey || bearer;
+  const bearer      = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim();
+  const headerKey   = (req.headers['x-api-key'] || '').trim();
+  const providedKey = headerKey || bearer;
   if (!API_KEY || providedKey !== API_KEY) {
     return { ok: false, code: 403, msg: 'Unauthorized (key)' };
   }
@@ -56,10 +63,9 @@ function verifyAuth(req) {
   // 2) HMAC opcional (si hay secreto definido)
   if (!HMAC_SECRET) return { ok: true };
 
-  // Acepta ambas variantes de cabeceras
+  // Aceptar ambas variantes de cabeceras
   const tsHeader  = String(req.headers['x-e-ts']  || req.headers['x-entr-ts']  || '');
   const sigHeader = String(req.headers['x-e-sig'] || req.headers['x-entr-sig'] || '');
-
   if (!/^\d+$/.test(tsHeader) || !sigHeader) {
     return { ok: false, code: 401, msg: 'Missing HMAC headers' };
   }
@@ -73,7 +79,7 @@ function verifyAuth(req) {
   // Path sin query
   const path = (req.originalUrl || '').split('?')[0];
 
-  // Calculamos DOS hashes posibles y aceptamos si cualquiera cuadra
+  // Calculamos DOS hashes posibles del body y aceptamos si cualquiera cuadra
   const rawStr  = (typeof req.rawBody === 'string') ? req.rawBody : '';
   const jsonStr = (() => { try { return JSON.stringify(req.body || {}); } catch { return ''; } })();
 
@@ -100,11 +106,21 @@ function verifyAuth(req) {
 
   if (ENTRADAS_DEBUG) {
     const mask = (s) => (s ? `••••${String(s).slice(-4)}` : null);
+
+    // Log de la base (para comparar con WP sin exponer secretos)
+    console.log('[ENTR BASE NODE]', {
+      ts: tsHeader,
+      path,
+      bodyHash10_raw:  bodyHashRaw  ? bodyHashRaw.slice(0,10)  : null,
+      bodyHash10_json: bodyHashJson ? bodyHashJson.slice(0,10) : null,
+      base10_raw:  baseRaw  ? baseRaw.slice(0,10)  : null,
+      base10_json: baseJson ? baseJson.slice(0,10) : null,
+      sig10: sigHeader.slice(0,10)
+    });
+
     console.log('[ENTRADAS DEBUG IN]', {
       path,
       ts: tsHeader,
-      bodyHash10_raw:  bodyHashRaw  ? bodyHashRaw.slice(0, 10)  : null,
-      bodyHash10_json: bodyHashJson ? bodyHashJson.slice(0, 10) : null,
       sig10: sigHeader.slice(0, 10),
       exp10_raw:  expRaw  ? expRaw.slice(0, 10)  : null,
       exp10_json: expJson ? expJson.slice(0, 10) : null,

@@ -25,7 +25,7 @@ const ENTRADAS_DEBUG = String(process.env.ENTRADAS_DEBUG || '') === '1';
 
 // ───────────────────────── Seguridad ─────────────────────────
 function verifyAuth(req) {
-  // 1) API key: admite "x-api-key" o "Authorization: Bearer ..."
+  // 1) API key: admite "x-api-key" o "Authorization: Bearer …"
   const bearer = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim();
   const headerKey = (req.headers['x-api-key'] || '').trim();
   const providedKey = headerKey || bearer;
@@ -37,15 +37,16 @@ function verifyAuth(req) {
   // 2) HMAC opcional (si hay secreto definido)
   if (!HMAC_SECRET) return { ok: true };
 
-  const ts = String(req.headers['x-e-ts'] || '');
-  const sig = String(req.headers['x-e-sig'] || '');
+  // Acepta ambas variantes: x-e-* y x-entr-*
+  const tsHeader  = String(req.headers['x-e-ts']    || req.headers['x-entr-ts'] || '');
+  const sigHeader = String(req.headers['x-e-sig']   || req.headers['x-entr-sig'] || '');
 
-  if (!/^\d+$/.test(ts) || !sig) {
+  if (!/^\d+$/.test(tsHeader) || !sigHeader) {
     return { ok: false, code: 401, msg: 'Missing HMAC headers' };
   }
 
   const now = Date.now();
-  if (Math.abs(now - Number(ts)) > SKEW_MS) {
+  if (Math.abs(now - Number(tsHeader)) > SKEW_MS) {
     return { ok: false, code: 401, msg: 'Expired token' };
   }
 
@@ -53,27 +54,33 @@ function verifyAuth(req) {
   const path = (req.originalUrl || '').split('?')[0]; // sin query
   const bodyStr = JSON.stringify(req.body || {});
   const bodyHash = crypto.createHash('sha256').update(bodyStr, 'utf8').digest('hex');
-  const base = `${ts}.POST.${path}.${bodyHash}`;
+  const base = `${tsHeader}.POST.${path}.${bodyHash}`;
   const expected = crypto.createHmac('sha256', HMAC_SECRET).update(base).digest('hex');
 
-  const okSig = expected.length === sig.length &&
-                crypto.timingSafeEqual(Buffer.from(expected, 'utf8'), Buffer.from(sig, 'utf8'));
+  let okSig = false;
+  try {
+    okSig = crypto.timingSafeEqual(Buffer.from(expected, 'utf8'), Buffer.from(sigHeader, 'utf8'));
+  } catch {
+    okSig = false;
+  }
 
   if (ENTRADAS_DEBUG) {
     const mask = (s) => (s ? `••••${String(s).slice(-4)}` : null);
     console.log('[ENTRADAS DEBUG IN]', {
       path,
-      ts,
+      ts: tsHeader,
       bodyHash10: bodyHash.slice(0, 10),
-      sig10: sig.slice(0, 10),
+      sig10: sigHeader.slice(0, 10),
       exp10: expected.slice(0, 10),
       apiKeyMasked: mask(providedKey),
+      headerVariant: req.headers['x-e-ts'] ? 'x-e-*' : (req.headers['x-entr-ts'] ? 'x-entr-*' : 'none')
     });
   }
 
   if (!okSig) return { ok: false, code: 401, msg: 'Bad signature' };
   return { ok: true };
 }
+
 
 // ── Hoja por formulario (fallback al 22)
 const MAP_SHEETS = {

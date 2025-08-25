@@ -2,7 +2,7 @@
 const { google } = require('googleapis');
 const crypto = require('crypto');
 const { ensureOnce } = require('../utils/dedupe');
-const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
+const { alertAdminProxy: alertAdmin } = require('./utils/alertAdminProxy');
 
 
 

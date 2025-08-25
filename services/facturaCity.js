@@ -1,7 +1,7 @@
 const axios = require('axios');
 const qs = require('qs');
 require('dotenv').config();
-const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
+const { alertAdminProxy: alertAdmin } = require('./utils/alertAdminProxy');
 
 
 const FACTURACITY_API_KEY = process.env.FACTURACITY_API_KEY?.trim().replace(/"/g, '');

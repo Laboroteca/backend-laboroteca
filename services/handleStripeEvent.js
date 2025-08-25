@@ -19,7 +19,7 @@ const crypto = require('crypto');
 const redact = (v) => (process.env.NODE_ENV === 'production' ? hash12(String(v || '')) : String(v || ''));
 const hash12 = e => crypto.createHash('sha256').update(String(e || '').toLowerCase()).digest('hex').slice(0,12);
 const { ensureOnce } = require('../utils/dedupe');
-const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
+const { alertAdminProxy: alertAdmin } = require('./utils/alertAdminProxy');
 
 // ——— Helpers comunes ———
 async function nombreCompletoPorEmail(email, fallbackNombre = '', fallbackApellidos = '') {

@@ -25,19 +25,18 @@ const SKEW_MS        = Number(process.env.ENTRADAS_SKEW_MS || 5 * 60 * 1000); //
 const ENTRADAS_DEBUG = String(process.env.ENTRADAS_DEBUG || '') === '1';
 
 /* ───────────────────── Captura rawBody ─────────────────────
-   MUY IMPORTANTE: firmamos/verificamos con el cuerpo EXACTO recibido. */
+   MUY IMPORTANTE: intentamos conservar el cuerpo EXACTO recibido. */
 router.use((req, _res, next) => {
   if (typeof req.rawBody === 'string' && req.rawBody.length) return next();
 
-  // Si aún no está parseado, leemos el stream para montar rawBody
   if (req.readable && !req.body) {
     let data = '';
-    req.setEncoding('utf8');
-    req.on('data', chunk => (data += chunk));
-    req.on('end', () => { req.rawBody = data || ''; next(); });
+    try { req.setEncoding('utf8'); } catch {}
+    req.on('data', (chunk) => (data += chunk));
+    req.on('end',  () => { req.rawBody = data || ''; next(); });
     req.on('error', () => { req.rawBody = ''; next(); });
   } else {
-    // Si ya hay req.body, lo serializamos tal cual para tener un rawBody estable
+    // Si ya existe req.body, lo serializamos para tener un string estable alternativo
     try { req.rawBody = JSON.stringify(req.body || {}); }
     catch { req.rawBody = ''; }
     next();
@@ -47,10 +46,9 @@ router.use((req, _res, next) => {
 /* ───────────────────── Seguridad ───────────────────── */
 function verifyAuth(req) {
   // 1) API key: "x-api-key" o "Authorization: Bearer …"
-  const bearer    = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim();
-  const headerKey = (req.headers['x-api-key'] || '').trim();
-  const providedKey = headerKey || bearer;
-
+  const bearer       = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim();
+  const headerKey    = (req.headers['x-api-key'] || '').trim();
+  const providedKey  = headerKey || bearer;
   if (!API_KEY || providedKey !== API_KEY) {
     return { ok: false, code: 403, msg: 'Unauthorized (key)' };
   }
@@ -59,8 +57,8 @@ function verifyAuth(req) {
   if (!HMAC_SECRET) return { ok: true };
 
   // Acepta ambas variantes de cabeceras
-  const tsHeader  = String(req.headers['x-e-ts']    || req.headers['x-entr-ts'] || '');
-  const sigHeader = String(req.headers['x-e-sig']   || req.headers['x-entr-sig'] || '');
+  const tsHeader  = String(req.headers['x-e-ts']  || req.headers['x-entr-ts']  || '');
+  const sigHeader = String(req.headers['x-e-sig'] || req.headers['x-entr-sig'] || '');
 
   if (!/^\d+$/.test(tsHeader) || !sigHeader) {
     return { ok: false, code: 401, msg: 'Missing HMAC headers' };
@@ -72,18 +70,32 @@ function verifyAuth(req) {
     return { ok: false, code: 401, msg: 'Expired token' };
   }
 
-  // Firmamos: ts.POST.<path>.sha256(body)
-  const path     = (req.originalUrl || '').split('?')[0]; // sin query
-  const bodyStr  = (typeof req.rawBody === 'string') ? req.rawBody : JSON.stringify(req.body || {});
-  const bodyHash = crypto.createHash('sha256').update(bodyStr, 'utf8').digest('hex');
-  const base     = `${tsHeader}.POST.${path}.${bodyHash}`;
-  const expected = crypto.createHmac('sha256', HMAC_SECRET).update(base).digest('hex');
+  // Path sin query
+  const path = (req.originalUrl || '').split('?')[0];
+
+  // Calculamos DOS hashes posibles y aceptamos si cualquiera cuadra
+  const rawStr  = (typeof req.rawBody === 'string') ? req.rawBody : '';
+  const jsonStr = (() => { try { return JSON.stringify(req.body || {}); } catch { return ''; } })();
+
+  const bodyHashRaw  = rawStr  ? crypto.createHash('sha256').update(rawStr,  'utf8').digest('hex') : null;
+  const bodyHashJson = jsonStr ? crypto.createHash('sha256').update(jsonStr, 'utf8').digest('hex') : null;
+
+  const baseRaw  = bodyHashRaw  ? `${tsHeader}.POST.${path}.${bodyHashRaw}`  : null;
+  const baseJson = bodyHashJson ? `${tsHeader}.POST.${path}.${bodyHashJson}` : null;
+
+  const expRaw  = baseRaw  ? crypto.createHmac('sha256', HMAC_SECRET).update(baseRaw).digest('hex')  : null;
+  const expJson = baseJson ? crypto.createHmac('sha256', HMAC_SECRET).update(baseJson).digest('hex') : null;
 
   let okSig = false;
+  let matchedVariant = 'none';
   try {
-    // Comparamos en tiempo constante
-    okSig = expected.length === sigHeader.length &&
-            crypto.timingSafeEqual(Buffer.from(expected, 'utf8'), Buffer.from(sigHeader, 'utf8'));
+    if (expRaw && expRaw.length === sigHeader.length &&
+        crypto.timingSafeEqual(Buffer.from(expRaw, 'utf8'), Buffer.from(sigHeader, 'utf8'))) {
+      okSig = true; matchedVariant = 'raw';
+    } else if (expJson && expJson.length === sigHeader.length &&
+        crypto.timingSafeEqual(Buffer.from(expJson, 'utf8'), Buffer.from(sigHeader, 'utf8'))) {
+      okSig = true; matchedVariant = 'json';
+    }
   } catch { okSig = false; }
 
   if (ENTRADAS_DEBUG) {
@@ -91,9 +103,12 @@ function verifyAuth(req) {
     console.log('[ENTRADAS DEBUG IN]', {
       path,
       ts: tsHeader,
-      bodyHash10: bodyHash.slice(0, 10),
+      bodyHash10_raw:  bodyHashRaw  ? bodyHashRaw.slice(0, 10)  : null,
+      bodyHash10_json: bodyHashJson ? bodyHashJson.slice(0, 10) : null,
       sig10: sigHeader.slice(0, 10),
-      exp10: expected.slice(0, 10),
+      exp10_raw:  expRaw  ? expRaw.slice(0, 10)  : null,
+      exp10_json: expJson ? expJson.slice(0, 10) : null,
+      matched: matchedVariant,
       apiKeyMasked: mask(providedKey),
       headerVariant: req.headers['x-e-ts'] ? 'x-e-*' : (req.headers['x-entr-ts'] ? 'x-entr-*' : 'none')
     });

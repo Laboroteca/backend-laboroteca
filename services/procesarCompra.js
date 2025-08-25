@@ -9,7 +9,7 @@ const { activarMembresiaClub } = require('./activarMembresiaClub');
 const { syncMemberpressClub } = require('./syncMemberpressClub');
 const { normalizarProducto, MEMBERPRESS_IDS } = require('../utils/productos');
 const { ensureOnce } = require('../utils/dedupe');
-const { alertAdmin } = require('../utils/alertAdmin'); // 👈 NUEVO
+const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
 
 // --- helper global ---

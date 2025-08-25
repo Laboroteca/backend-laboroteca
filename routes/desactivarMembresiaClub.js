@@ -3,7 +3,7 @@
 const admin = require('../firebase');
 const firestore = admin.firestore();
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-const { alertAdmin } = require('../utils/alertAdmin');
+const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 const { syncMemberpressClub } = require('../services/syncMemberpressClub');
 
 // 👉 servicio unificado para BAJA VOLUNTARIA (programada fin de ciclo)

@@ -1,6 +1,6 @@
 require('dotenv').config();
 const fetch = require('node-fetch');
-const { alertAdmin } = require('../utils/alertAdmin');
+const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
 /**
  * Envía un email con o sin factura adjunta (PDF).

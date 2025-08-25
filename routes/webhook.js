@@ -7,7 +7,7 @@ const Stripe = require('stripe');
 const admin = require('../firebase');
 const firestore = admin.firestore();
 const handleStripeEvent = require('../services/handleStripeEvent');
-const { alertAdmin } = require('../utils/alertAdmin');
+const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;

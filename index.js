@@ -2,7 +2,7 @@ if (process.env.NODE_ENV !== 'production') {
   require('dotenv').config();
 }
 
-const { alertAdmin } = require('./utils/alertAdmin'); 
+const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
 // Utilidad para no mostrar claves en claro
 const crypto = require('crypto');

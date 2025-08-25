@@ -1,5 +1,5 @@
 const { Storage } = require('@google-cloud/storage');
-const { alertAdmin } = require('../utils/alertAdmin');
+const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
 
 // Carga y decodifica las credenciales desde la variable de entorno

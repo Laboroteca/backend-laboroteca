@@ -2,7 +2,7 @@ require('dotenv').config();
 const crypto = require('crypto');
 const { ensureOnce } = require('../utils/dedupe');
 const procesarCompra = require('../services/procesarCompra');
-const { alertAdmin } = require('../utils/alertAdmin');
+const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
 module.exports = async function (req, res) {
   const tokenCliente = req.headers['authorization'];

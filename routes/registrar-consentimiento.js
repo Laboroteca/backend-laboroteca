@@ -5,7 +5,7 @@ const express = require('express');
 const router = express.Router();
 
 const { registrarConsentimiento } = require('../utils/consentLogs');
-const { alertAdmin } = require('../utils/alertAdmin');
+const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
 /* ───────────── Helpers ───────────── */
 function parseConsentData(v) {

@@ -1,7 +1,7 @@
 // services/activarMembresiaClub.js
 const admin = require('../firebase');
 const firestore = admin.firestore();
-const { alertAdmin } = require('../utils/alertAdmin');
+const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
 /**
  * Activa la membresía del club para el email dado.

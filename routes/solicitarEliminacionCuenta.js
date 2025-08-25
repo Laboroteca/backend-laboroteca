@@ -6,7 +6,7 @@ const firestore = admin.firestore();
 const crypto = require('crypto');
 const fetch = require('node-fetch');
 const { enviarEmailValidacionEliminacionCuenta } = require('../services/email');
-const { alertAdmin } = require('../utils/alertAdmin');
+const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
 router.post('/solicitar-eliminacion', async (req, res) => {
   const email = (req.body?.email || '').toLowerCase().trim();

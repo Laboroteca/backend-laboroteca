@@ -9,7 +9,7 @@ const { eliminarUsuarioWordPress } = require('../services/eliminarUsuarioWordPre
 const { borrarDatosUsuarioFirestore } = require('../services/borrarDatosUsuarioFirestore');
 const { enviarEmailPersonalizado } = require('../services/email');
 const { registrarBajaClub } = require('../services/registrarBajaClub');
-const { alertAdmin } = require('../utils/alertAdmin');
+const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 const { syncMemberpressClub } = require('../services/syncMemberpressClub');
 
 // 🔧 Stripe

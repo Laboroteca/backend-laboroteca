@@ -3,7 +3,7 @@
 
 const fetch = require('node-fetch');
 const crypto = require('crypto');
-const { alertAdmin } = require('../utils/alertAdmin');
+const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
 // ⚙️ Config por entorno (no hardcode)
 const DEFAULT_API_URL = (process.env.MP_SYNC_API_URL_CLUB || 'https://www.laboroteca.es/wp-json/laboroteca/v1/club-membership').trim();

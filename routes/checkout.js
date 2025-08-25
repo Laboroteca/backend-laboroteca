@@ -5,7 +5,7 @@ const router = express.Router();
 const { normalizar } = require('../utils/normalizar');
 const { emailRegistradoEnWordPress } = require('../utils/wordpress');
 const PRODUCTOS = require('../utils/productos');
-const { alertAdmin } = require('../utils/alertAdmin');
+const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
 router.post('/create-session', async (req, res) => {
   // ❌ Bloquear intentos de lanzar entradas por esta ruta

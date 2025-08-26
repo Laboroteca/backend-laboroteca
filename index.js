@@ -118,7 +118,16 @@ console.log('📌 Ruta de consentimientos montada en /api/registrar-consentimien
 // DESPUÉS DEL WEBHOOK, LOS BODY PARSERS
 app.use(require('./routes/solicitarEliminacionCuenta'));
 app.use(require('./routes/confirmarEliminaciondecuenta'));
-app.use('/regalos', require('./regalos/routes/canjear-codigo'));
+app.use('/regalos', require('./regalos/routes/crear-codigo-regalo'));
+// --- Regalos: canjear + alias compatible ---
+const canjearRouter = require('./regalos/routes/canjear-codigo');
+app.use('/regalos', canjearRouter); // /regalos/canjear-codigo (ruta original)
+// Alias solicitado por WP: /regalos/canjear-codigo-regalo  → reusa el mismo router
+app.use('/regalos/canjear-codigo-regalo', (req, res, next) => {
+  console.log('🔁 Alias /regalos/canjear-codigo-regalo → /regalos/canjear-codigo');
+  req.url = '/canjear-codigo'; // path interno del router
+  canjearRouter(req, res, next);
+});
 app.use('/regalos', require('./regalos/routes/crear-codigo-regalo'));
 
 

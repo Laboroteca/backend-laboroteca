@@ -73,60 +73,73 @@ function pruneSeen(){
 function verifyAuth(req){
   // 0) Content-Type y tamaño
   if (!String(req.headers['content-type']||'').toLowerCase().startsWith('application/json')) {
+    if (DEBUG) console.warn('[AUTH FAIL] bad CT:', req.headers['content-type']);
     return { ok:false, code:415, msg:'Content-Type inválido' };
   }
   const rawStr = req.rawBody ? (Buffer.isBuffer(req.rawBody)? req.rawBody.toString('utf8') : String(req.rawBody)) : '';
-  if (Buffer.byteLength(rawStr, 'utf8') > MAX_BODY_BYTES) {
+  const rawLen = Buffer.byteLength(rawStr, 'utf8');
+  if (rawLen > MAX_BODY_BYTES) {
+    if (DEBUG) console.warn('[AUTH FAIL] payload too large:', rawLen);
     return { ok:false, code:413, msg:'Payload demasiado grande' };
   }
 
-  // 1) Allowlist IP (opcional)
+  // 1) Allowlist IP
   const ip = clientIp(req);
   if (IP_ALLOW.length && !IP_ALLOW.includes(ip)) {
+    if (DEBUG) console.warn('[AUTH FAIL] ip not allowed:', ip);
     return { ok:false, code:401, msg:'IP no autorizada' };
   }
 
   // 2) Rate limit
   if (!rateLimit(req)) {
+    if (DEBUG) console.warn('[AUTH FAIL] rate limit:', ip);
     return { ok:false, code:429, msg:'Too Many Requests' };
   }
 
-  // 3) HMAC preferente
+  // 3) HMAC
   const hdrKey = String(req.headers['x-api-key'] || '').trim();
   const ts     = String(req.headers['x-val-ts'] || req.headers['x-entr-ts'] || req.headers['x-e-ts'] || '');
   const sig    = String(req.headers['x-val-sig']|| req.headers['x-entr-sig']|| req.headers['x-e-sig']|| '');
 
   const haveHmacHeaders = API_KEY && HMAC_SECRET && ts && sig && hdrKey;
-
   if (haveHmacHeaders) {
-    if (hdrKey !== API_KEY)  return { ok:false, code:401, msg:'Unauthorized (key)' };
-    if (!/^\d+$/.test(ts))   return { ok:false, code:401, msg:'Unauthorized (ts)' };
+    if (hdrKey !== API_KEY)  {
+      if (DEBUG) console.warn('[AUTH FAIL] api key mismatch. got:', maskTail(hdrKey), 'exp:', maskTail(API_KEY));
+      return { ok:false, code:401, msg:'Unauthorized (key)' };
+    }
+    if (!/^\d+$/.test(ts))   {
+      if (DEBUG) console.warn('[AUTH FAIL] ts not digits:', ts);
+      return { ok:false, code:401, msg:'Unauthorized (ts)' };
+    }
 
     const now = Date.now();
-    if (Math.abs(now - Number(ts)) > SKEW_MS) {
+    const skew = Math.abs(now - Number(ts));
+    if (skew > SKEW_MS) {
+      if (DEBUG) console.warn('[AUTH FAIL] skew too big ms:', skew, 'limit:', SKEW_MS);
       return { ok:false, code:401, msg:'Expired/Skew' };
     }
 
-    const seenPath = new URL(req.originalUrl, 'http://x').pathname; // p.ej. /entradas/validar-entrada
+    const seenPath = new URL(req.originalUrl, 'http://x').pathname;
     const bodyHash = crypto.createHash('sha256').update(rawStr, 'utf8').digest('hex');
-    const candidates = [
-      seenPath,                       // path real que ve Express
+    const candidates = Array.from(new Set([
+      seenPath,
       '/validar-entrada',
       '/entradas/validar-entrada'
-    ].filter((v, i, a) => v && a.indexOf(v) === i);
+    ]));
 
     let ok = false;
     let chosenPath = '';
-    let expected = '';
+    const expList = [];
 
     for (const p of candidates) {
       const base = `${ts}.POST.${p}.${bodyHash}`;
       const exp  = crypto.createHmac('sha256', HMAC_SECRET).update(base).digest('hex');
+      expList.push({ path:p, exp10: exp.slice(0,10) });
       try {
         const a = Buffer.from(exp, 'utf8');
         const b = Buffer.from(sig, 'utf8');
         if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
-          ok = true; chosenPath = p; expected = exp; break;
+          ok = true; chosenPath = p; break;
         }
       } catch {}
     }
@@ -134,12 +147,13 @@ function verifyAuth(req){
     if (DEBUG) {
       console.log('[VALIDADOR DEBUG IN]', {
         ip,
-        path_seen: seenPath,
-        chosen_path: chosenPath || null,
         ts,
-        bodyHash10: bodyHash.slice(0,10),
+        skewMs: skew,
+        path_seen: seenPath,
+        chosen_path: ok ? chosenPath : null,
         sig10: String(sig).slice(0,10),
-        exp10: expected ? expected.slice(0,10) : null,
+        expCandidates: expList,
+        bodyHash10: bodyHash.slice(0,10),
         apiKeyMasked: maskTail(API_KEY)
       });
     }
@@ -149,23 +163,28 @@ function verifyAuth(req){
     // anti-replay
     pruneSeen();
     const nonceKey = ts + '.' + String(sig).slice(0,16);
-    if (seen.has(nonceKey)) return { ok:false, code:401, msg:'Replay' };
+    if (seen.has(nonceKey)) {
+      if (DEBUG) console.warn('[AUTH FAIL] replay:', nonceKey);
+      return { ok:false, code:401, msg:'Replay' };
+    }
     seen.set(nonceKey, now + SKEW_MS);
 
     return { ok:true, mode:'HMAC' };
   }
 
-  // 4) Fallback legacy solo si NO exigimos HMAC
+  // 4) Legacy (solo si se permite)
   if (!REQUIRE_HMAC) {
     const legacy = String(req.headers['x-laboroteca-token'] || '').trim();
     if (legacy && LEGACY_TOKEN && legacy === LEGACY_TOKEN) {
-      if (DEBUG) console.log('[VALIDADOR LEGACY OK]', { ip, note:'X-LABOROTECA-TOKEN' });
+      if (DEBUG) console.log('[VALIDADOR LEGACY OK]', { ip });
       return { ok:true, mode:'LEGACY' };
     }
   }
 
+  if (DEBUG) console.warn('[AUTH FAIL] missing headers or config');
   return { ok:false, code:401, msg:'Unauthorized' };
 }
+
 
 /* ===============================
    NORMALIZACIÓN CÓDIGO

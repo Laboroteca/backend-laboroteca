@@ -109,6 +109,14 @@ app.use(express.json({
 }));
 app.use(express.urlencoded({ extended: true }));
 
+// 🔒 Rate limit específico para canje (5 req/min por IP)
+const canjearLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
 
 // NUEVO: ruta para registrar consentimiento (vía /api/…)
 app.use('/api', registrarConsentimiento);
@@ -118,9 +126,11 @@ console.log('📌 Ruta de consentimientos montada en /api/registrar-consentimien
 // DESPUÉS DEL WEBHOOK, LOS BODY PARSERS
 app.use(require('./routes/solicitarEliminacionCuenta'));
 app.use(require('./routes/confirmarEliminaciondecuenta'));
-app.use('/regalos', require('./regalos/routes/crear-codigo-regalo'));
 // --- Regalos: canjear + alias compatible ---
 const canjearRouter = require('./regalos/routes/canjear-codigo');
+// aplicar rate limit a las rutas de canje
+app.use('/regalos/canjear-codigo', canjearLimiter);
+app.use('/regalos/canjear-codigo-regalo', canjearLimiter);
 app.use('/regalos', canjearRouter); // /regalos/canjear-codigo (ruta original)
 // Alias solicitado por WP: /regalos/canjear-codigo-regalo  → reusa el mismo router
 app.use('/regalos/canjear-codigo-regalo', (req, res, next) => {

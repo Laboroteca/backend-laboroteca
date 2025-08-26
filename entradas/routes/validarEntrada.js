@@ -1,7 +1,7 @@
 // 🔐 VALIDAR ENTRADA QR – Uso privado (Ignacio + 3 personas)
-// POST /validar-entrada
+// POST /validar-entrada  (o /entradas/validar-entrada si montas el router con prefijo)
 // Seguridad: x-api-key + HMAC (x-val-ts, x-val-sig) sobre ts.POST.<path>.sha256(body)
-// Fallback opcional: X-LABOROTECA-TOKEN (desaconsejado; puedes desactivarlo)
+// Fallback opcional: X-LABOROTECA-TOKEN (desaconsejado; controlado por REQUIRE_HMAC)
 
 'use strict';
 
@@ -107,64 +107,54 @@ function verifyAuth(req){
       return { ok:false, code:401, msg:'Expired/Skew' };
     }
 
-  const seenPath = new URL(req.originalUrl, 'http://x').pathname;
-  const bodyHash = crypto.createHash('sha256').update(rawStr, 'utf8').digest('hex');
-  // Candidatos: el que ve Express y, además, variantes típicas
-  const candidates = [
-    seenPath,                               // p.ej. /entradas/validar-entrada
-    '/validar-entrada',                     // sin prefijo
-    '/entradas/validar-entrada'             // con prefijo
-  ].filter((v, i, a) => v && a.indexOf(v) === i);
+    const seenPath = new URL(req.originalUrl, 'http://x').pathname; // p.ej. /entradas/validar-entrada
+    const bodyHash = crypto.createHash('sha256').update(rawStr, 'utf8').digest('hex');
+    const candidates = [
+      seenPath,                       // path real que ve Express
+      '/validar-entrada',             // sin prefijo
+      '/entradas/validar-entrada'     // con prefijo
+    ].filter((v, i, a) => v && a.indexOf(v) === i);
 
-  let okSig = false, chosen = '', expected = '';
-  for (const p of candidates) {
-    const base = `${ts}.POST.${p}.${bodyHash}`;
-    const exp  = crypto.createHmac('sha256', HMAC_SECRET).update(base).digest('hex');
-    try {
-      const a = Buffer.from(exp, 'utf8');
-      const b = Buffer.from(String(sig), 'utf8');
-      if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
-        okSig = true; chosen = p; expected = exp; break;
-      }
-    } catch {}
-  }
+    let ok = false;
+    let chosenPath = '';
+    let expected = '';
 
-  if (DEBUG) {
-    console.log('[VALIDADOR DEBUG IN]', {
-      ip, path_seen: seenPath, chosen_path: chosen, ts,
-      bodyHash10: bodyHash.slice(0,10),
-      sig10: String(sig).slice(0,10),
-      exp10: expected ? expected.slice(0,10) : null,
-      apiKeyMasked: maskTail(API_KEY)
-    });
-  }
+    for (const p of candidates) {
+      const base = `${ts}.POST.${p}.${bodyHash}`;
+      const exp  = crypto.createHmac('sha256', HMAC_SECRET).update(base).digest('hex');
+      try {
+        const a = Buffer.from(exp, 'utf8');
+        const b = Buffer.from(sig, 'utf8');
+        if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
+          ok = true;
+          chosenPath = p;
+          expected = exp;
+          break;
+        }
+      } catch {/* ignore */}
+    }
 
     if (DEBUG) {
       console.log('[VALIDADOR DEBUG IN]', {
         ip,
-        path: pathname,
+        path_seen: seenPath,
+        chosen_path: chosenPath || null,
         ts,
         bodyHash10: bodyHash.slice(0,10),
         sig10: String(sig).slice(0,10),
-        exp10: expected.slice(0,10),
+        exp10: expected ? expected.slice(0,10) : null,
         apiKeyMasked: maskTail(API_KEY)
       });
     }
 
+    if (!ok) return { ok:false, code:401, msg:'Bad signature' };
+
     // anti-replay
     pruneSeen();
-    const nonceKey = ts + '.' + sig.slice(0,16);
+    const nonceKey = ts + '.' + String(sig).slice(0,16);
     if (seen.has(nonceKey)) return { ok:false, code:401, msg:'Replay' };
-
-    let okSig = false;
-    try {
-      const a = Buffer.from(expected, 'utf8');
-      const b = Buffer.from(sig, 'utf8');
-      okSig = a.length === b.length && crypto.timingSafeEqual(a, b);
-    } catch { okSig = false; }
-    if (!okSig) return { ok:false, code:401, msg:'Bad signature' };
-
     seen.set(nonceKey, now + SKEW_MS);
+
     return { ok:true, mode:'HMAC' };
   }
 
@@ -239,10 +229,15 @@ router.post('/validar-entrada', async (req, res) => {
 
     const { emailComprador, nombreAsistente } = resultado;
 
+    // Permite trazar quién valida (si el proxy WP lo envía)
+    const validadorEmail = String(req.body?.validadorEmail || '').trim() || null;
+    const validadorWpId  = Number(req.body?.validadorWpId || 0) || null;
+
     await docRef.set({
       validado: true,
       fechaValidacion: new Date().toISOString(),
-      validador: 'Ignacio', // o saca del header si te interesa log real de usuario
+      validador: validadorEmail || 'Ignacio',
+      validadorWpId: validadorWpId,
       emailComprador: emailComprador || null,
       nombreAsistente: nombreAsistente || null,
       evento: codigoLimpio.split('-')[0] || '',

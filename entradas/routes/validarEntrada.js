@@ -107,10 +107,37 @@ function verifyAuth(req){
       return { ok:false, code:401, msg:'Expired/Skew' };
     }
 
-    const pathname = new URL(req.originalUrl, 'http://x').pathname; // /validar-entrada
-    const bodyHash = crypto.createHash('sha256').update(rawStr, 'utf8').digest('hex');
-    const base     = `${ts}.POST.${pathname}.${bodyHash}`;
-    const expected = crypto.createHmac('sha256', HMAC_SECRET).update(base).digest('hex');
+  const seenPath = new URL(req.originalUrl, 'http://x').pathname;
+  const bodyHash = crypto.createHash('sha256').update(rawStr, 'utf8').digest('hex');
+  // Candidatos: el que ve Express y, además, variantes típicas
+  const candidates = [
+    seenPath,                               // p.ej. /entradas/validar-entrada
+    '/validar-entrada',                     // sin prefijo
+    '/entradas/validar-entrada'             // con prefijo
+  ].filter((v, i, a) => v && a.indexOf(v) === i);
+
+  let okSig = false, chosen = '', expected = '';
+  for (const p of candidates) {
+    const base = `${ts}.POST.${p}.${bodyHash}`;
+    const exp  = crypto.createHmac('sha256', HMAC_SECRET).update(base).digest('hex');
+    try {
+      const a = Buffer.from(exp, 'utf8');
+      const b = Buffer.from(String(sig), 'utf8');
+      if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
+        okSig = true; chosen = p; expected = exp; break;
+      }
+    } catch {}
+  }
+
+  if (DEBUG) {
+    console.log('[VALIDADOR DEBUG IN]', {
+      ip, path_seen: seenPath, chosen_path: chosen, ts,
+      bodyHash10: bodyHash.slice(0,10),
+      sig10: String(sig).slice(0,10),
+      exp10: expected ? expected.slice(0,10) : null,
+      apiKeyMasked: maskTail(API_KEY)
+    });
+  }
 
     if (DEBUG) {
       console.log('[VALIDADOR DEBUG IN]', {

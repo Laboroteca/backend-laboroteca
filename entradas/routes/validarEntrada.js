@@ -13,6 +13,7 @@ const firestore = admin.firestore();
 const { marcarEntradaComoUsada } = require('../utils/sheetsEntradas');
 
 const router = express.Router();
+console.log('[VAL ROUTER] /validar-entrada cargado');
 
 /* ===============================
    CONFIG SEGURIDAD
@@ -40,6 +41,14 @@ router.use(express.json({
     req.rawBody = buf ? buf.toString('utf8') : '';
   }
 }));
+
+/* ===============================
+   Log de entrada SIEMPRE
+   =============================== */
+router.use((req, _res, next) => {
+  console.log('[VAL REQ]', req.method, req.originalUrl, 'ip=', (req.headers['x-forwarded-for']||req.ip||''));
+  next();
+});
 
 /* ===============================
    RATE LIMIT simple por IP (ventana 1 min)
@@ -119,12 +128,12 @@ function verifyAuth(req){
       return { ok:false, code:401, msg:'Expired/Skew' };
     }
 
-    const seenPath = new URL(req.originalUrl, 'http://x').pathname;
+    const seenPath = new URL(req.originalUrl, 'http://x').pathname; // p.ej. /entradas/validar-entrada
     const bodyHash = crypto.createHash('sha256').update(rawStr, 'utf8').digest('hex');
     const candidates = Array.from(new Set([
-      seenPath,
-      '/validar-entrada',
-      '/entradas/validar-entrada'
+      seenPath,                       // path real que ve Express
+      '/validar-entrada',             // sin prefijo
+      '/entradas/validar-entrada'     // con prefijo
     ]));
 
     let ok = false;
@@ -185,7 +194,6 @@ function verifyAuth(req){
   return { ok:false, code:401, msg:'Unauthorized' };
 }
 
-
 /* ===============================
    NORMALIZACIÓN CÓDIGO
    =============================== */
@@ -212,7 +220,8 @@ router.post('/validar-entrada', async (req, res) => {
   const auth = verifyAuth(req);
   if (!auth.ok) {
     if (DEBUG) console.warn('⛔️ /validar-entrada auth failed:', auth.msg);
-    return res.status(auth.code || 401).json({ error: 'Unauthorized' });
+    // devolvemos el motivo real para verlo desde WP
+    return res.status(auth.code || 401).json({ error: auth.msg || 'Unauthorized' });
   }
 
   try {

@@ -111,8 +111,8 @@ function verifyAuth(req){
     const bodyHash = crypto.createHash('sha256').update(rawStr, 'utf8').digest('hex');
     const candidates = [
       seenPath,                       // path real que ve Express
-      '/validar-entrada',             // sin prefijo
-      '/entradas/validar-entrada'     // con prefijo
+      '/validar-entrada',
+      '/entradas/validar-entrada'
     ].filter((v, i, a) => v && a.indexOf(v) === i);
 
     let ok = false;
@@ -126,12 +126,9 @@ function verifyAuth(req){
         const a = Buffer.from(exp, 'utf8');
         const b = Buffer.from(sig, 'utf8');
         if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
-          ok = true;
-          chosenPath = p;
-          expected = exp;
-          break;
+          ok = true; chosenPath = p; expected = exp; break;
         }
-      } catch {/* ignore */}
+      } catch {}
     }
 
     if (DEBUG) {

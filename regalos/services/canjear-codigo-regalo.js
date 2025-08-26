@@ -2,6 +2,7 @@
 
 /**
  * Servicio: canjear-codigo-regalo
+ * Ruta que debe invocarlo: /regalos/canjear-codigo
  * - Logs incondicionales con reqId para correlación
  * - Traza completa: entradas, normalizaciones, FS/Sheets, decisiones, errores y stacks
  */

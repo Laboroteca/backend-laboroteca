@@ -9,7 +9,7 @@ const crypto  = require('crypto');
 const admin   = require('../../firebase');
 const firestore = admin.firestore();
 
-const { marcarEntradaComoUsada } = require('../utils/sheetsEntradas');
+const { marcarEntradaComoUsada, SHEETS_EVENTOS } = require('../utils/sheetsEntradas');
 
 const router = express.Router();
 console.log('[VAL ROUTER] /validar-entrada cargado');
@@ -224,6 +224,8 @@ function timeoutMs(promise, ms, label='op'){
 
 /* ============================================================
  *  HANDLER (acepta ambos paths)
+ *  - Si llega slugEvento ⇒ se prueba primero ese y luego el resto.
+ *  - Si NO llega slugEvento ⇒ se prueban todos los slugs.
  * ============================================================ */
 const paths = ['/validar-entrada','/entradas/validar-entrada'];
 router.post(paths, async (req, res) => {
@@ -235,21 +237,21 @@ router.post(paths, async (req, res) => {
   }
 
   try {
-    const slugEventoRaw = String(req.body?.slugEvento || '').trim();
+    const slugEventoRaw = String(req.body?.slugEvento || '').trim();   // opcional a partir de ahora
     const codigoLimpio  = limpiarCodigoEntrada(req.body?.codigoEntrada);
 
-    if (!codigoLimpio || !slugEventoRaw) {
-      return res.status(400).json({ error: 'Faltan campos obligatorios.', errorCode: 'bad_params' });
+    if (!codigoLimpio) {
+      return res.status(400).json({ error: 'Falta código de entrada.', errorCode: 'bad_params' });
     }
 
-    // Whitelist de slugs opcional por ENV
+    // Whitelist de slugs opcional por ENV (solo si viene slug)
     const SLUG_ALLOW = String(process.env.VALIDADOR_SLUG_ALLOW || '')
       .split(',').map(s => s.trim()).filter(Boolean);
-    if (SLUG_ALLOW.length && !SLUG_ALLOW.includes(slugEventoRaw)) {
+    if (slugEventoRaw && SLUG_ALLOW.length && !SLUG_ALLOW.includes(slugEventoRaw)) {
       return res.status(401).json({ error: 'Evento no autorizado.', errorCode: 'slug_not_allowed' });
     }
 
-    // Idempotencia fuerte: create() falla si existe → evita carrera
+    // Idempotencia fuerte por código (asumimos códigos únicos cross-event)
     const docRef = firestore.collection('entradasValidadas').doc(codigoLimpio);
     const nowIso = new Date().toISOString();
 
@@ -260,28 +262,60 @@ router.post(paths, async (req, res) => {
       return res.status(409).json({ error: 'Entrada ya validada.', errorCode: 'already_validated' });
     }
 
-    console.log('[VAL FLOW] buscar en Sheets', { slug: slugEventoRaw, codigo: codigoLimpio });
+    // Candidatos de búsqueda: primero el slug recibido (si es válido), después el resto
+    const allSlugs = Object.keys(SHEETS_EVENTOS);
+    const primary  = (slugEventoRaw && allSlugs.includes(slugEventoRaw)) ? [slugEventoRaw] : [];
+    const rest     = allSlugs.filter(s => s !== slugEventoRaw);
+    const candidates = [...primary, ...rest];
 
-    // Timeout a Sheets para no colgar el contenedor
-    let resultado;
-    try {
-      resultado = await timeoutMs(
-        marcarEntradaComoUsada(codigoLimpio, slugEventoRaw),
-        SHEETS_TIMEOUT,
-        'sheets'
-      );
-    } catch (e) {
-      console.error('[VAL FLOW] sheets error/timeout', e?.message || e);
-      return res.status(502).json({ error: 'Upstream (Sheets) no responde.', errorCode: 'upstream_error' });
+    console.log('[VAL FLOW] buscar en Sheets', { candidates, codigo: codigoLimpio });
+
+    let resultado = null;
+    let matchedSlug = null;
+    let lastError   = null;
+
+    for (const slug of candidates) {
+      try {
+        const r = await timeoutMs(
+          marcarEntradaComoUsada(codigoLimpio, slug),
+          SHEETS_TIMEOUT,
+          `sheets_${slug}`
+        );
+        // Si el helper devuelve ok:true → encontrado y marcado
+        if (r && r.ok) {
+          resultado  = r;
+          matchedSlug = slug;
+          console.log('[VAL FLOW] encontrado en', slug);
+          break;
+        }
+        // Si error explícito de "no encontrado", seguimos con el siguiente
+        if (r && r.error) {
+          lastError = r.error;
+          if (/no encontrado/i.test(String(r.error))) {
+            continue;
+          } else {
+            // error distinto (p.ej. permisos) → lo anotamos y seguimos
+            console.warn(`[VAL FLOW] error en ${slug}:`, r.error);
+            continue;
+          }
+        }
+      } catch (e) {
+        lastError = e?.message || String(e);
+        console.warn(`[VAL FLOW] timeout/err en ${slug}:`, lastError);
+        continue;
+      }
     }
 
-    console.log('[VAL FLOW] resultado Sheets', resultado);
+    console.log('[VAL FLOW] resultado Sheets', resultado || { error: lastError || 'no_result' });
 
-    if (!resultado || resultado.error) {
-      return res.status(404).json({ error: resultado?.error || 'Código no encontrado.', errorCode: 'not_found' });
+    if (!resultado || !matchedSlug) {
+      return res.status(404).json({
+        error: lastError || 'Código no encontrado en ninguna hoja.',
+        errorCode: 'not_found'
+      });
     }
 
-    const { emailComprador, nombreAsistente } = resultado;
+    const { emailComprador, descripcionProd, nombreAsistente } = resultado;
 
     // Trazabilidad del validador (si WP lo envía)
     const validadorEmail = String(req.body?.validadorEmail || '').trim() || null;
@@ -297,8 +331,9 @@ router.post(paths, async (req, res) => {
         validadorWpId: validadorWpId,
         emailComprador: emailComprador || null,
         nombreAsistente: nombreAsistente || null,
+        descripcionProducto: descripcionProd || null,
         evento: (codigoLimpio.split('-')[0] || '').toUpperCase(),
-        slugEvento: slugEventoRaw,
+        slugEvento: matchedSlug,                  // ← hoja donde se encontró
         authMode: auth.mode || 'HMAC'
       });
     } catch (e) {
@@ -310,8 +345,8 @@ router.post(paths, async (req, res) => {
       return res.status(500).json({ error: 'Error registrando validación.', errorCode: 'firestore_error' });
     }
 
-    console.log('✅ VALIDADA', { codigo: codigoLimpio, slug: slugEventoRaw });
-    return res.json({ ok: true, mensaje: 'Entrada validada correctamente.' });
+    console.log('✅ VALIDADA', { codigo: codigoLimpio, slug: matchedSlug });
+    return res.json({ ok: true, mensaje: 'Entrada validada correctamente.', slug: matchedSlug });
 
   } catch (err) {
     console.error('❌ Error en /validar-entrada:', err?.stack || err);

@@ -1,54 +1,35 @@
-// 🔐 VALIDAR ENTRADA QR – Uso privado (Ignacio + 3 personas)
-// POST /validar-entrada  y /entradas/validar-entrada
+// entradas/routes/validarEntrada.js
+// 🔐 VALIDAR ENTRADA QR – Uso privado
+// Acepta POST /validar-entrada y /entradas/validar-entrada
 // Seguridad: x-api-key + HMAC (x-val-ts, x-val-sig) sobre ts.POST.<path>.sha256(body)
 
 'use strict';
 
-const express = require('express');
-const crypto  = require('crypto');
-const admin   = require('../../firebase');
+const express   = require('express');
+const crypto    = require('crypto');
+const admin     = require('../../firebase');
 const firestore = admin.firestore();
 
 const { marcarEntradaComoUsada, SHEETS_EVENTOS } = require('../utils/sheetsEntradas');
 
 const router = express.Router();
-console.log('[VAL ROUTER] /validar-entrada cargado');
 
-/* ===============================
-   CONFIG SEGURIDAD
-   =============================== */
-const API_KEY          = (process.env.VALIDADOR_API_KEY || '').trim();
-const HMAC_SECRET      = (process.env.VALIDADOR_HMAC_SECRET || '').trim();
-const SKEW_MS          = Number(process.env.VALIDADOR_SKEW_MS || 5*60*1000);
-const REQUIRE_HMAC     = String(process.env.VALIDADOR_REQUIRE_HMAC || '1') === '1';
-const LEGACY_TOKEN     = (process.env.VALIDADOR_ENTRADAS_TOKEN || '').trim();
-const IP_ALLOW         = String(process.env.VALIDADOR_IP_ALLOW || '').split(',').map(s => s.trim()).filter(Boolean);
-const RATE_PER_MIN     = Number(process.env.VALIDADOR_RATE_PER_MIN || 60);
-const MAX_BODY_BYTES   = Number(process.env.VALIDADOR_MAX_BODY || 12*1024);
-const SHEETS_TIMEOUT   = Number(process.env.VALIDADOR_SHEETS_TIMEOUT_MS || 10000);
+// ====== CONFIG ======
+const API_KEY        = (process.env.VALIDADOR_API_KEY || '').trim();
+const HMAC_SECRET    = (process.env.VALIDADOR_HMAC_SECRET || '').trim();
+const SKEW_MS        = Number(process.env.VALIDADOR_SKEW_MS || 5 * 60 * 1000);  // ±5 min
+const REQUIRE_HMAC   = String(process.env.VALIDADOR_REQUIRE_HMAC || '1') === '1';
+const LEGACY_TOKEN   = (process.env.VALIDADOR_ENTRADAS_TOKEN || '').trim();     // mejor vacío en prod
+const IP_ALLOW       = String(process.env.VALIDADOR_IP_ALLOW || '').split(',').map(s => s.trim()).filter(Boolean);
+const RATE_PER_MIN   = Number(process.env.VALIDADOR_RATE_PER_MIN || 60);
+const MAX_BODY_BYTES = Number(process.env.VALIDADOR_MAX_BODY || 12 * 1024);
+const SHEETS_TIMEOUT = Number(process.env.VALIDADOR_SHEETS_TIMEOUT_MS || 10000);
+const AUDIT_SUCCESS  = String(process.env.VALIDADOR_AUDIT_SUCCESS || '1') === '1'; // log de éxito
 
 function maskTail(s){ return s ? `••••${String(s).slice(-4)}` : null; }
-function sha10(s){ return s ? crypto.createHash('sha256').update(String(s)).digest('hex').slice(0,10) : null; }
 
-console.log('[VAL CFG]', {
-  apiKeyMasked: API_KEY ? maskTail(API_KEY) : '(none)',
-  secretSha10: sha10(HMAC_SECRET) || '(none)',
-  requireHmac: REQUIRE_HMAC,
-  skewMs: SKEW_MS
-});
-
-/* ===============================
-   LOG de entrada SIEMPRE
-   =============================== */
-router.use((req, _res, next) => {
-  console.log('[VAL REQ]', req.method, req.originalUrl, 'ip=', (req.headers['x-forwarded-for']||req.ip||''));
-  next();
-});
-
-/* ===============================
-   RATE LIMIT simple por IP (ventana 1 min)
-   =============================== */
-const rl = new Map(); // key=ip+minute → count
+// ====== RATE LIMIT (simple por IP / 1 min) ======
+const rl = new Map(); // key=ip|YYYY-MM-DDTHH:MM -> count
 function clientIp(req){
   const xf = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
   return xf || req.ip || req.connection?.remoteAddress || '';
@@ -56,300 +37,217 @@ function clientIp(req){
 function rateLimit(req){
   const ip = clientIp(req);
   if (!ip) return true;
-  const key = ip + '|' + new Date().toISOString().slice(0,16); // YYYY-MM-DDTHH:MM
+  const key = ip + '|' + new Date().toISOString().slice(0, 16);
   const count = (rl.get(key) || 0) + 1;
   rl.set(key, count);
   return count <= RATE_PER_MIN;
 }
 
-/* ===============================
-   ANTI-REPLAY (nonce en memoria)
-   =============================== */
-const seen = new Map(); // key = ts.sig → expiresAt
+// ====== ANTI-REPLAY (nonce en memoria) ======
+const seen = new Map(); // ts.sig → expiresAt
 function pruneSeen(){
   const now = Date.now();
   for (const [k, exp] of seen.entries()) if (exp <= now) seen.delete(k);
 }
 
-/* ===============================
-   VERIFICACIÓN DE AUTORIZACIÓN (logs incondicionales)
-   =============================== */
+// ====== AUTORIZACIÓN (logs imprescindibles) ======
 function verifyAuth(req){
-  // 0) Content-Type y tamaño
-  const ct = String(req.headers['content-type']||'');
+  // 0) Tipo y tamaño
+  const ct = String(req.headers['content-type'] || '');
   if (!ct.toLowerCase().startsWith('application/json')) {
-    console.warn('[AUTH FAIL] bad CT:', ct);
+    console.warn('[AUTH]', 'Bad Content-Type', { ct, ip: clientIp(req) });
     return { ok:false, code:415, msg:'Content-Type inválido' };
   }
 
   // rawBody debe venir del app-level express.json({verify})
   let rawStr = (typeof req.rawBody === 'string') ? req.rawBody : '';
-  if (!rawStr || rawStr.length === 0) {
-    try { rawStr = JSON.stringify(req.body ?? {}); } catch { rawStr = ''; }
-  }
-  const rawLen = Buffer.byteLength(rawStr || '', 'utf8');
+  if (!rawStr) { try { rawStr = JSON.stringify(req.body ?? {}); } catch { rawStr = ''; } }
+  const rawLen = Buffer.byteLength(rawStr, 'utf8');
   if (rawLen > MAX_BODY_BYTES) {
-    console.warn('[AUTH FAIL] payload too large:', rawLen);
+    console.warn('[AUTH]', 'Payload demasiado grande', { bytes: rawLen, ip: clientIp(req) });
     return { ok:false, code:413, msg:'Payload demasiado grande' };
   }
 
-  // 1) Allowlist IP
+  // 1) Allowlist por IP (opcional)
   const ip = clientIp(req);
   if (IP_ALLOW.length && !IP_ALLOW.includes(ip)) {
-    console.warn('[AUTH FAIL] ip not allowed:', ip);
+    console.warn('[AUTH]', 'IP no autorizada', { ip });
     return { ok:false, code:401, msg:'IP no autorizada' };
   }
 
   // 2) Rate limit
   if (!rateLimit(req)) {
-    console.warn('[AUTH FAIL] rate limit:', ip);
+    console.warn('[AUTH]', 'Too Many Requests', { ip });
     return { ok:false, code:429, msg:'Too Many Requests' };
   }
 
-  // 3) HMAC
+  // 3) HMAC headers
   const hdrKey = String(req.headers['x-api-key'] || '').trim();
   const ts     = String(req.headers['x-val-ts'] || req.headers['x-entr-ts'] || req.headers['x-e-ts'] || '');
   const sig    = String(req.headers['x-val-sig']|| req.headers['x-entr-sig']|| req.headers['x-e-sig']|| '');
 
-  console.log('[VAL HDRS]', {
-    keyMasked: hdrKey ? maskTail(hdrKey) : '(none)',
-    hasTs: !!ts, hasSig: !!sig, ct
-  });
-
-  const haveHmacHeaders = API_KEY && HMAC_SECRET && ts && sig && hdrKey;
-  if (haveHmacHeaders) {
-    if (hdrKey !== API_KEY)  {
-      console.warn('[AUTH FAIL] api key mismatch. got:', maskTail(hdrKey), 'exp:', maskTail(API_KEY));
-      return { ok:false, code:401, msg:'Unauthorized (key)' };
+  const haveHmac = API_KEY && HMAC_SECRET && hdrKey && ts && sig;
+  if (haveHmac) {
+    if (hdrKey !== API_KEY) {
+      console.warn('[AUTH]', 'API key mismatch', { got: maskTail(hdrKey), exp: maskTail(API_KEY), ip });
+      return { ok:false, code:401, msg:'Unauthorized' };
     }
-    if (!/^\d+$/.test(ts))   {
-      console.warn('[AUTH FAIL] ts not digits:', ts);
-      return { ok:false, code:401, msg:'Unauthorized (ts)' };
+    if (!/^\d+$/.test(ts)) {
+      console.warn('[AUTH]', 'Timestamp inválido', { ts, ip });
+      return { ok:false, code:401, msg:'Unauthorized' };
     }
-
-    const now = Date.now();
-    const skew = Math.abs(now - Number(ts));
+    const skew = Math.abs(Date.now() - Number(ts));
     if (skew > SKEW_MS) {
-      console.warn('[AUTH FAIL] skew too big ms:', skew, 'limit:', SKEW_MS);
+      console.warn('[AUTH]', 'Skew excedido', { skewMs: skew, ip });
       return { ok:false, code:401, msg:'Expired/Skew' };
     }
 
-    const seenPath = new URL(req.originalUrl, 'http://x').pathname;
+    // Validación firma
+    const pathSeen = new URL(req.originalUrl, 'http://x').pathname; // p.ej. /validar-entrada
     const bodyHash = crypto.createHash('sha256').update(rawStr, 'utf8').digest('hex');
-    const candidates = Array.from(new Set([
-      seenPath,
-      '/validar-entrada',
-      '/entradas/validar-entrada'
-    ]));
+    const candidates = Array.from(new Set([ pathSeen, '/validar-entrada', '/entradas/validar-entrada' ]));
 
     let ok = false;
-    let chosenPath = '';
-    const expList = [];
-
     for (const p of candidates) {
       const base = `${ts}.POST.${p}.${bodyHash}`;
       const exp  = crypto.createHmac('sha256', HMAC_SECRET).update(base).digest('hex');
-      expList.push({ path:p, exp10: exp.slice(0,10) });
       try {
         const a = Buffer.from(exp, 'utf8');
         const b = Buffer.from(sig, 'utf8');
-        if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
-          ok = true; chosenPath = p; break;
-        }
+        if (a.length === b.length && crypto.timingSafeEqual(a, b)) { ok = true; break; }
       } catch {}
     }
-
-    console.log('[VAL HMAC]', {
-      path_seen: seenPath,
-      chosen_path: ok ? chosenPath : null,
-      sig10: String(sig).slice(0,10),
-      bodyHash10: bodyHash.slice(0,10),
-      expCandidates: expList
-    });
-
-    if (!ok) return { ok:false, code:401, msg:'Bad signature' };
+    if (!ok) {
+      console.warn('[AUTH]', 'Bad signature', { ip });
+      return { ok:false, code:401, msg:'Unauthorized' };
+    }
 
     // anti-replay
     pruneSeen();
     const nonceKey = ts + '.' + String(sig).slice(0,16);
     if (seen.has(nonceKey)) {
-      console.warn('[AUTH FAIL] replay:', nonceKey);
+      console.warn('[AUTH]', 'Replay detectado', { ip });
       return { ok:false, code:401, msg:'Replay' };
     }
-    seen.set(nonceKey, now + SKEW_MS);
+    seen.set(nonceKey, Date.now() + SKEW_MS);
 
     return { ok:true, mode:'HMAC' };
   }
 
-  // 4) Legacy (solo si se permite)
+  // 4) Fallback legacy (desaconsejado)
   if (!REQUIRE_HMAC) {
     const legacy = String(req.headers['x-laboroteca-token'] || '').trim();
-    if (legacy && LEGACY_TOKEN && legacy === LEGACY_TOKEN) {
-      console.log('[VALIDADOR LEGACY OK]', { ip });
-      return { ok:true, mode:'LEGACY' };
-    }
+    if (legacy && LEGACY_TOKEN && legacy === LEGACY_TOKEN) return { ok:true, mode:'LEGACY' };
   }
 
-  console.warn('[AUTH FAIL] missing headers or config');
+  console.warn('[AUTH]', 'Faltan cabeceras o config', { ip });
   return { ok:false, code:401, msg:'Unauthorized' };
 }
 
-/* ===============================
-   NORMALIZACIÓN CÓDIGO
-   =============================== */
+// ====== NORMALIZACIÓN CÓDIGO ======
 function limpiarCodigoEntrada(input){
   let c = String(input || '').trim();
   if (!c) return '';
-  // Si viene un URL de escaneo, intenta extraer ?codigo=
-  if (/^https?:\/\//i.test(c)) {
-    try { const url = new URL(c); c = url.searchParams.get('codigo') || c; } catch {}
-  }
-  // Quita espacios y mayúsculas
+  if (/^https?:\/\//i.test(c)) { try { const u = new URL(c); c = u.searchParams.get('codigo') || c; } catch {} }
   c = c.replace(/\s+/g,'').toUpperCase();
-
-  // Hardening: solo permitimos letras, dígitos y guiones
   if (!/^[A-Z0-9-]+$/.test(c)) return '';
   if (c.includes('//') || c.length > 80) return '';
   return c;
 }
 
-/* ===============================
-   Helpers
-   =============================== */
+// ====== Helpers ======
 function timeoutMs(promise, ms, label='op'){
-  let t;
-  const timer = new Promise((_, rej)=>{ t=setTimeout(()=>rej(new Error(`${label}_timeout`)), ms); });
+  let t; const timer = new Promise((_, rej)=>{ t=setTimeout(()=>rej(new Error(`${label}_timeout`)), ms); });
   return Promise.race([promise, timer]).finally(()=>clearTimeout(t));
 }
 
-/* ============================================================
- *  HANDLER (acepta ambos paths)
- *  - Si llega slugEvento ⇒ se prueba primero ese y luego el resto.
- *  - Si NO llega slugEvento ⇒ se prueban todos los slugs.
- * ============================================================ */
+// ====== HANDLER (ambos paths) ======
 const paths = ['/validar-entrada','/entradas/validar-entrada'];
 router.post(paths, async (req, res) => {
   const auth = verifyAuth(req);
-  console.log('[VAL AUTH]', auth);
-
   if (!auth.ok) {
     return res.status(auth.code || 401).json({ error: auth.msg || 'Unauthorized', errorCode: 'unauthorized' });
   }
 
   try {
-    const slugEventoRaw = String(req.body?.slugEvento || '').trim();   // opcional a partir de ahora
+    const slugEventoRaw = String(req.body?.slugEvento || '').trim(); // opcional
     const codigoLimpio  = limpiarCodigoEntrada(req.body?.codigoEntrada);
-
     if (!codigoLimpio) {
       return res.status(400).json({ error: 'Falta código de entrada.', errorCode: 'bad_params' });
     }
 
-    // Whitelist de slugs opcional por ENV (solo si viene slug)
-    const SLUG_ALLOW = String(process.env.VALIDADOR_SLUG_ALLOW || '')
-      .split(',').map(s => s.trim()).filter(Boolean);
+    // Allowlist opcional por ENV (solo si llega slug)
+    const SLUG_ALLOW = String(process.env.VALIDADOR_SLUG_ALLOW || '').split(',').map(s => s.trim()).filter(Boolean);
     if (slugEventoRaw && SLUG_ALLOW.length && !SLUG_ALLOW.includes(slugEventoRaw)) {
       return res.status(401).json({ error: 'Evento no autorizado.', errorCode: 'slug_not_allowed' });
     }
 
-    // Idempotencia fuerte por código (asumimos códigos únicos cross-event)
+    // Idempotencia por código
     const docRef = firestore.collection('entradasValidadas').doc(codigoLimpio);
-    const nowIso = new Date().toISOString();
-
-    // Check rápido de existencia
     const snap = await docRef.get();
     if (snap.exists) {
-      console.warn('[VAL FLOW] ya validada', { codigo: codigoLimpio });
+      console.warn('[VAL]', 'ALREADY_VALIDATED', { codigo: codigoLimpio });
       return res.status(409).json({ error: 'Entrada ya validada.', errorCode: 'already_validated' });
     }
 
-    // Candidatos de búsqueda: primero el slug recibido (si es válido), después el resto
+    // Orden de búsqueda en Sheets
     const allSlugs = Object.keys(SHEETS_EVENTOS);
     const primary  = (slugEventoRaw && allSlugs.includes(slugEventoRaw)) ? [slugEventoRaw] : [];
     const rest     = allSlugs.filter(s => s !== slugEventoRaw);
     const candidates = [...primary, ...rest];
 
-    console.log('[VAL FLOW] buscar en Sheets', { candidates, codigo: codigoLimpio });
-
     let resultado = null;
     let matchedSlug = null;
-    let lastError   = null;
+    let lastError = null;
 
     for (const slug of candidates) {
       try {
-        const r = await timeoutMs(
-          marcarEntradaComoUsada(codigoLimpio, slug),
-          SHEETS_TIMEOUT,
-          `sheets_${slug}`
-        );
-        // Si el helper devuelve ok:true → encontrado y marcado
-        if (r && r.ok) {
-          resultado  = r;
-          matchedSlug = slug;
-          console.log('[VAL FLOW] encontrado en', slug);
-          break;
-        }
-        // Si error explícito de "no encontrado", seguimos con el siguiente
-        if (r && r.error) {
-          lastError = r.error;
-          if (/no encontrado/i.test(String(r.error))) {
-            continue;
-          } else {
-            // error distinto (p.ej. permisos) → lo anotamos y seguimos
-            console.warn(`[VAL FLOW] error en ${slug}:`, r.error);
-            continue;
-          }
-        }
+        const r = await timeoutMs(marcarEntradaComoUsada(codigoLimpio, slug), SHEETS_TIMEOUT, `sheets_${slug}`);
+        if (r && r.ok) { resultado = r; matchedSlug = slug; break; }          // encontrado
+        if (r && r.error) { lastError = r.error; continue; }                  // seguimos con el siguiente
       } catch (e) {
         lastError = e?.message || String(e);
-        console.warn(`[VAL FLOW] timeout/err en ${slug}:`, lastError);
         continue;
       }
     }
 
-    console.log('[VAL FLOW] resultado Sheets', resultado || { error: lastError || 'no_result' });
-
     if (!resultado || !matchedSlug) {
-      return res.status(404).json({
-        error: lastError || 'Código no encontrado en ninguna hoja.',
-        errorCode: 'not_found'
-      });
+      console.warn('[VAL]', 'NOT_FOUND', { codigo: codigoLimpio, tried: candidates });
+      return res.status(404).json({ error: 'Código no encontrado.', errorCode: 'not_found' });
     }
 
     const { emailComprador, descripcionProd, nombreAsistente } = resultado;
-
-    // Trazabilidad del validador (si WP lo envía)
     const validadorEmail = String(req.body?.validadorEmail || '').trim() || null;
     const validadorWpId  = Number(req.body?.validadorWpId || 0) || null;
 
-    // Escritura atómica: falla si ya existe por carrera
     try {
       await docRef.create({
         validado: true,
         fechaValidacion: admin.firestore.FieldValue.serverTimestamp(),
-        fechaValidacionIso: nowIso,
+        fechaValidacionIso: new Date().toISOString(),
         validador: validadorEmail || 'Ignacio',
-        validadorWpId: validadorWpId,
+        validadorWpId,
         emailComprador: emailComprador || null,
         nombreAsistente: nombreAsistente || null,
         descripcionProducto: descripcionProd || null,
         evento: (codigoLimpio.split('-')[0] || '').toUpperCase(),
-        slugEvento: matchedSlug,                  // ← hoja donde se encontró
+        slugEvento: matchedSlug,
         authMode: auth.mode || 'HMAC'
       });
     } catch (e) {
       if (String(e?.message || '').includes('Already exists')) {
-        console.warn('[VAL FLOW] create collision → ya validada', { codigo: codigoLimpio });
+        console.warn('[VAL]', 'ALREADY_VALIDATED_RACE', { codigo: codigoLimpio });
         return res.status(409).json({ error: 'Entrada ya validada.', errorCode: 'already_validated' });
       }
-      console.error('[VAL FLOW] firestore create error', e?.message || e);
+      console.error('[VAL]', 'FIRESTORE_ERROR', e?.message || e);
       return res.status(500).json({ error: 'Error registrando validación.', errorCode: 'firestore_error' });
     }
 
-    console.log('✅ VALIDADA', { codigo: codigoLimpio, slug: matchedSlug });
+    if (AUDIT_SUCCESS) console.info('[VAL]', 'VALIDADA', { codigo: codigoLimpio, slug: matchedSlug });
     return res.json({ ok: true, mensaje: 'Entrada validada correctamente.', slug: matchedSlug });
 
   } catch (err) {
-    console.error('❌ Error en /validar-entrada:', err?.stack || err);
+    console.error('[VAL]', 'INTERNAL_ERROR', err?.stack || err);
     return res.status(500).json({ error: 'Error interno al validar entrada.', errorCode: 'internal' });
   }
 });

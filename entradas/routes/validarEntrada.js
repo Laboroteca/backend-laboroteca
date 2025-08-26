@@ -31,6 +31,14 @@ const DEBUG            = String(process.env.VALIDADOR_DEBUG || '') === '1';
 
 function maskTail(s){ return s ? `••••${String(s).slice(-4)}` : null; }
 
+// Log de config al cargar (sin exponer secretos)
+console.log('[VAL CFG]', {
+  apiKeyMasked: API_KEY ? maskTail(API_KEY) : '(none)',
+  secretSha10: HMAC_SECRET ? crypto.createHash('sha256').update(HMAC_SECRET).digest('hex').slice(0,10) : '(none)',
+  requireHmac: REQUIRE_HMAC,
+  skewMs: SKEW_MS
+});
+
 /* ===============================
    JSON parser + rawBody para HMAC
    =============================== */
@@ -109,6 +117,13 @@ function verifyAuth(req){
   const hdrKey = String(req.headers['x-api-key'] || '').trim();
   const ts     = String(req.headers['x-val-ts'] || req.headers['x-entr-ts'] || req.headers['x-e-ts'] || '');
   const sig    = String(req.headers['x-val-sig']|| req.headers['x-entr-sig']|| req.headers['x-e-sig']|| '');
+
+  if (DEBUG) {
+    console.log('[VAL HDRS]', {
+      keyMasked: hdrKey ? maskTail(hdrKey) : '(none)',
+      hasTs: !!ts, hasSig: !!sig, ct: req.headers['content-type']
+    });
+  }
 
   const haveHmacHeaders = API_KEY && HMAC_SECRET && ts && sig && hdrKey;
   if (haveHmacHeaders) {

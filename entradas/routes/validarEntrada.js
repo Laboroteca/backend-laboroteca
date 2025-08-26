@@ -40,14 +40,6 @@ console.log('[VAL CFG]', {
 });
 
 /* ===============================
-   JSON parser + rawBody para HMAC
-   =============================== */
-router.use(express.json({
-  limit: '20kb',
-  verify: (req, _res, buf) => { req.rawBody = buf ? buf.toString('utf8') : ''; }
-}));
-
-/* ===============================
    Log de entrada SIEMPRE
    =============================== */
 router.use((req, _res, next) => {
@@ -82,7 +74,7 @@ function pruneSeen(){
 }
 
 /* ===============================
-   VERIFICACIÓN DE AUTORIZACIÓN (con logs incondicionales)
+   VERIFICACIÓN DE AUTORIZACIÓN (logs incondicionales)
    =============================== */
 function verifyAuth(req){
   // 0) Content-Type y tamaño
@@ -91,8 +83,15 @@ function verifyAuth(req){
     console.warn('[AUTH FAIL] bad CT:', ct);
     return { ok:false, code:415, msg:'Content-Type inválido' };
   }
-  const rawStr = req.rawBody ? (Buffer.isBuffer(req.rawBody)? req.rawBody.toString('utf8') : String(req.rawBody)) : '';
-  const rawLen = Buffer.byteLength(rawStr, 'utf8');
+
+  // ⚠️ rawBody lo debe haber puesto el app-level express.json({verify})
+  let rawStr = (typeof req.rawBody === 'string') ? req.rawBody : '';
+  if (!rawStr || rawStr.length === 0) {
+    // Fallback de cortesía (puede no coincidir exactamente con el string original)
+    try { rawStr = JSON.stringify(req.body ?? {}); } catch { rawStr = ''; }
+  }
+
+  const rawLen = Buffer.byteLength(rawStr || '', 'utf8');
   if (rawLen > MAX_BODY_BYTES) {
     console.warn('[AUTH FAIL] payload too large:', rawLen);
     return { ok:false, code:413, msg:'Payload demasiado grande' };
@@ -139,7 +138,7 @@ function verifyAuth(req){
       return { ok:false, code:401, msg:'Expired/Skew' };
     }
 
-    const seenPath = new URL(req.originalUrl, 'http://x').pathname; // p.ej. /entradas/validar-entrada
+    const seenPath = new URL(req.originalUrl, 'http://x').pathname;
     const bodyHash = crypto.createHash('sha256').update(rawStr, 'utf8').digest('hex');
     const candidates = Array.from(new Set([
       seenPath,
@@ -218,7 +217,7 @@ function limpiarCodigoEntrada(input){
  * ============================================================ */
 router.post('/validar-entrada', async (req, res) => {
   const auth = verifyAuth(req);
-  console.log('[VAL AUTH]', auth); // <-- motivo exacto SIEMPRE
+  console.log('[VAL AUTH]', auth);
 
   if (!auth.ok) {
     return res.status(auth.code || 401).json({ error: auth.msg || 'Unauthorized' });

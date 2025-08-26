@@ -1,6 +1,12 @@
-// 📂 regalos/services/canjear-codigo-regalo.js
 'use strict';
 
+/**
+ * Servicio: canjear-codigo-regalo
+ * - Logs incondicionales con reqId para correlación
+ * - Traza TODO: entradas, normalizaciones, consultas FS/Sheets, decisiones, errores y stacks
+ */
+
+const crypto = require('crypto');
 const admin = require('../../firebase');
 const firestore = admin.firestore();
 const dayjs = require('dayjs');
@@ -9,7 +15,7 @@ const { auth } = require('../../entradas/google/sheetsAuth');
 
 const marcarCodigoComoCanjeado = require('./marcarCodigoComoCanjeado');
 const registrarCanjeEnSheet   = require('./registrarCanjeEnSheet');
-const { activarMembresiaEnMemberPress } = require('./memberpress'); // API oficial
+const { activarMembresiaEnMemberPress } = require('./memberpress');
 const { enviarEmailCanjeLibro } = require('./enviarEmailCanjeLibro');
 
 // === Google Sheets (IDs/Pestañas) ===
@@ -18,42 +24,95 @@ const SHEET_NAME_REGALOS = 'Hoja 1';
 const SHEET_ID_CONTROL   = '1DFZuhJtuQ0y8EHXOkUUifR_mCVfGyxgkCHXRvBoiwfo'; // Códigos REG- activos (control)
 const SHEET_NAME_CONTROL = 'CODIGOS REGALO';
 
-// === DEBUG/CONFIG LOGS (no exponen secretos) ===
-console.log('[CANJEAR-SVC] ⚙️ Config:',
-  'MP_KEY?', !!process.env.MEMBERPRESS_KEY,
-  'SHEETS_AUTH?', !!process.env.GCP_CREDENTIALS_BASE64
-);
+// === Utils de logging ========================================================
+function rid() {
+  // ej. A1B2C3-650F
+  const a = crypto.randomBytes(3).toString('hex').slice(0, 6).toUpperCase();
+  const b = Date.now().toString(16).slice(-4).toUpperCase();
+  return `${a}-${b}`;
+}
+function L(reqId, msg, meta) {
+  try {
+    if (meta) {
+      console.log(`[CANJEAR ${reqId}] ${msg} ::`, JSON.stringify(meta, null, 2));
+    } else {
+      console.log(`[CANJEAR ${reqId}] ${msg}`);
+    }
+  } catch {
+    console.log(`[CANJEAR ${reqId}] ${msg}`);
+  }
+}
+function W(reqId, msg, meta) {
+  try {
+    if (meta) {
+      console.warn(`[CANJEAR ${reqId}] ⚠️ ${msg} ::`, JSON.stringify(meta, null, 2));
+    } else {
+      console.warn(`[CANJEAR ${reqId}] ⚠️ ${msg}`);
+    }
+  } catch {
+    console.warn(`[CANJEAR ${reqId}] ⚠️ ${msg}`);
+  }
+}
+function E(reqId, msg, err) {
+  const meta = {
+    message: err?.message || String(err),
+    stack: err?.stack || undefined,
+  };
+  try {
+    console.error(`[CANJEAR ${reqId}] ❌ ${msg} ::`, JSON.stringify(meta, null, 2));
+  } catch {
+    console.error(`[CANJEAR ${reqId}] ❌ ${msg}:`, err);
+  }
+}
 
-// Helper reintentos (backoff exponencial)
-async function withRetries(fn, { tries = 5, baseMs = 120 } = {}) {
+// Helper reintentos (backoff exponencial) con logs
+async function withRetries(reqId, label, fn, { tries = 5, baseMs = 120 } = {}) {
   let lastErr;
   for (let i = 1; i <= tries; i++) {
-    try { return await fn(); }
-    catch (e) {
+    const wait = i === 1 ? 0 : baseMs * Math.pow(2, i - 1);
+    if (i > 1) L(reqId, `↻ Reintento ${label}`, { intento: i, esperaMs: wait });
+    try {
+      const r = await fn(i);
+      L(reqId, `✔️ Éxito ${label}`, { intento: i });
+      return r;
+    } catch (e) {
       lastErr = e;
-      const wait = baseMs * Math.pow(2, i - 1);
-      await new Promise(r => setTimeout(r, wait));
+      E(reqId, `Fallo en ${label} (intento ${i})`, e);
+      if (i < tries) await new Promise(r => setTimeout(r, wait));
     }
   }
   throw lastErr;
 }
 
-// === Util: cliente de Sheets con auth ya hecha ===
-async function getSheets() {
+// === Util: cliente de Sheets con auth ya hecha (log) ===
+async function getSheets(reqId) {
+  L(reqId, '🔑 Inicializando cliente Google Sheets…');
   const authClient = await auth();
-  return google.sheets({ version: 'v4', auth: authClient });
+  const sheets = google.sheets({ version: 'v4', auth: authClient });
+  L(reqId, '✅ Google Sheets listo');
+  return sheets;
 }
 
-// === Util: buscar fila por código (columna C) en rango A:E ===
-async function findRowByCode({ sheets, spreadsheetId, range = 'A:E', codigo }) {
+// === Util: buscar fila por código (columna C) en rango A:E, con log ===
+async function findRowByCode(reqId, { sheets, spreadsheetId, range = 'A:E', codigo }) {
+  L(reqId, '🔎 Buscando código en hoja', { spreadsheetId, range, codigo });
   const read = await sheets.spreadsheets.values.get({ spreadsheetId, range });
   const filas = read.data.values || [];
+  L(reqId, '📄 Hoja cargada', { filas: filas.length });
   for (let i = 1; i < filas.length; i++) {
     const c = String(filas[i]?.[2] || '').trim().toUpperCase();
-    if (c === codigo) return { row1: i + 1, row0: i }; // 1-based y 0-based
+    if (c === codigo) {
+      const found = { row1: i + 1, row0: i };
+      L(reqId, '✅ Código localizado en hoja', { ...found });
+      return found; // 1-based y 0-based
+    }
   }
+  W(reqId, '⛔ Código NO localizado en hoja');
   return null;
 }
+
+// === DEBUG/CONFIG LOGS (no exponen secretos) ===
+console.log('[CANJEAR-SVC] ⚙️ Config:', 'MP_KEY?', !!process.env.MEMBERPRESS_KEY, 'SHEETS_AUTH?', !!process.env.GCP_CREDENTIALS_BASE64);
 
 module.exports = async function canjearCodigoRegalo({
   nombre,
@@ -62,86 +121,98 @@ module.exports = async function canjearCodigoRegalo({
   libro_elegido,
   codigo_regalo
 }) {
+  const reqId = rid();
+  const t0 = Date.now();
+
   // 🔹 Normaliza entrada
   const codigo           = String(codigo_regalo || '').trim().toUpperCase();
   const emailNormalizado = String(email || '').trim().toLowerCase();
   const libroNormalizado = String(libro_elegido || '').trim();
   const timestamp        = dayjs().format('YYYY-MM-DD HH:mm:ss');
 
+  L(reqId, '🧾 [START] Datos recibidos (normalizados)', {
+    nombre,
+    apellidos,
+    email: emailNormalizado,
+    libro_elegido: libroNormalizado,
+    codigo_regalo: codigo,
+    timestamp
+  });
+
   if (!nombre || !emailNormalizado || !libroNormalizado || !codigo) {
+    W(reqId, '❗ Faltan datos obligatorios', { nombreOk: !!nombre, emailOk: !!emailNormalizado, libroOk: !!libroNormalizado, codigoOk: !!codigo });
     throw new Error('Faltan datos obligatorios.');
   }
 
   const esRegalo  = codigo.startsWith('REG-');
   const esEntrada = codigo.startsWith('PRE-');
   const motivo    = esRegalo ? 'REGALO' : esEntrada ? 'ENTRADA' : 'OTRO';
-
-  console.log(`🧾 [CANJE START] email=${emailNormalizado} libro="${libroNormalizado}" codigo=${codigo} motivo=${motivo}`);
+  L(reqId, '🔖 Tipo de canje', { esRegalo, esEntrada, motivo });
 
   if (!esRegalo && !esEntrada) {
-    console.warn(`⛔ [CANJE INVALID] Prefijo desconocido para código: ${codigo}`);
+    W(reqId, '⛔ Prefijo desconocido', { codigo });
     throw new Error('prefijo desconocido');
   }
 
-  // ⛔️ Evita doble canje (idempotencia por docID=codigo)
+  // Idempotencia: docId=codigo
   const canjeRef = firestore.collection('regalos_canjeados').doc(codigo);
   const ya = await canjeRef.get();
+  L(reqId, '🔐 Comprobación de canje previo', { docExiste: ya.exists });
   if (ya.exists) {
-    console.warn(`⛔ [CANJE BLOQUEADO] Código ya canjeado previamente: ${codigo}`);
+    W(reqId, '⛔ Código ya canjeado previamente', { codigo });
     throw new Error('Este código ya ha sido utilizado.');
   }
 
   // === 1) Validación de origen ===
   if (esRegalo) {
-    // REG- debe existir en la hoja de control y (si hay email asignado) coincidir
+    L(reqId, '🧪 Validación REG- en hoja de control');
     let sheets;
     try {
-      sheets = await getSheets();
+      sheets = await getSheets(reqId);
     } catch (e) {
-      console.warn('⚠️ [REG VALID] No se pudo inicializar Google Sheets:', e?.message || e);
+      E(reqId, 'No se pudo inicializar Google Sheets para validar REG-', e);
       throw new Error('Requested entity was not found');
     }
 
     try {
+      L(reqId, '📥 Descargando rango de control', { spreadsheetId: SHEET_ID_CONTROL, range: `'${SHEET_NAME_CONTROL}'!A2:E` });
       const controlRes = await sheets.spreadsheets.values.get({
         spreadsheetId: SHEET_ID_CONTROL,
         range: `'${SHEET_NAME_CONTROL}'!A2:E`
       });
       const filas = controlRes.data.values || [];
-      const fila  = filas.find(f => String(f[2] || '').trim().toUpperCase() === codigo);
+      L(reqId, '📊 Filas recibidas de control', { total: filas.length });
+
+      const fila = filas.find(f => String(f[2] || '').trim().toUpperCase() === codigo);
       if (!fila) {
-        console.warn(`⛔ [REG VALID] No encontrado en hoja de control: ${codigo}`);
+        W(reqId, '⛔ REG no encontrado en hoja de control', { codigo });
         throw new Error('El código introducido no es válido.');
       }
       const emailAsignado = String(fila[1] || '').trim().toLowerCase();
+      L(reqId, '🔗 REG fila encontrada', { emailAsignado, coincide: !emailAsignado || emailAsignado === emailNormalizado });
       if (emailAsignado && emailAsignado !== emailNormalizado) {
-        console.warn(`⛔ [REG VALID] Email mismatch: hoja=${emailAsignado} vs req=${emailNormalizado}`);
+        W(reqId, '⛔ Mismatch email REG', { emailAsignado, emailReq: emailNormalizado });
         throw new Error('Este código regalo no corresponde con tu email.');
       }
     } catch (e) {
-      // Mantén respuesta genérica (para tu mapError)
-      console.warn('⚠️ [REG VALID] Error validando en hoja de control:', e?.message || e);
+      E(reqId, 'Error validando REG- en hoja de control', e);
       throw new Error('Requested entity was not found');
     }
 
   } else if (esEntrada) {
-    // PRE- debe estar previamente validada en Firestore
+    L(reqId, '🧪 Validación PRE- en Firestore');
     const docEntrada = await firestore.collection('entradasValidadas').doc(codigo).get();
-    if (!docEntrada.exists) {
-      console.warn(`⛔ [PRE VALID] No existe en entradasValidadas: ${codigo}`);
-      throw new Error('Esta entrada no está validada y no puede canjearse.');
-    }
-    const ent = docEntrada.data() || {};
-    if (ent.validado !== true) {
-      console.warn(`⛔ [PRE VALID] Encontrada pero validado!=true: ${codigo}`);
+    const ent = docEntrada.exists ? (docEntrada.data() || {}) : null;
+    L(reqId, '📄 Doc entradasValidadas', { existe: docEntrada.exists, data: ent });
+
+    if (!docEntrada.exists || ent.validado !== true) {
+      W(reqId, '⛔ PRE no validada', { existe: docEntrada.exists, validado: ent?.validado });
       throw new Error('Esta entrada no está validada y no puede canjearse.');
     }
 
-    // Marcar en hoja del evento (visual): E="SÍ" con estilo
+    // Marcar en hoja del evento (visual)
     try {
-      const sheets = await getSheets();
-
-      // IDs reales de hojas de eventos (ajusta si procede)
+      const sheets = await getSheets(reqId);
       const SHEETS_EVENTOS = {
         'evento-1': '1W-0N5kBYxNk_DoSNWDBK7AwkM66mcQIpDHQnPooDW6s',
         'evento-2': '1PbhRFdm1b1bR0g5wz5nz0ZWAcgsbkakJVEh0dz34lCM',
@@ -152,26 +223,27 @@ module.exports = async function canjearCodigoRegalo({
 
       const slugDeFS    = ent.slugEvento && SHEETS_EVENTOS[ent.slugEvento] ? ent.slugEvento : null;
       const idsARevisar = slugDeFS ? [SHEETS_EVENTOS[slugDeFS]] : Object.values(SHEETS_EVENTOS);
+      L(reqId, '🗂️ Hojas de eventos a revisar', { slugDeFS, total: idsARevisar.length });
 
       let actualizado = false;
       for (const spreadsheetId of idsARevisar) {
         try {
-          // Tab id de la primera pestaña
+          L(reqId, '➡️ Revisando hoja evento', { spreadsheetId });
           const meta = await sheets.spreadsheets.get({ spreadsheetId });
           const sheetIdNum = meta.data.sheets?.[0]?.properties?.sheetId ?? 0;
+          L(reqId, '🧰 sheetId (pestaña 0)', { sheetIdNum });
 
-          const found = await findRowByCode({ sheets, spreadsheetId, codigo });
+          const found = await findRowByCode(reqId, { sheets, spreadsheetId, codigo });
           if (!found) continue;
 
-          // E{fila} = "SÍ"
           await sheets.spreadsheets.values.update({
             spreadsheetId,
             range: `E${found.row1}`,
             valueInputOption: 'USER_ENTERED',
             requestBody: { values: [['SÍ']] }
           });
+          L(reqId, '✍️ Escrito "SÍ" en columna E', { fila: found.row1 });
 
-          // Estilo: rojo + texto blanco negrita en E{fila}
           await sheets.spreadsheets.batchUpdate({
             spreadsheetId,
             requestBody: {
@@ -181,7 +253,7 @@ module.exports = async function canjearCodigoRegalo({
                     sheetId: sheetIdNum,
                     startRowIndex: found.row0,
                     endRowIndex: found.row0 + 1,
-                    startColumnIndex: 4, // E (0-based)
+                    startColumnIndex: 4, // E
                     endColumnIndex: 5
                   },
                   cell: {
@@ -195,27 +267,26 @@ module.exports = async function canjearCodigoRegalo({
               }]
             }
           });
-
-          console.log(`📕 [PRE MARK] ${codigo} → E="SÍ" (rojo) en hoja ${spreadsheetId}, fila ${found.row1}`);
+          L(reqId, '🎨 Formato aplicado (E=rojo/blanco negrita)', { fila: found.row1 });
           actualizado = true;
           break;
         } catch (e) {
-          console.warn(`⚠️ [PRE MARK] No se pudo actualizar hoja ${spreadsheetId}:`, e?.message || e);
+          E(reqId, `No se pudo actualizar hoja de evento ${spreadsheetId}`, e);
         }
       }
 
       if (!actualizado) {
-        console.warn(`⚠️ [PRE MARK] ${codigo} no se encontró en ninguna hoja de eventos.`);
+        W(reqId, '⚠️ PRE no encontrado en hojas de eventos para marcar');
       }
     } catch (e) {
-      console.warn('⚠️ [PRE MARK] Error intentando marcar en Sheets (no bloquea):', e?.message || e);
+      E(reqId, 'Error intentando marcar PRE en Sheets (se continúa igualmente)', e);
       // No lanzamos: canje continúa
     }
   }
 
   // === 2) Bloqueo en Firestore (idempotencia) ===
-  console.log(`🔒 [FS] Bloqueando código antes de activar: ${codigo}`);
-  await withRetries(async () => {
+  L(reqId, '🔒 Bloqueando código en Firestore antes de activar…');
+  await withRetries(reqId, 'crear doc regalos_canjeados', async (i) => {
     await canjeRef.create({
       nombre,
       apellidos,
@@ -223,14 +294,16 @@ module.exports = async function canjearCodigoRegalo({
       libro: libroNormalizado,
       motivo,
       fecha: timestamp,
-      activado: false
+      activado: false,
+      _intentoCreate: i
     });
   }, { tries: 5, baseMs: 150 });
-  console.log('✅ [FS] Código bloqueado');
+  L(reqId, '✅ Código bloqueado en Firestore');
 
-  // === 3) Registro en "Libros GRATIS" (bloqueante pero tolerante a fallo) ===
+  // === 3) Registro en "Libros GRATIS" (tolerante a fallo) ===
   try {
-    const sheets = await getSheets();
+    const sheets = await getSheets(reqId);
+    L(reqId, '📤 Apéndice en "Libros GRATIS"');
     await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID_REGALOS,
       range: `'${SHEET_NAME_REGALOS}'!A2:G`,
@@ -247,17 +320,15 @@ module.exports = async function canjearCodigoRegalo({
         ]]
       }
     });
-    console.log('✅ [SHEETS] Registrado en "Libros GRATIS"');
+    L(reqId, '✅ Registrado en "Libros GRATIS"');
   } catch (e) {
-    console.warn('⚠️ [SHEETS] No se pudo registrar en "Libros GRATIS":', e?.message || e);
+    E(reqId, 'No se pudo registrar en "Libros GRATIS"', e);
   }
 
   // === 4) Activar membresía en MemberPress ===
   try {
-    console.log(`🔐 [MP] Activando membresía para ${emailNormalizado}…`);
-
-    let membershipId = null;
     const t = libroNormalizado.toLowerCase();
+    let membershipId = null;
 
     if (t.includes('de cara a la jubilación')) {
       membershipId = 7994;
@@ -266,47 +337,53 @@ module.exports = async function canjearCodigoRegalo({
     } else if (t.includes('jubilación anticipada') || t.includes('jubilación parcial')) {
       membershipId = 11006;
     } else {
+      W(reqId, '❓ Libro no reconocido para membresía', { libroNormalizado });
       throw new Error(`No se reconoce el libro para activar membresía: ${libroNormalizado}`);
     }
 
-    await activarMembresiaEnMemberPress(emailNormalizado, membershipId);
-    console.log(`✅ [MP] Membresía activada (ID=${membershipId})`);
-    await canjeRef.update({ activado: true });
+    L(reqId, '🔐 Activando membresía en MemberPress…', { email: emailNormalizado, membershipId });
+    const mpRes = await activarMembresiaEnMemberPress(emailNormalizado, membershipId);
+    L(reqId, '✅ MemberPress activación OK', { respuesta: mpRes ?? 'sin_respuesta' });
+
+    await canjeRef.update({ activado: true, membershipId });
+    L(reqId, '📝 Firestore actualizado (activado=true)');
 
   } catch (err) {
-    // No aborta el canje; ya está bloqueado y registrado
-    console.error('❌ [MP] Error activando membresía:', err?.message || err);
+    E(reqId, 'Error activando membresía en MemberPress (el canje sigue registrado/bloqueado)', err);
   }
 
   // === 5) Registros auxiliares (no bloqueantes) ===
   (async () => {
     try {
-      await registrarCanjeEnSheet({
+      L(reqId, '📒 (AUX) Registrar en hoja de canjes general…');
+      const r = await registrarCanjeEnSheet({
         nombre,
         apellidos,
         email: emailNormalizado,
         codigo,
         libro: libroNormalizado
       });
-      console.log('✅ [AUX] Registrado en hoja de canjes general');
+      L(reqId, '✅ (AUX) Registrado en hoja de canjes general', { resp: r ?? 'ok' });
     } catch (e) {
-      console.warn('⚠️ [AUX] No se pudo registrar en hoja de canjes general:', e?.message || e);
+      E(reqId, '(AUX) No se pudo registrar en hoja de canjes general', e);
     }
   })();
 
   if (esRegalo) {
     (async () => {
       try {
+        L(reqId, '🧾 (AUX) Marcar REG- como canjeado en hoja de control…', { codigo });
         await marcarCodigoComoCanjeado(codigo);
-        console.log('✅ [AUX] Marcado REG- como canjeado en hoja de control');
+        L(reqId, '✅ (AUX) REG- marcado como canjeado');
       } catch (e) {
-        console.warn('⚠️ [AUX] No se pudo marcar en hoja de control REG-:', e?.message || e);
+        E(reqId, '(AUX) No se pudo marcar REG- en hoja de control', e);
       }
     })();
   }
 
-  // === 6) Email de confirmación (no bloqueante para éxito final) ===
+  // === 6) Email de confirmación (no bloquea) ===
   try {
+    L(reqId, '📧 Enviando email de confirmación…', { to: emailNormalizado, libro: libroNormalizado });
     const rEmail = await enviarEmailCanjeLibro({
       toEmail: emailNormalizado,
       nombre,
@@ -314,14 +391,15 @@ module.exports = async function canjearCodigoRegalo({
       libroElegido: libroNormalizado
     });
     if (!rEmail?.ok) {
-      console.warn('⚠️ [EMAIL] Canje OK pero fallo en envío:', rEmail?.error || '(sin detalle)');
+      W(reqId, 'Email de confirmación falló', { detalle: rEmail?.error || '(sin detalle)' });
     } else {
-      console.log('✅ [EMAIL] Enviado al usuario');
+      L(reqId, '✅ Email de confirmación enviado', { resp: rEmail });
     }
   } catch (e) {
-    console.warn('⚠️ [EMAIL] Excepción enviando email:', e?.message || e);
+    E(reqId, 'Excepción enviando email de confirmación', e);
   }
 
-  console.log(`✅ [CANJE FIN] ${codigo} → ${emailNormalizado} (${motivo})`);
-  return { ok: true };
+  const ms = Date.now() - t0;
+  L(reqId, `🏁 [FIN] Canje completado`, { codigo, email: emailNormalizado, motivo, ms });
+  return { ok: true, reqId };
 };

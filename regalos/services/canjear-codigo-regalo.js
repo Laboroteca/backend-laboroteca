@@ -1,8 +1,13 @@
-'use strict';
+// 📂 regalos/services/canjear-codigo.js
 
 /**
  * Servicio: canjear-codigo-regalo
- * Ruta que debe invocarlo: /regalos/canjear-codigo
+ * 🔗 RUTA QUE DEBE INVOCARLO DESDE EXPRESS:
+ *     - CANÓNICA:       POST /regalos/canjear-codigo
+ *     - ALIAS COMPAT:   POST /regalos/canjear-codigo-regalo
+ *
+ * La verificación HMAC y el mapeo de campos se hace en el router.
+ * Este servicio asume entrada ya normalizada, pero tolera `libro`/`codigo` como fallback.
  * - Logs incondicionales con reqId para correlación
  * - Traza completa: entradas, normalizaciones, FS/Sheets, decisiones, errores y stacks
  */
@@ -35,25 +40,18 @@ function L(reqId, msg, meta) {
   try {
     if (meta !== undefined) console.log(`[CANJEAR ${reqId}] ${msg} :: ${JSON.stringify(meta)}`);
     else console.log(`[CANJEAR ${reqId}] ${msg}`);
-  } catch {
-    console.log(`[CANJEAR ${reqId}] ${msg}`);
-  }
+  } catch { console.log(`[CANJEAR ${reqId}] ${msg}`); }
 }
 function W(reqId, msg, meta) {
   try {
     if (meta !== undefined) console.warn(`[CANJEAR ${reqId}] WARN ${msg} :: ${JSON.stringify(meta)}`);
     else console.warn(`[CANJEAR ${reqId}] WARN ${msg}`);
-  } catch {
-    console.warn(`[CANJEAR ${reqId}] WARN ${msg}`);
-  }
+  } catch { console.warn(`[CANJEAR ${reqId}] WARN ${msg}`); }
 }
 function E(reqId, msg, err) {
   const meta = { message: err?.message || String(err), stack: err?.stack || undefined };
-  try {
-    console.error(`[CANJEAR ${reqId}] ERROR ${msg} :: ${JSON.stringify(meta)}`);
-  } catch {
-    console.error(`[CANJEAR ${reqId}] ERROR ${msg}:`, err);
-  }
+  try { console.error(`[CANJEAR ${reqId}] ERROR ${msg} :: ${JSON.stringify(meta)}`); }
+  catch { console.error(`[CANJEAR ${reqId}] ERROR ${msg}:`, err); }
 }
 
 // Helper reintentos (backoff exponencial) con logs
@@ -115,49 +113,53 @@ module.exports = async function canjearCodigoRegalo({
   apellidos,
   email,
   libro_elegido,
-  codigo_regalo
+  codigo_regalo,
+  // tolerancia extra (por si algún caller se equivoca):
+  libro,
+  codigo
 }) {
   const reqId = rid();
   const t0 = Date.now();
 
-  // Normaliza entrada
-  const codigo           = String(codigo_regalo || '').trim().toUpperCase();
-  const emailNormalizado = String(email || '').trim().toLowerCase();
-  const libroNormalizado = String(libro_elegido || '').trim();
+  // Normaliza entrada (tolerando variantes)
+  const _codigo          = codigo_regalo || codigo || '';
+  const codigoNorm       = String(_codigo).trim().toUpperCase();
+  const emailNorm        = String(email || '').trim().toLowerCase();
+  const libroNorm        = String(libro_elegido || libro || '').trim();
   const timestamp        = dayjs().format('YYYY-MM-DD HH:mm:ss');
 
   L(reqId, 'START datos recibidos (normalizados)', {
     nombre,
     apellidos,
-    email: emailNormalizado,
-    libro_elegido: libroNormalizado,
-    codigo_regalo: codigo,
+    email: emailNorm,
+    libro_elegido: libroNorm,
+    codigo_regalo: codigoNorm,
     timestamp
   });
 
-  if (!nombre || !emailNormalizado || !libroNormalizado || !codigo) {
+  if (!nombre || !emailNorm || !libroNorm || !codigoNorm) {
     W(reqId, 'Faltan datos obligatorios', {
-      nombreOk: !!nombre, emailOk: !!emailNormalizado, libroOk: !!libroNormalizado, codigoOk: !!codigo
+      nombreOk: !!nombre, emailOk: !!emailNorm, libroOk: !!libroNorm, codigoOk: !!codigoNorm
     });
     throw new Error('Faltan datos obligatorios.');
   }
 
-  const esRegalo  = codigo.startsWith('REG-');
-  const esEntrada = codigo.startsWith('PRE-');
+  const esRegalo  = codigoNorm.startsWith('REG-');
+  const esEntrada = codigoNorm.startsWith('PRE-');
   const motivo    = esRegalo ? 'REGALO' : esEntrada ? 'ENTRADA' : 'OTRO';
   L(reqId, 'Tipo de canje', { esRegalo, esEntrada, motivo });
 
   if (!esRegalo && !esEntrada) {
-    W(reqId, 'Prefijo desconocido', { codigo });
+    W(reqId, 'Prefijo desconocido', { codigo: codigoNorm });
     throw new Error('prefijo desconocido');
   }
 
   // Idempotencia: docId=codigo
-  const canjeRef = firestore.collection('regalos_canjeados').doc(codigo);
+  const canjeRef = firestore.collection('regalos_canjeados').doc(codigoNorm);
   const ya = await canjeRef.get();
   L(reqId, 'Comprobacion de canje previo', { docExiste: ya.exists });
   if (ya.exists) {
-    W(reqId, 'Codigo ya canjeado previamente', { codigo });
+    W(reqId, 'Codigo ya canjeado previamente', { codigo: codigoNorm });
     throw new Error('Este código ya ha sido utilizado.');
   }
 
@@ -181,15 +183,15 @@ module.exports = async function canjearCodigoRegalo({
       const filas = controlRes.data.values || [];
       L(reqId, 'Filas recibidas de control', { total: filas.length });
 
-      const fila = filas.find(f => String(f[2] || '').trim().toUpperCase() === codigo);
+      const fila = filas.find(f => String(f[2] || '').trim().toUpperCase() === codigoNorm);
       if (!fila) {
-        W(reqId, 'REG no encontrado en hoja de control', { codigo });
+        W(reqId, 'REG no encontrado en hoja de control', { codigo: codigoNorm });
         throw new Error('El código introducido no es válido.');
       }
       const emailAsignado = String(fila[1] || '').trim().toLowerCase();
-      L(reqId, 'REG fila encontrada', { emailAsignado, coincide: !emailAsignado || emailAsignado === emailNormalizado });
-      if (emailAsignado && emailAsignado !== emailNormalizado) {
-        W(reqId, 'Mismatch email REG', { emailAsignado, emailReq: emailNormalizado });
+      L(reqId, 'REG fila encontrada', { emailAsignado, coincide: !emailAsignado || emailAsignado === emailNorm });
+      if (emailAsignado && emailAsignado !== emailNorm) {
+        W(reqId, 'Mismatch email REG', { emailAsignado, emailReq: emailNorm });
         throw new Error('Este código regalo no corresponde con tu email.');
       }
     } catch (e) {
@@ -199,7 +201,7 @@ module.exports = async function canjearCodigoRegalo({
 
   } else if (esEntrada) {
     L(reqId, 'Validacion PRE- en Firestore');
-    const docEntrada = await firestore.collection('entradasValidadas').doc(codigo).get();
+    const docEntrada = await firestore.collection('entradasValidadas').doc(codigoNorm).get();
     const ent = docEntrada.exists ? (docEntrada.data() || {}) : null;
     L(reqId, 'Doc entradasValidadas', { existe: docEntrada.exists, data: ent });
 
@@ -231,7 +233,7 @@ module.exports = async function canjearCodigoRegalo({
           const sheetIdNum = meta.data.sheets?.[0]?.properties?.sheetId ?? 0;
           L(reqId, 'sheetId (pestaña 0)', { sheetIdNum });
 
-          const found = await findRowByCode(reqId, { sheets, spreadsheetId, codigo });
+          const found = await findRowByCode(reqId, { sheets, spreadsheetId, codigo: codigoNorm });
           if (!found) continue;
 
           await sheets.spreadsheets.values.update({
@@ -288,8 +290,8 @@ module.exports = async function canjearCodigoRegalo({
     await canjeRef.create({
       nombre,
       apellidos,
-      email: emailNormalizado,
-      libro: libroNormalizado,
+      email: emailNorm,
+      libro: libroNorm,
       motivo,
       fecha: timestamp,
       activado: false,
@@ -306,17 +308,9 @@ module.exports = async function canjearCodigoRegalo({
       spreadsheetId: SHEET_ID_REGALOS,
       range: `'${SHEET_NAME_REGALOS}'!A2:G`,
       valueInputOption: 'USER_ENTERED',
-      requestBody: {
-        values: [[
-          nombre,
-          apellidos,
-          emailNormalizado,
-          timestamp,
-          libroNormalizado,
-          motivo,
-          codigo
-        ]]
-      }
+      requestBody: { values: [[
+        nombre, apellidos, emailNorm, timestamp, libroNorm, motivo, codigoNorm
+      ]] }
     });
     L(reqId, 'Registrado en "Libros GRATIS"');
   } catch (e) {
@@ -325,7 +319,7 @@ module.exports = async function canjearCodigoRegalo({
 
   // === 4) Activar membresía en MemberPress ===
   try {
-    const t = libroNormalizado.toLowerCase();
+    const t = libroNorm.toLowerCase();
     let membershipId = null;
 
     if (t.includes('de cara a la jubilación')) {
@@ -335,12 +329,12 @@ module.exports = async function canjearCodigoRegalo({
     } else if (t.includes('jubilación anticipada') || t.includes('jubilación parcial')) {
       membershipId = 11006;
     } else {
-      W(reqId, 'Libro no reconocido para membresía', { libroNormalizado });
-      throw new Error(`No se reconoce el libro para activar membresía: ${libroNormalizado}`);
+      W(reqId, 'Libro no reconocido para membresía', { libroNorm });
+      throw new Error(`No se reconoce el libro para activar membresía: ${libroNorm}`);
     }
 
-    L(reqId, 'Activando membresía en MemberPress', { email: emailNormalizado, membershipId });
-    const mpRes = await activarMembresiaEnMemberPress(emailNormalizado, membershipId);
+    L(reqId, 'Activando membresía en MemberPress', { email: emailNorm, membershipId });
+    const mpRes = await activarMembresiaEnMemberPress(emailNorm, membershipId);
     L(reqId, 'MemberPress activación OK', { respuesta: mpRes ?? 'sin_respuesta' });
 
     await canjeRef.update({ activado: true, membershipId });
@@ -355,11 +349,7 @@ module.exports = async function canjearCodigoRegalo({
     try {
       L(reqId, '(AUX) Registrar en hoja de canjes general');
       const r = await registrarCanjeEnSheet({
-        nombre,
-        apellidos,
-        email: emailNormalizado,
-        codigo,
-        libro: libroNormalizado
+        nombre, apellidos, email: emailNorm, codigo: codigoNorm, libro: libroNorm
       });
       L(reqId, '(AUX) Registrado en hoja de canjes general', { resp: r ?? 'ok' });
     } catch (e) {
@@ -370,8 +360,8 @@ module.exports = async function canjearCodigoRegalo({
   if (esRegalo) {
     (async () => {
       try {
-        L(reqId, '(AUX) Marcar REG- como canjeado en hoja de control', { codigo });
-        await marcarCodigoComoCanjeado(codigo);
+        L(reqId, '(AUX) Marcar REG- como canjeado en hoja de control', { codigo: codigoNorm });
+        await marcarCodigoComoCanjeado(codigoNorm);
         L(reqId, '(AUX) REG- marcado como canjeado');
       } catch (e) {
         E(reqId, '(AUX) No se pudo marcar REG- en hoja de control', e);
@@ -381,12 +371,12 @@ module.exports = async function canjearCodigoRegalo({
 
   // === 6) Email de confirmación (no bloquea) ===
   try {
-    L(reqId, 'Enviando email de confirmacion', { to: emailNormalizado, libro: libroNormalizado });
+    L(reqId, 'Enviando email de confirmacion', { to: emailNorm, libro: libroNorm });
     const rEmail = await enviarEmailCanjeLibro({
-      toEmail: emailNormalizado,
+      toEmail: emailNorm,
       nombre,
       apellidos,
-      libroElegido: libroNormalizado
+      libroElegido: libroNorm
     });
     if (!rEmail?.ok) {
       W(reqId, 'Email de confirmacion fallo', { detalle: rEmail?.error || '(sin detalle)' });
@@ -398,7 +388,6 @@ module.exports = async function canjearCodigoRegalo({
   }
 
   const ms = Date.now() - t0;
-  L(reqId, 'FIN canje completado', { codigo, email: emailNormalizado, motivo, ms });
+  L(reqId, 'FIN canje completado', { codigo: codigoNorm, email: emailNorm, motivo, ms });
   return { ok: true, reqId };
 };
-

@@ -84,7 +84,13 @@ const corsOptions = {
     return cb(new Error('Not allowed by CORS'));
   },
   methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-LABOROTECA-TOKEN'],
+  allowedHeaders: [
+    'Content-Type', 'Authorization', 'X-LABOROTECA-TOKEN',
+    // HMAC headers para validador
+    'x-api-key','x-val-ts','x-val-sig',
+    'x-entr-ts','x-entr-sig',
+    'x-e-ts','x-e-sig'
+  ],
   credentials: false // pon true solo si usas cookies/sesión
 };
 
@@ -94,7 +100,13 @@ app.options('*', cors(corsOptions));
 // ⚠️ WEBHOOK: SIEMPRE EL PRIMERO Y EN RAW
 app.use('/webhook', require('./routes/webhook'));
 
-app.use(express.json({ limit: '2mb' }));
+// ⬇️ IMPORTANTE: capturamos rawBody para HMAC (validador)
+app.use(express.json({
+  limit: '2mb',
+  verify: (req, _res, buf) => {
+    req.rawBody = buf ? buf.toString('utf8') : '';
+  }
+}));
 app.use(express.urlencoded({ extended: true }));
 
 
@@ -115,7 +127,7 @@ app.use('/entradas/sesion', require('./entradas/routes/create-session-entrada'))
 app.use('/entradas', require('./entradas/routes/crear-entrada-regalo'));
 app.use('/', require('./entradas/routes/micuentaEntradas'));
 
-app.use('/', validarEntrada);
+app.use('/', validarEntrada); // /validar-entrada (el router HMAC ya tolera ambos paths)
 
 const pagoLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,

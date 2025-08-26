@@ -401,3 +401,4 @@ module.exports = async function canjearCodigoRegalo({
   L(reqId, 'FIN canje completado', { codigo, email: emailNormalizado, motivo, ms });
   return { ok: true, reqId };
 };
+

@@ -1,4 +1,4 @@
-// 📂 Archivo: regalos/services/canjear-codigo-regalo.js
+// 📂 regalos/services/canjear-codigo-regalo.js
 'use strict';
 
 const admin = require('../../firebase');
@@ -12,7 +12,7 @@ const registrarCanjeEnSheet   = require('./registrarCanjeEnSheet');
 const { activarMembresiaEnMemberPress } = require('./memberpress'); // API oficial
 const { enviarEmailCanjeLibro } = require('./enviarEmailCanjeLibro');
 
-// === Google Sheets (IDs/Pestañas) ===
+// === Google Sheets (IDs/Pestañas) ===
 const SHEET_ID_REGALOS   = '1MjxXebR3oQIyu0bYeRWo83xj1sBFnDcx53HvRRBiGE'; // Libros GRATIS (registro de canjes)
 const SHEET_NAME_REGALOS = 'Hoja 1';
 const SHEET_ID_CONTROL   = '1DFZuhJtuQ0y8EHXOkUUifR_mCVfGyxgkCHXRvBoiwfo'; // Códigos REG- activos (control)
@@ -150,7 +150,7 @@ module.exports = async function canjearCodigoRegalo({
         'evento-5': '1LGLEsQ_mGj-Hmkj1vjrRQpmSvIADZ1eMaTJoh3QBmQc'
       };
 
-      const slugDeFS   = ent.slugEvento && SHEETS_EVENTOS[ent.slugEvento] ? ent.slugEvento : null;
+      const slugDeFS    = ent.slugEvento && SHEETS_EVENTOS[ent.slugEvento] ? ent.slugEvento : null;
       const idsARevisar = slugDeFS ? [SHEETS_EVENTOS[slugDeFS]] : Object.values(SHEETS_EVENTOS);
 
       let actualizado = false;

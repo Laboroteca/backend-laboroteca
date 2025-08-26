@@ -117,6 +117,18 @@ const canjearLimiter = rateLimit({
   legacyHeaders: false
 });
 
+// 🔒 Rate limit específico para entradas (5 req/min por IP)
+const entradasLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Demasiadas peticiones de entradas. Inténtalo en 1 minuto.' },
+  handler: (req, res, next, options) => {
+    console.warn(`🚧 Rate limit /entradas para IP ${req.ip}`);
+    res.status(options.statusCode).json(options.message);
+  }
+});
 
 // NUEVO: ruta para registrar consentimiento (vía /api/…)
 app.use('/api', registrarConsentimiento);
@@ -134,10 +146,10 @@ app.use('/regalos', canjearLimiter, canjearRouter);
 app.use('/regalos', require('./regalos/routes/crear-codigo-regalo'));
 
 
-app.use('/entradas/crear', require('./entradas/routes/crearEntrada'));
-app.use('/entradas/sesion', require('./entradas/routes/create-session-entrada'));
-app.use('/entradas', require('./entradas/routes/crear-entrada-regalo'));
-app.use('/', require('./entradas/routes/micuentaEntradas'));
+app.use('/entradas/crear', entradasLimiter, require('./entradas/routes/crearEntrada'));
+app.use('/entradas/sesion', entradasLimiter, require('./entradas/routes/create-session-entrada'));
+app.use('/entradas', entradasLimiter, require('./entradas/routes/crear-entrada-regalo'));
+app.use('/', entradasLimiter, require('./entradas/routes/micuentaEntradas'));
 
 app.use('/', validarEntrada); // /validar-entrada (el router HMAC ya tolera ambos paths)
 

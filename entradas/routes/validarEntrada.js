@@ -1,7 +1,7 @@
 // 🔐 VALIDAR ENTRADA QR – Uso privado (Ignacio + 3 personas)
 // POST /validar-entrada  (o /entradas/validar-entrada si montas el router con prefijo)
 // Seguridad: x-api-key + HMAC (x-val-ts, x-val-sig) sobre ts.POST.<path>.sha256(body)
-// Fallback opcional: X-LABOROTECA-TOKEN (desaconsejado; controlado por REQUIRE_HMAC)
+// Fallback opcional: X-LABOROTECA-TOKEN (controlado por REQUIRE_HMAC)
 
 'use strict';
 
@@ -18,23 +18,23 @@ console.log('[VAL ROUTER] /validar-entrada cargado');
 /* ===============================
    CONFIG SEGURIDAD
    =============================== */
-const API_KEY          = (process.env.VALIDADOR_API_KEY || '').trim();            // p.ej. Val_Entradas_xxx
-const HMAC_SECRET      = (process.env.VALIDADOR_HMAC_SECRET || '').trim();        // 32+ bytes
-const SKEW_MS          = Number(process.env.VALIDADOR_SKEW_MS || 5*60*1000);      // ±5 min
+const API_KEY          = (process.env.VALIDADOR_API_KEY || '').trim();
+const HMAC_SECRET      = (process.env.VALIDADOR_HMAC_SECRET || '').trim();
+const SKEW_MS          = Number(process.env.VALIDADOR_SKEW_MS || 5*60*1000);
 const REQUIRE_HMAC     = String(process.env.VALIDADOR_REQUIRE_HMAC || '1') === '1';
-const LEGACY_TOKEN     = (process.env.VALIDADOR_ENTRADAS_TOKEN || '').trim();     // compat (X-LABOROTECA-TOKEN)
-const IP_ALLOW         = String(process.env.VALIDADOR_IP_ALLOW || '')
-  .split(',').map(s => s.trim()).filter(Boolean);                                 // allowlist opcional
-const RATE_PER_MIN     = Number(process.env.VALIDADOR_RATE_PER_MIN || 60);        // peticiones/min por IP
-const MAX_BODY_BYTES   = Number(process.env.VALIDADOR_MAX_BODY || 12*1024);       // 12KB
+const LEGACY_TOKEN     = (process.env.VALIDADOR_ENTRADAS_TOKEN || '').trim();
+const IP_ALLOW         = String(process.env.VALIDADOR_IP_ALLOW || '').split(',').map(s => s.trim()).filter(Boolean);
+const RATE_PER_MIN     = Number(process.env.VALIDADOR_RATE_PER_MIN || 60);
+const MAX_BODY_BYTES   = Number(process.env.VALIDADOR_MAX_BODY || 12*1024);
 const DEBUG            = String(process.env.VALIDADOR_DEBUG || '') === '1';
 
 function maskTail(s){ return s ? `••••${String(s).slice(-4)}` : null; }
+function sha10(s){ return s ? crypto.createHash('sha256').update(String(s)).digest('hex').slice(0,10) : null; }
 
-// Log de config al cargar (sin exponer secretos)
+// Log de config al arrancar (no expone secretos)
 console.log('[VAL CFG]', {
   apiKeyMasked: API_KEY ? maskTail(API_KEY) : '(none)',
-  secretSha10: HMAC_SECRET ? crypto.createHash('sha256').update(HMAC_SECRET).digest('hex').slice(0,10) : '(none)',
+  secretSha10: sha10(HMAC_SECRET) || '(none)',
   requireHmac: REQUIRE_HMAC,
   skewMs: SKEW_MS
 });
@@ -44,10 +44,7 @@ console.log('[VAL CFG]', {
    =============================== */
 router.use(express.json({
   limit: '20kb',
-  verify: (req, _res, buf) => {
-    // Guarda rawBody para el cálculo HMAC
-    req.rawBody = buf ? buf.toString('utf8') : '';
-  }
+  verify: (req, _res, buf) => { req.rawBody = buf ? buf.toString('utf8') : ''; }
 }));
 
 /* ===============================
@@ -85,31 +82,32 @@ function pruneSeen(){
 }
 
 /* ===============================
-   VERIFICACIÓN DE AUTORIZACIÓN
+   VERIFICACIÓN DE AUTORIZACIÓN (con logs incondicionales)
    =============================== */
 function verifyAuth(req){
   // 0) Content-Type y tamaño
-  if (!String(req.headers['content-type']||'').toLowerCase().startsWith('application/json')) {
-    if (DEBUG) console.warn('[AUTH FAIL] bad CT:', req.headers['content-type']);
+  const ct = String(req.headers['content-type']||'');
+  if (!ct.toLowerCase().startsWith('application/json')) {
+    console.warn('[AUTH FAIL] bad CT:', ct);
     return { ok:false, code:415, msg:'Content-Type inválido' };
   }
   const rawStr = req.rawBody ? (Buffer.isBuffer(req.rawBody)? req.rawBody.toString('utf8') : String(req.rawBody)) : '';
   const rawLen = Buffer.byteLength(rawStr, 'utf8');
   if (rawLen > MAX_BODY_BYTES) {
-    if (DEBUG) console.warn('[AUTH FAIL] payload too large:', rawLen);
+    console.warn('[AUTH FAIL] payload too large:', rawLen);
     return { ok:false, code:413, msg:'Payload demasiado grande' };
   }
 
   // 1) Allowlist IP
   const ip = clientIp(req);
   if (IP_ALLOW.length && !IP_ALLOW.includes(ip)) {
-    if (DEBUG) console.warn('[AUTH FAIL] ip not allowed:', ip);
+    console.warn('[AUTH FAIL] ip not allowed:', ip);
     return { ok:false, code:401, msg:'IP no autorizada' };
   }
 
   // 2) Rate limit
   if (!rateLimit(req)) {
-    if (DEBUG) console.warn('[AUTH FAIL] rate limit:', ip);
+    console.warn('[AUTH FAIL] rate limit:', ip);
     return { ok:false, code:429, msg:'Too Many Requests' };
   }
 
@@ -118,37 +116,35 @@ function verifyAuth(req){
   const ts     = String(req.headers['x-val-ts'] || req.headers['x-entr-ts'] || req.headers['x-e-ts'] || '');
   const sig    = String(req.headers['x-val-sig']|| req.headers['x-entr-sig']|| req.headers['x-e-sig']|| '');
 
-  if (DEBUG) {
-    console.log('[VAL HDRS]', {
-      keyMasked: hdrKey ? maskTail(hdrKey) : '(none)',
-      hasTs: !!ts, hasSig: !!sig, ct: req.headers['content-type']
-    });
-  }
+  console.log('[VAL HDRS]', {
+    keyMasked: hdrKey ? maskTail(hdrKey) : '(none)',
+    hasTs: !!ts, hasSig: !!sig, ct
+  });
 
   const haveHmacHeaders = API_KEY && HMAC_SECRET && ts && sig && hdrKey;
   if (haveHmacHeaders) {
     if (hdrKey !== API_KEY)  {
-      if (DEBUG) console.warn('[AUTH FAIL] api key mismatch. got:', maskTail(hdrKey), 'exp:', maskTail(API_KEY));
+      console.warn('[AUTH FAIL] api key mismatch. got:', maskTail(hdrKey), 'exp:', maskTail(API_KEY));
       return { ok:false, code:401, msg:'Unauthorized (key)' };
     }
     if (!/^\d+$/.test(ts))   {
-      if (DEBUG) console.warn('[AUTH FAIL] ts not digits:', ts);
+      console.warn('[AUTH FAIL] ts not digits:', ts);
       return { ok:false, code:401, msg:'Unauthorized (ts)' };
     }
 
     const now = Date.now();
     const skew = Math.abs(now - Number(ts));
     if (skew > SKEW_MS) {
-      if (DEBUG) console.warn('[AUTH FAIL] skew too big ms:', skew, 'limit:', SKEW_MS);
+      console.warn('[AUTH FAIL] skew too big ms:', skew, 'limit:', SKEW_MS);
       return { ok:false, code:401, msg:'Expired/Skew' };
     }
 
     const seenPath = new URL(req.originalUrl, 'http://x').pathname; // p.ej. /entradas/validar-entrada
     const bodyHash = crypto.createHash('sha256').update(rawStr, 'utf8').digest('hex');
     const candidates = Array.from(new Set([
-      seenPath,                       // path real que ve Express
-      '/validar-entrada',             // sin prefijo
-      '/entradas/validar-entrada'     // con prefijo
+      seenPath,
+      '/validar-entrada',
+      '/entradas/validar-entrada'
     ]));
 
     let ok = false;
@@ -168,19 +164,13 @@ function verifyAuth(req){
       } catch {}
     }
 
-    if (DEBUG) {
-      console.log('[VALIDADOR DEBUG IN]', {
-        ip,
-        ts,
-        skewMs: skew,
-        path_seen: seenPath,
-        chosen_path: ok ? chosenPath : null,
-        sig10: String(sig).slice(0,10),
-        expCandidates: expList,
-        bodyHash10: bodyHash.slice(0,10),
-        apiKeyMasked: maskTail(API_KEY)
-      });
-    }
+    console.log('[VAL HMAC]', {
+      path_seen: seenPath,
+      chosen_path: ok ? chosenPath : null,
+      sig10: String(sig).slice(0,10),
+      bodyHash10: bodyHash.slice(0,10),
+      expCandidates: expList
+    });
 
     if (!ok) return { ok:false, code:401, msg:'Bad signature' };
 
@@ -188,7 +178,7 @@ function verifyAuth(req){
     pruneSeen();
     const nonceKey = ts + '.' + String(sig).slice(0,16);
     if (seen.has(nonceKey)) {
-      if (DEBUG) console.warn('[AUTH FAIL] replay:', nonceKey);
+      console.warn('[AUTH FAIL] replay:', nonceKey);
       return { ok:false, code:401, msg:'Replay' };
     }
     seen.set(nonceKey, now + SKEW_MS);
@@ -200,12 +190,12 @@ function verifyAuth(req){
   if (!REQUIRE_HMAC) {
     const legacy = String(req.headers['x-laboroteca-token'] || '').trim();
     if (legacy && LEGACY_TOKEN && legacy === LEGACY_TOKEN) {
-      if (DEBUG) console.log('[VALIDADOR LEGACY OK]', { ip });
+      console.log('[VALIDADOR LEGACY OK]', { ip });
       return { ok:true, mode:'LEGACY' };
     }
   }
 
-  if (DEBUG) console.warn('[AUTH FAIL] missing headers or config');
+  console.warn('[AUTH FAIL] missing headers or config');
   return { ok:false, code:401, msg:'Unauthorized' };
 }
 
@@ -216,13 +206,9 @@ function limpiarCodigoEntrada(input){
   let c = String(input || '').trim();
   if (!c) return '';
   if (/^https?:\/\//i.test(c)) {
-    try {
-      const url = new URL(c);
-      c = url.searchParams.get('codigo') || c;
-    } catch { /* usar tal cual */ }
+    try { const url = new URL(c); c = url.searchParams.get('codigo') || c; } catch {}
   }
   c = c.replace(/\s+/g,'').toUpperCase();
-  // evita inputs claramente rotos
   if (c.includes('//') || c.length > 80) return '';
   return c;
 }
@@ -231,11 +217,10 @@ function limpiarCodigoEntrada(input){
  *  HANDLER
  * ============================================================ */
 router.post('/validar-entrada', async (req, res) => {
-  // Seguridad
   const auth = verifyAuth(req);
+  console.log('[VAL AUTH]', auth); // <-- motivo exacto SIEMPRE
+
   if (!auth.ok) {
-    if (DEBUG) console.warn('⛔️ /validar-entrada auth failed:', auth.msg);
-    // devolvemos el motivo real para verlo desde WP
     return res.status(auth.code || 401).json({ error: auth.msg || 'Unauthorized' });
   }
 
@@ -247,7 +232,6 @@ router.post('/validar-entrada', async (req, res) => {
       return res.status(400).json({ error: 'Faltan campos obligatorios.' });
     }
 
-    // (Opcional) whitelist de slugs para eventos activos, vía ENV
     const SLUG_ALLOW = String(process.env.VALIDADOR_SLUG_ALLOW || '')
       .split(',').map(s => s.trim()).filter(Boolean);
     if (SLUG_ALLOW.length && !SLUG_ALLOW.includes(slugEventoRaw)) {
@@ -269,7 +253,7 @@ router.post('/validar-entrada', async (req, res) => {
 
     const { emailComprador, nombreAsistente } = resultado;
 
-    // Permite trazar quién valida (si el proxy WP lo envía)
+    // Trazabilidad del validador (si WP lo envía)
     const validadorEmail = String(req.body?.validadorEmail || '').trim() || null;
     const validadorWpId  = Number(req.body?.validadorWpId || 0) || null;
 
@@ -285,7 +269,7 @@ router.post('/validar-entrada', async (req, res) => {
       authMode: auth.mode || 'HMAC'
     });
 
-    if (DEBUG) console.log(`✅ Entrada ${codigoLimpio} validada correctamente (modo ${auth.mode}).`);
+    console.log(`✅ Entrada ${codigoLimpio} validada correctamente (modo ${auth.mode}).`);
     return res.json({ ok: true, mensaje: 'Entrada validada correctamente.' });
 
   } catch (err) {

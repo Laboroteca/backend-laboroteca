@@ -1,7 +1,6 @@
 // 🔐 VALIDAR ENTRADA QR – Uso privado (Ignacio + 3 personas)
-// POST /validar-entrada  (o /entradas/validar-entrada si montas el router con prefijo)
+// POST /validar-entrada  y /entradas/validar-entrada
 // Seguridad: x-api-key + HMAC (x-val-ts, x-val-sig) sobre ts.POST.<path>.sha256(body)
-// Fallback opcional: X-LABOROTECA-TOKEN (controlado por REQUIRE_HMAC)
 
 'use strict';
 
@@ -26,12 +25,10 @@ const LEGACY_TOKEN     = (process.env.VALIDADOR_ENTRADAS_TOKEN || '').trim();
 const IP_ALLOW         = String(process.env.VALIDADOR_IP_ALLOW || '').split(',').map(s => s.trim()).filter(Boolean);
 const RATE_PER_MIN     = Number(process.env.VALIDADOR_RATE_PER_MIN || 60);
 const MAX_BODY_BYTES   = Number(process.env.VALIDADOR_MAX_BODY || 12*1024);
-const DEBUG            = String(process.env.VALIDADOR_DEBUG || '') === '1';
 
 function maskTail(s){ return s ? `••••${String(s).slice(-4)}` : null; }
 function sha10(s){ return s ? crypto.createHash('sha256').update(String(s)).digest('hex').slice(0,10) : null; }
 
-// Log de config al arrancar (no expone secretos)
 console.log('[VAL CFG]', {
   apiKeyMasked: API_KEY ? maskTail(API_KEY) : '(none)',
   secretSha10: sha10(HMAC_SECRET) || '(none)',
@@ -40,7 +37,7 @@ console.log('[VAL CFG]', {
 });
 
 /* ===============================
-   Log de entrada SIEMPRE
+   LOG de entrada SIEMPRE
    =============================== */
 router.use((req, _res, next) => {
   console.log('[VAL REQ]', req.method, req.originalUrl, 'ip=', (req.headers['x-forwarded-for']||req.ip||''));
@@ -84,13 +81,11 @@ function verifyAuth(req){
     return { ok:false, code:415, msg:'Content-Type inválido' };
   }
 
-  // ⚠️ rawBody lo debe haber puesto el app-level express.json({verify})
+  // rawBody debe venir del app-level express.json({verify})
   let rawStr = (typeof req.rawBody === 'string') ? req.rawBody : '';
   if (!rawStr || rawStr.length === 0) {
-    // Fallback de cortesía (puede no coincidir exactamente con el string original)
     try { rawStr = JSON.stringify(req.body ?? {}); } catch { rawStr = ''; }
   }
-
   const rawLen = Buffer.byteLength(rawStr || '', 'utf8');
   if (rawLen > MAX_BODY_BYTES) {
     console.warn('[AUTH FAIL] payload too large:', rawLen);
@@ -204,23 +199,38 @@ function verifyAuth(req){
 function limpiarCodigoEntrada(input){
   let c = String(input || '').trim();
   if (!c) return '';
+  // Si viene un URL de escaneo, intenta extraer ?codigo=
   if (/^https?:\/\//i.test(c)) {
     try { const url = new URL(c); c = url.searchParams.get('codigo') || c; } catch {}
   }
+  // Quita espacios y mayúsculas
   c = c.replace(/\s+/g,'').toUpperCase();
+
+  // Hardening: solo permitimos letras, dígitos y guiones
+  if (!/^[A-Z0-9-]+$/.test(c)) return '';
   if (c.includes('//') || c.length > 80) return '';
   return c;
 }
 
+/* ===============================
+   Helpers
+   =============================== */
+function timeoutMs(promise, ms, label='op'){
+  let t;
+  const timer = new Promise((_, rej)=>{ t=setTimeout(()=>rej(new Error(`${label}_timeout`)), ms); });
+  return Promise.race([promise, timer]).finally(()=>clearTimeout(t));
+}
+
 /* ============================================================
- *  HANDLER
+ *  HANDLER (acepta ambos paths)
  * ============================================================ */
-router.post('/validar-entrada', async (req, res) => {
+const paths = ['/validar-entrada','/entradas/validar-entrada'];
+router.post(paths, async (req, res) => {
   const auth = verifyAuth(req);
   console.log('[VAL AUTH]', auth);
 
   if (!auth.ok) {
-    return res.status(auth.code || 401).json({ error: auth.msg || 'Unauthorized' });
+    return res.status(auth.code || 401).json({ error: auth.msg || 'Unauthorized', errorCode: 'unauthorized' });
   }
 
   try {
@@ -228,26 +238,46 @@ router.post('/validar-entrada', async (req, res) => {
     const codigoLimpio  = limpiarCodigoEntrada(req.body?.codigoEntrada);
 
     if (!codigoLimpio || !slugEventoRaw) {
-      return res.status(400).json({ error: 'Faltan campos obligatorios.' });
+      return res.status(400).json({ error: 'Faltan campos obligatorios.', errorCode: 'bad_params' });
     }
 
+    // Whitelist de slugs opcional por ENV
     const SLUG_ALLOW = String(process.env.VALIDADOR_SLUG_ALLOW || '')
       .split(',').map(s => s.trim()).filter(Boolean);
     if (SLUG_ALLOW.length && !SLUG_ALLOW.includes(slugEventoRaw)) {
-      return res.status(401).json({ error: 'Evento no autorizado.' });
+      return res.status(401).json({ error: 'Evento no autorizado.', errorCode: 'slug_not_allowed' });
     }
 
-    // Evita revalidaciones: Firestore
-    const docRef  = firestore.collection('entradasValidadas').doc(codigoLimpio);
-    const docSnap = await docRef.get();
-    if (docSnap.exists) {
-      return res.status(409).json({ error: 'Entrada ya validada.' });
+    // Idempotencia fuerte: create() falla si existe → evita carrera
+    const docRef = firestore.collection('entradasValidadas').doc(codigoLimpio);
+    const nowIso = new Date().toISOString();
+
+    // Primero, check rápido de existencia (ahorra excepción en camino feliz)
+    const snap = await docRef.get();
+    if (snap.exists) {
+      console.warn('[VAL FLOW] ya validada', { codigo: codigoLimpio });
+      return res.status(409).json({ error: 'Entrada ya validada.', errorCode: 'already_validated' });
     }
 
-    // Buscar y marcar en Sheets
-    const resultado = await marcarEntradaComoUsada(codigoLimpio, slugEventoRaw);
+    console.log('[VAL FLOW] buscar en Sheets', { slug: slugEventoRaw, codigo: codigoLimpio });
+
+    // Mete un timeout razonable para evitar colgarse
+    let resultado;
+    try {
+      resultado = await timeoutMs(
+        marcarEntradaComoUsada(codigoLimpio, slugEventoRaw),
+        Number(process.env.VALIDADOR_SHEETS_TIMEOUT_MS || 10000),
+        'sheets'
+      );
+    } catch (e) {
+      console.error('[VAL FLOW] sheets error/timeout', e?.message || e);
+      return res.status(502).json({ error: 'Upstream (Sheets) no responde.', errorCode: 'upstream_error' });
+    }
+
+    console.log('[VAL FLOW] resultado Sheets', resultado);
+
     if (!resultado || resultado.error) {
-      return res.status(404).json({ error: resultado?.error || 'Código no encontrado.' });
+      return res.status(404).json({ error: resultado?.error || 'Código no encontrado.', errorCode: 'not_found' });
     }
 
     const { emailComprador, nombreAsistente } = resultado;
@@ -256,25 +286,37 @@ router.post('/validar-entrada', async (req, res) => {
     const validadorEmail = String(req.body?.validadorEmail || '').trim() || null;
     const validadorWpId  = Number(req.body?.validadorWpId || 0) || null;
 
-    await docRef.set({
-      validado: true,
-      fechaValidacion: new Date().toISOString(),
-      validador: validadorEmail || 'Ignacio',
-      validadorWpId: validadorWpId,
-      emailComprador: emailComprador || null,
-      nombreAsistente: nombreAsistente || null,
-      evento: codigoLimpio.split('-')[0] || '',
-      slugEvento: slugEventoRaw,
-      authMode: auth.mode || 'HMAC'
-    });
+    // Escritura atómica: falla si ya existe por carrera
+    try {
+      await docRef.create({
+        validado: true,
+        fechaValidacion: admin.firestore.FieldValue.serverTimestamp(),
+        fechaValidacionIso: nowIso,
+        validador: validadorEmail || 'Ignacio',
+        validadorWpId: validadorWpId,
+        emailComprador: emailComprador || null,
+        nombreAsistente: nombreAsistente || null,
+        evento: (codigoLimpio.split('-')[0] || '').toUpperCase(),
+        slugEvento: slugEventoRaw,
+        authMode: auth.mode || 'HMAC'
+      });
+    } catch (e) {
+      if (String(e?.message || '').includes('Already exists')) {
+        console.warn('[VAL FLOW] create collision → ya validada', { codigo: codigoLimpio });
+        return res.status(409).json({ error: 'Entrada ya validada.', errorCode: 'already_validated' });
+      }
+      console.error('[VAL FLOW] firestore create error', e?.message || e);
+      return res.status(500).json({ error: 'Error registrando validación.', errorCode: 'firestore_error' });
+    }
 
-    console.log(`✅ Entrada ${codigoLimpio} validada correctamente (modo ${auth.mode}).`);
+    console.log('✅ VALIDADA', { codigo: codigoLimpio, slug: slugEventoRaw });
     return res.json({ ok: true, mensaje: 'Entrada validada correctamente.' });
 
   } catch (err) {
     console.error('❌ Error en /validar-entrada:', err?.stack || err);
-    return res.status(500).json({ error: 'Error interno al validar entrada.' });
+    return res.status(500).json({ error: 'Error interno al validar entrada.', errorCode: 'internal' });
   }
 });
 
 module.exports = router;
+

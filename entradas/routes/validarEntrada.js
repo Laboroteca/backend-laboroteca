@@ -31,21 +31,15 @@ const DEBUG            = String(process.env.VALIDADOR_DEBUG || '') === '1';
 function maskTail(s){ return s ? `••••${String(s).slice(-4)}` : null; }
 
 /* ===============================
-   RAW BODY (si no lo haces global)
+   JSON parser + rawBody para HMAC
    =============================== */
-router.use((req, _res, next) => {
-  if (typeof req.rawBody === 'string' || Buffer.isBuffer(req.rawBody)) return next();
-  if (req.readable && !req.body) {
-    let data = '';
-    req.setEncoding('utf8');
-    req.on('data', chunk => (data += chunk));
-    req.on('end',  () => { req.rawBody = data || ''; next(); });
-    req.on('error',() => { req.rawBody = ''; next(); });
-  } else {
-    try { req.rawBody = JSON.stringify(req.body || {}); } catch { req.rawBody = ''; }
-    next();
+router.use(express.json({
+  limit: '20kb',
+  verify: (req, _res, buf) => {
+    // Guarda rawBody para el cálculo HMAC
+    req.rawBody = buf ? buf.toString('utf8') : '';
   }
-});
+}));
 
 /* ===============================
    RATE LIMIT simple por IP (ventana 1 min)

@@ -44,6 +44,7 @@ function verifyHmac(req, res, next) {
   const apiKey = req.header('x-api-key')  || '';
   const ts     = req.header('x-entr-ts')  || req.header('x-e-ts')  || '';
   const sig    = req.header('x-entr-sig') || req.header('x-e-sig') || '';
+  const headerVariant = req.header('x-entr-sig') ? 'x-entr-*' : (req.header('x-e-sig') ? 'x-e-*' : 'none');
 
   if (!HMAC_REQUIRED && (!apiKey || !ts || !sig)) return next();
   if (!apiKey || !ts || !sig) return res.status(401).json({ ok:false, error:'unauthorized' });
@@ -54,8 +55,9 @@ function verifyHmac(req, res, next) {
   if (!Number.isFinite(tsNum)) return res.status(400).json({ ok:false, error:'bad timestamp' });
   if (Math.abs(Date.now() - tsNum) > MAX_SKEW_MS) return res.status(401).json({ ok:false, error:'expired' });
 
-  const rawBody  = req.rawBody?.toString('utf8') || JSON.stringify(req.body || {});
-  const bodyHash = crypto.createHash('sha256').update(rawBody, 'utf8').digest('hex');
+  const rawBody   = req.rawBody?.toString('utf8') || JSON.stringify(req.body || {});
+  const bodyHash  = crypto.createHash('sha256').update(rawBody, 'utf8').digest('hex');
+  const bodyHash10= bodyHash.slice(0,10);
 
   const candidates = [
     BASE + PATH_CANON,
@@ -63,16 +65,43 @@ function verifyHmac(req, res, next) {
     BASE + PATH_LEGACY
   ];
 
+  // Log base (auditable)
+  console.log('[CANJ HMAC BASE]', {
+    ts: String(ts),
+    path: req.path || '',
+    bodyHash10_raw: bodyHash10,
+    base10_raw: String(ts).slice(0,10),
+    sig10: String(sig).slice(0,10)
+  });
+
   let ok = false;
+  let matched = '';
+  let matchedPath = '';
   for (const p of candidates) {
     const base = `${ts}.POST.${p}.${bodyHash}`;
     for (const secret of SECRETS) {
       const exp = crypto.createHmac('sha256', secret).update(base, 'utf8').digest('hex');
-      if (safeEqHex(exp, sig)) { ok = true; break; }
+      if (safeEqHex(exp, sig)) {
+        ok = true;
+        matched = 'raw';
+        matchedPath = p;
+        break;
+      }
     }
     if (ok) break;
   }
-  if (!ok) return res.status(401).json({ ok:false, error:'unauthorized' });
+if (!ok) {
+    console.warn('[CANJ HMAC DENY]', { ts: String(ts), headerVariant, pathTried: candidates });
+    return res.status(401).json({ ok:false, error:'unauthorized' });
+  }
+  // Log éxito (compacto)
+  console.log('[CANJ HMAC OK]', {
+    ts: String(ts),
+    sig10: String(sig).slice(0,10),
+    matched,
+    headerVariant,
+    path: matchedPath
+  });
   next();
 }
 

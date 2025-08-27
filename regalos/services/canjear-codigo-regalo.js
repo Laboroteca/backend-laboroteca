@@ -168,7 +168,7 @@ module.exports = async function canjearCodigoRegalo({
 
             await sheets.spreadsheets.values.update({
               spreadsheetId,
-              range: `E${found.row1}`,
+              range: `F${found.row1}`,
               valueInputOption: 'USER_ENTERED',
               requestBody: { values: [['SÍ']] }
             });

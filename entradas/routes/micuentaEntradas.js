@@ -29,17 +29,16 @@ try {
   bucket = storage.bucket('laboroteca-facturas');
 } catch (e) {
   console.error('❌ Error cargando credenciales GCS:', e.message || e);
-  try {
-    await alertAdmin({
-      area: 'micuenta.gcs.creds',
-      email: '-',
-      err: e,
-      meta: {
-        hasEnv: !!process.env.GCP_CREDENTIALS_BASE64,
-        b64len: (process.env.GCP_CREDENTIALS_BASE64 || '').length
-      }
-    });
-  } catch (_) {}
+  // No usar await en nivel superior: fire-and-forget
+  alertAdmin({
+    area: 'micuenta.gcs.creds',
+    email: '-',
+    err: e,
+    meta: {
+      hasEnv: !!process.env.GCP_CREDENTIALS_BASE64,
+      b64len: (process.env.GCP_CREDENTIALS_BASE64 || '').length
+    }
+  }).catch(() => {});
   // bucket queda undefined, pero los endpoints fallarán controlados
 }
 

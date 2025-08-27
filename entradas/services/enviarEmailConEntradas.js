@@ -1,5 +1,6 @@
 // 📂 /entradas/services/enviarEmailConEntradas.js
 const { enviarEmailPersonalizado } = require('../../services/email');
+const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 
 /** Carga segura de la política RGPD usada en los emails de compra (si existe) */
 function getPoliticaHTML() {
@@ -225,13 +226,32 @@ ${politicaTEXT || ''}`;
   }
 
   // Envío
-  await enviarEmailPersonalizado({
-    to: email,
-    subject: finalSubject,
-    html: html || htmlPorDefecto,
-    text: textPorDefecto,
-    attachments
-  });
+  try {
+    await enviarEmailPersonalizado({
+      to: email,
+      subject: finalSubject,
+      html: html || htmlPorDefecto,
+      text: textPorDefecto,
+      attachments
+    });
+  } catch (e) {
+    // Aviso centralizado si falla el envío (deduplicado por alertAdminProxy)
+    try {
+      await alertAdmin({
+        area: 'email.entradas.enviar',
+        email,
+        err: e,
+        meta: {
+          modo,
+          descripcionProducto,
+          numEntradas,
+          hasFactura: !!facturaAdjunta
+        }
+      });
+    } catch (_) {}
+    throw e; // mantener comportamiento: propagar al caller
+  }
+
 
   console.log(`📧 Email (${modo}) con ${numEntradas} entrada(s) enviado a ${email}`);
 }

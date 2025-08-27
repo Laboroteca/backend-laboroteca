@@ -65,13 +65,18 @@ async function getSheets() {
   return google.sheets({ version: 'v4', auth: authClient });
 }
 
-// Buscar código (columna C) en rango A:E
-async function findRowByCode({ sheets, spreadsheetId, range = 'A:E', codigo }) {
+// ✅ Buscar código de forma robusta en rango A:F priorizando D (3), luego C (2) y E (4)
+async function findRowByCode({ sheets, spreadsheetId, range = 'A:F', codigo }) {
   const read = await sheets.spreadsheets.values.get({ spreadsheetId, range });
   const filas = read.data.values || [];
-  for (let i = 1; i < filas.length; i++) {
-    const c = String(filas[i]?.[2] || '').trim().toUpperCase();
-    if (c === codigo) return { row1: i + 1, row0: i };
+  const targets = [3, 2, 4]; // D, C, E
+
+  for (let i = 1; i < filas.length; i++) { // i=0 suele ser cabecera
+    const row = filas[i] || [];
+    for (const col of targets) {
+      const c = String(row[col] || '').trim().toUpperCase();
+      if (c === codigo) return { row1: i + 1, row0: i, matchedCol: col };
+    }
   }
   return null;
 }
@@ -166,12 +171,14 @@ module.exports = async function canjearCodigoRegalo({
             const found = await findRowByCode({ sheets, spreadsheetId, codigo: codigoNorm });
             if (!found) continue;
 
+            // ⬇️⬇️ ÚNICO CAMBIO EFECTIVO DE ESCRITURA: F (no E)
             await sheets.spreadsheets.values.update({
               spreadsheetId,
               range: `F${found.row1}`,
               valueInputOption: 'USER_ENTERED',
               requestBody: { values: [['SÍ']] }
             });
+            console.log(`[CANJ PRE] Marcado F${found.row1} → "SÍ" en hoja ${spreadsheetId} (colMatch=${found.matchedCol})`);
             break;
           }
         } catch (e2) { W(reqId, 'No se pudo marcar PRE en hoja (se continúa)', { msg: e2?.message }); }

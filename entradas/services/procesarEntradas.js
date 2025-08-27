@@ -1,6 +1,4 @@
 // entradas/services/procesarEntradas.js
-const path = require('path');
-const fs = require('fs').promises;
 const dayjs = require('dayjs');
 
 const { generarCodigoEntrada, normalizar } = require('../utils/codigos');
@@ -9,18 +7,20 @@ const { subirEntrada } = require('../utils/gcsEntradas');
 const { guardarEntradaEnSheet } = require('../utils/sheetsEntradas');
 const { enviarEmailConEntradas } = require('./enviarEmailConEntradas');
 const { registrarEntradaFirestore } = require('./registrarEntradaFirestore');
+const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 
 module.exports = async function procesarEntradas({ session, datosCliente, pdfBuffer = null }) {
   const emailComprador = datosCliente.email;
 
   // ⚙️ Datos del evento (preferimos descripcionProducto para carpeta/etiquetas)
-  const nombreActuacion = session.metadata.nombreProducto || 'Evento Laboroteca';
-  const descripcionProd = (session.metadata.descripcionProducto || nombreActuacion).trim();
-  const fechaActuacion  = session.metadata.fechaActuacion || '';
-  const imagenFondo     = session.metadata.imagenEvento || null;
-  const formularioId    = session.metadata.formularioId;
-  const total           = parseInt(session.metadata.totalAsistentes || 0, 10);
-  const direccionEvento = session.metadata.direccionEvento || '';
+  const md = session?.metadata || {};
+  const nombreActuacion = md.nombreProducto || 'Evento Laboroteca';
+  const descripcionProd = (md.descripcionProducto || nombreActuacion).trim();
+  const fechaActuacion  = md.fechaActuacion || '';
+  const imagenFondo     = md.imagenEvento || null;
+  const formularioId    = md.formularioId;
+  const total           = parseInt(md.totalAsistentes || 0, 10);
+  const direccionEvento = md.direccionEvento || '';
 
   if (!formularioId) throw new Error('Falta el formularioId en metadata');
   if (!total || total <= 0) throw new Error('Falta totalAsistentes válido');
@@ -55,6 +55,7 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
 
   // 2) Enviar SIEMPRE email al comprador con los PDFs (este es el hito incondicional)
   try {
+    // 1º intento: con factura si está disponible
     await enviarEmailConEntradas({
       email: emailComprador,
       nombre: datosCliente.nombre,
@@ -64,30 +65,62 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
       facturaAdjunta: pdfBuffer || null
     });
   } catch (e) {
-    console.error('❌ Falló el envío con factura, reenviando solo entradas...', e.message || e);
-    await enviarEmailConEntradas({
-      email: emailComprador,
-      nombre: datosCliente.nombre,
-      entradas: archivosPDF,
-      descripcionProducto: descripcionProd,
-      importe: datosCliente.importe,
-      facturaAdjunta: null
-    });
-
-    // Avisar admin del fallo de factura
+    console.error('❌ Falló el envío con factura (o sin ella si no había):', e?.message || e);
+    // Aviso admin del fallo del 1º intento
     try {
-      const { enviarEmailPersonalizado } = require('../../services/email');
-      await enviarEmailPersonalizado({
-        to: 'laboroteca@gmail.com',
-        subject: '⚠️ Fallo al adjuntar factura en venta de entradas',
-        text: `El comprador ${emailComprador} ha pagado entradas pero la factura no se adjuntó.\nEvento: ${nombreActuacion} · ${descripcionProd}\nStripe session: ${session?.id || '-'}\n\nError: ${e.message || e}`,
-        html: `<p><strong>El comprador ${emailComprador} ha pagado entradas pero la factura no se adjuntó.</strong></p>
-              <p>Evento: ${nombreActuacion} · ${descripcionProd}</p>
-              <p>Stripe session: ${session?.id || '-'}</p>
-              <p>Error: ${e.message || e}</p>`
+      await alertAdmin({
+        area: 'entradas.procesar.email.factura',
+        email: emailComprador,
+        err: e,
+        meta: {
+          sessionId: session?.id || '-',
+          totalAsistentes: parseInt(md.totalAsistentes || 0, 10) || 0,
+          descripcionProducto: descripcionProd,
+          hadFacturaAdjunta: !!pdfBuffer
+        }
       });
-    } catch (err) {
-      console.error('⚠️ No se pudo avisar al admin del fallo de factura:', err.message || err);
+    } catch (_) {}
+    // 2º intento: reenviar sin factura
+    try {
+      await enviarEmailConEntradas({
+        email: emailComprador,
+        nombre: datosCliente.nombre,
+        entradas: archivosPDF,
+        descripcionProducto: descripcionProd,
+        importe: datosCliente.importe,
+        facturaAdjunta: null
+      });
+    } catch (e2) {
+      console.error('❌ También falló el reenvío sin factura:', e2?.message || e2);
+      try {
+        await alertAdmin({
+          area: 'entradas.procesar.email.reintento',
+          email: emailComprador,
+          err: e2,
+          meta: {
+            sessionId: session?.id || '-',
+            descripcionProducto: descripcionProd,
+            nota: 'Fallo en segundo intento de envío (sin factura)'
+          }
+        });
+      } catch (_) {}
+    }
+    // Email informativo al admin SOLO si realmente había factura prevista
+    if (pdfBuffer) {
+      try {
+        const { enviarEmailPersonalizado } = require('../../services/email');
+        await enviarEmailPersonalizado({
+          to: 'laboroteca@gmail.com',
+          subject: '⚠️ Fallo al adjuntar factura en venta de entradas',
+          text: `El comprador ${emailComprador} ha pagado entradas pero la factura no se adjuntó.\nEvento: ${nombreActuacion} · ${descripcionProd}\nStripe session: ${session?.id || '-'}\n\nError: ${e.message || e}`,
+          html: `<p><strong>El comprador ${emailComprador} ha pagado entradas pero la factura no se adjuntó.</strong></p>
+                <p>Evento: ${nombreActuacion} · ${descripcionProd}</p>
+                <p>Stripe session: ${session?.id || '-'}</p>
+                <p>Error: ${e.message || e}</p>`
+        });
+      } catch (err) {
+        console.error('⚠️ No se pudo avisar al admin del fallo de factura:', err?.message || err);
+      }
     }
   }
 
@@ -102,6 +135,14 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
     sheetId = obtenerSheetIdPorFormulario(formularioId);
   } catch (e) {
     console.warn('🟨 Sin sheetId para formularioId', formularioId, e?.message || e);
+    try {
+      await alertAdmin({
+        area: 'entradas.procesar.sheets_cfg',
+        email: emailComprador,
+        err: e,
+        meta: { formularioId }
+      });
+    } catch (_) {}
     errores.push({
       paso: 'SHEETS_CFG',
       detalle: `formularioId=${formularioId}`,
@@ -119,6 +160,14 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
       await subirEntrada(nombreArchivo, buf);
     } catch (e) {
       console.error('❌ GCS:', e.message || e);
+      try {
+        await alertAdmin({
+          area: 'entradas.procesar.gcs',
+          email: emailComprador,
+          err: e,
+          meta: { codigo, carpeta: carpetaDescripcion }
+        });
+      } catch (_) {}
       errores.push({
         paso: 'GCS',
         codigo,
@@ -140,6 +189,14 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
         });
       } catch (e) {
         console.error('❌ Sheets:', e.message || e);
+        try {
+          await alertAdmin({
+            area: 'entradas.procesar.sheets',
+            email: emailComprador,
+            err: e,
+            meta: { codigo, sheetId, fecha: fechaGeneracion, descripcionProducto: descripcionProd }
+          });
+        } catch (_) {}
         errores.push({
           paso: 'SHEETS',
           codigo,
@@ -163,6 +220,14 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
       });
     } catch (e) {
       console.error('❌ Firestore:', e.message || e);
+      try {
+        await alertAdmin({
+          area: 'entradas.procesar.firestore',
+          email: emailComprador,
+          err: e,
+          meta: { codigo, slugEvento, descripcionProducto: descripcionProd }
+        });
+      } catch (_) {}
       errores.push({
         paso: 'FIRESTORE',
         codigo,
@@ -241,6 +306,20 @@ ${textoErrores}
         html,
         text
       });
+      // Aviso breve por proxy para tener traza en adminAlerts (dedupe)
+      try {
+        await alertAdmin({
+          area: 'entradas.procesar.resumen',
+          email: emailComprador,
+          err: new Error('Fallos post-email en generar/registrar entradas'),
+          meta: {
+            formularioId,
+            sessionId: session?.id || '-',
+            codigos,
+            motivos: motivosUnicos
+          }
+        });
+      } catch (_) {}
     } catch (e) {
       console.error('⚠️ No se pudo avisar al admin:', e.message || e);
     }

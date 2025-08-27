@@ -9,12 +9,26 @@ const { Storage } = require('@google-cloud/storage');
 const admin = require('../../firebase');
 const firestore = admin.firestore();
 const { google } = require('googleapis');
+const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 
-const storage = new Storage({
-  credentials: JSON.parse(
-    Buffer.from(process.env.GCP_CREDENTIALS_BASE64, 'base64').toString('utf8')
-  ),
-});
+// Init GCS seguro (sin await top-level). Si falla, avisamos y usamos fallback ADC.
+let storage;
+try {
+  const credsJson = Buffer.from(process.env.GCP_CREDENTIALS_BASE64 || '', 'base64').toString('utf8');
+  const creds = JSON.parse(credsJson);
+  storage = new Storage({ credentials: creds });
+} catch (e) {
+  console.error('❌ GCS credentials error:', e?.message || e);
+  // Fire-and-forget (sin await top-level)
+  alertAdmin({
+    area: 'entradas.generar.gcs.creds',
+    email: '-',
+    err: e,
+    meta: { hasEnv: !!process.env.GCP_CREDENTIALS_BASE64 }
+  }).catch(() => {});
+  // Fallback: intenta ADC (puede funcionar en GCP)
+  storage = new Storage();
+}
 
 // ───────────────────────── Helpers ─────────────────────────
 function slugify(s) {
@@ -74,13 +88,27 @@ async function generarEntradas({
     console.warn('🟨 Sin spreadsheetId: se omite registro en Sheets para', idFormulario);
   }
 
-  const auth = new google.auth.GoogleAuth({
-    credentials: JSON.parse(
-      Buffer.from(process.env.GCP_CREDENTIALS_BASE64, 'base64').toString('utf8')
-    ),
-    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-  });
-  const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
+  // Auth Sheets con alerta si falla
+  let sheets = null;
+  try {
+    const auth = new google.auth.GoogleAuth({
+      credentials: JSON.parse(
+        Buffer.from(process.env.GCP_CREDENTIALS_BASE64, 'base64').toString('utf8')
+      ),
+      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    });
+    sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
+  } catch (e) {
+    console.error('❌ Sheets auth error:', e?.message || e);
+    try {
+      await alertAdmin({
+        area: 'entradas.generar.sheetsAuth',
+        email,
+        err: e,
+        meta: { idFormulario, spreadsheetId }
+      });
+    } catch (_) {}
+  }
 
   const entradas = [];
   const errores = [];
@@ -132,6 +160,15 @@ async function generarEntradas({
       console.log(`✅ Entrada subida a GCS: ${nombreArchivo}`);
     } catch (err) {
       console.error(`❌ Error GCS ${codigo}:`, err.message);
+      // Aviso admin: fallo al subir PDF a GCS
+      try {
+        await alertAdmin({
+          area: 'entradas.generar.gcs',
+          email,
+          err,
+          meta: { codigo, nombreArchivo, carpetaEvento, idFormulario, descripcionProducto }
+        });
+      } catch (_) {}
       errores.push({
         paso: 'GCS',
         codigo,
@@ -141,7 +178,7 @@ async function generarEntradas({
     }
 
     // ───────── Registro en Google Sheets (opcional) ─────────
-    if (spreadsheetId) {
+    if (spreadsheetId && sheets) {
       try {
         await sheets.spreadsheets.values.append({
           spreadsheetId,
@@ -154,6 +191,22 @@ async function generarEntradas({
         });
       } catch (err) {
         console.error(`❌ Error Sheets ${codigo}:`, err.message);
+        // Aviso admin: fallo al registrar en Google Sheets
+        try {
+          await alertAdmin({
+            area: 'entradas.generar.sheets',
+            email,
+            err,
+            meta: {
+              codigo,
+              spreadsheetId,
+              fila: i + 1,
+              fechaVenta,
+              descripcionProducto,
+              nombreCompleto
+            }
+          });
+        } catch (_) {}
         errores.push({
           paso: 'SHEETS',
           codigo,
@@ -161,6 +214,14 @@ async function generarEntradas({
           motivo: 'No se ha registrado la venta en Google Sheets',
         });
       }
+    } else if (spreadsheetId && !sheets) {
+      // Si había sheetId pero no pudimos inicializar Sheets, anota error “amigable”
+      errores.push({
+        paso: 'SHEETS',
+        codigo,
+        detalle: 'No se pudo inicializar Google Sheets',
+        motivo: 'Auth Sheets fallida'
+      });
     }
 
     // ───────── Registro en Firestore (best-effort) ─────────
@@ -203,6 +264,20 @@ async function generarEntradas({
       );
     } catch (err) {
       console.error(`❌ Error guardando en Firestore entrada ${codigo}:`, err.message);
+      // Aviso admin: fallo al registrar en Firestore
+      try {
+        await alertAdmin({
+          area: 'entradas.generar.firestore',
+          email,
+          err,
+          meta: {
+            codigo,
+            colecciones: ['entradas', 'entradasCompradas'],
+            slugEvento,
+            descripcionProducto
+          }
+        });
+      } catch (_) {}
       errores.push({
         paso: 'FIRESTORE',
         codigo,

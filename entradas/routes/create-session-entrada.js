@@ -2,6 +2,7 @@ const express = require('express');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const { emailRegistradoEnWordPress } = require('../utils/wordpress');
 const PRODUCTOS = require('../../utils/productos');
+const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 
 const router = express.Router();
 const URL_IMAGEN_DEFAULT = 'https://www.laboroteca.es/wp-content/uploads/2025/08/logo-entradas-laboroteca-scaled.webp';
@@ -35,6 +36,14 @@ router.post('/crear-sesion-entrada', async (req, res) => {
     const totalAsistentes = parseInt(String(datos.totalAsistentes || '').trim());
     if (isNaN(totalAsistentes) || totalAsistentes < 1) {
       console.warn('⚠️ totalAsistentes inválido:', datos.totalAsistentes);
+      try {
+        await alertAdmin({
+          area: 'entradas.checkout.validacion',
+          email,
+          err: new Error('totalAsistentes inválido'),
+          meta: { totalAsistentes: datos.totalAsistentes, tipoProducto, nombreProducto, formularioId }
+        });
+      } catch (_) {}
       return res.status(400).json({ error: 'Número de asistentes inválido.' });
     }
     const precioTotal = totalAsistentes * 1500;
@@ -53,6 +62,14 @@ router.post('/crear-sesion-entrada', async (req, res) => {
       !email || !nombre || !nombreProducto || !tipoProducto || !formularioId || !fechaActuacion
     ) {
       console.warn('⚠️ Faltan datos obligatorios.');
+      try {
+        await alertAdmin({
+          area: 'entradas.checkout.validacion',
+          email,
+          err: new Error('Faltan datos obligatorios'),
+          meta: { nombre, nombreProducto, tipoProducto, formularioId, fechaActuacion, campos: Object.keys(datos || {}) }
+        });
+      } catch (_) {}
       return res.status(400).json({ error: 'Faltan datos obligatorios para crear la sesión.' });
     }
 
@@ -60,6 +77,14 @@ router.post('/crear-sesion-entrada', async (req, res) => {
     const registrado = await emailRegistradoEnWordPress(email);
     if (!registrado) {
       console.warn('🚫 Email no registrado en WordPress:', email);
+      try {
+        await alertAdmin({
+          area: 'entradas.checkout.wp',
+          email,
+          err: new Error('Email no registrado en WordPress'),
+          meta: { formularioId, tipoProducto, nombreProducto }
+        });
+      } catch (_) {}
       return res.status(403).json({ error: 'El email no está registrado como usuario.' });
     }
 
@@ -112,7 +137,15 @@ router.post('/crear-sesion-entrada', async (req, res) => {
 
     // ✅ Validación final
     if (!session?.url) {
-      console.error('❌ Stripe no devolvió una URL válida');
+      console.error('❌ Stripe no devolvió una URL válida');      
+      try {
+        await alertAdmin({
+          area: 'entradas.checkout.stripe',
+          email,
+          err: new Error('Stripe no devolvió URL'),
+          meta: { totalAsistentes, precioTotal, tipoProducto, nombreProducto, formularioId }
+        });
+      } catch (_) {}
       return res.status(500).json({ error: 'Stripe no devolvió una URL válida.' });
     }
 
@@ -121,6 +154,18 @@ router.post('/crear-sesion-entrada', async (req, res) => {
 
   } catch (err) {
     console.error('❌ Error creando sesión de entrada:', err.message || err);
+    try {
+      await alertAdmin({
+        area: 'entradas.checkout.route',
+        email: String(req?.body?.email || '-').toLowerCase(),
+        err,
+        meta: {
+          tipoProducto: String(req?.body?.tipoProducto || ''),
+          nombreProducto: String(req?.body?.nombreProducto || ''),
+          formularioId: String(req?.body?.formularioId || '')
+        }
+      });
+    } catch (_) {}
     return res.status(500).json({ error: err.message || 'Error interno al crear la sesión de entrada.' });
   }
 });

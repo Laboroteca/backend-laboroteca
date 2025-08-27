@@ -17,6 +17,7 @@ const { registrarEntradaFirestore } = require('../services/registrarEntradaFires
 
 const { google } = require('googleapis');
 const { auth } = require('../google/sheetsAuth');
+const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 
 const router = express.Router();
 
@@ -184,6 +185,18 @@ router.post('/crear-entrada-regalo', async (req, res) => {
   const authRes = verifyAuth(req);
   if (!authRes.ok) {
     console.warn('⛔️ /entradas/crear-entrada-regalo auth failed:', authRes.msg);
+    try {
+      await alertAdmin({
+        area: 'entradas.regalo.auth',
+        email: String(req.body?.beneficiarioEmail || '-').toLowerCase(),
+        err: new Error(authRes.msg),
+        meta: {
+          ip: req.ip,
+          path: req.originalUrl || '',
+          headerVariant: req.headers['x-e-ts'] ? 'x-e-*' : (req.headers['x-entr-ts'] ? 'x-entr-*' : 'none')
+        }
+      });
+    } catch (_) {}
     return res.status(authRes.code).json({ ok: false, error: authRes.msg });
   }
 
@@ -194,6 +207,14 @@ router.post('/crear-entrada-regalo', async (req, res) => {
     const formularioId       = String(req.body?.formularioId || '22').trim();
 
     if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      try {
+        await alertAdmin({
+          area: 'entradas.regalo.validacion',
+          email: String(req.body?.beneficiarioEmail || '-').toLowerCase(),
+          err: new Error('Email del beneficiario inválido'),
+          meta: { formularioId, bodyKeys: Object.keys(req.body || {}) }
+        });
+      } catch (_) {}
       return res.status(400).json({ ok: false, error: 'Email del beneficiario inválido' });
     }
 
@@ -220,6 +241,14 @@ router.post('/crear-entrada-regalo', async (req, res) => {
     ).trim();
 
     if (!descripcionProducto) {
+      try {
+        await alertAdmin({
+          area: 'entradas.regalo.validacion',
+          email,
+          err: new Error('Falta descripcionProducto'),
+          meta: { formularioId, nombreProducto, envCfg: true }
+        });
+      } catch (_) {}
       return res.status(400).json({ ok: false, error: 'Falta descripcionProducto (hidden o EVENT_{ID}_DESCRIPCION)' });
     }
 
@@ -246,7 +275,17 @@ router.post('/crear-entrada-regalo', async (req, res) => {
       buffers.push({ buffer: pdf });
       codigos.push(codigo);
 
-      try { await subirEntrada(`entradas/${carpeta}/${codigo}.pdf`, pdf); } catch {}
+      try { await subirEntrada(`entradas/${carpeta}/${codigo}.pdf`, pdf); }
+      catch (e) {
+        try {
+          await alertAdmin({
+            area: 'entradas.regalo.gcs',
+            email,
+            err: e,
+            meta: { codigo, carpeta, descripcionProducto, nombreProducto, formularioId, accion: 'subirEntrada' }
+          });
+        } catch (_) {}
+      }
 
       try {
         await appendRegaloRow({
@@ -256,7 +295,16 @@ router.post('/crear-entrada-regalo', async (req, res) => {
           comprador: email,
           codigo
         });
-      } catch {}
+      } catch (e) {
+        try {
+          await alertAdmin({
+            area: 'entradas.regalo.sheets',
+            email,
+            err: e,
+            meta: { codigo, sheetId, formularioId, descripcionProducto, fechaCompra, accion: 'appendRegaloRow' }
+          });
+        } catch (_) {}
+      }
 
       try {
         await registrarEntradaFirestore({
@@ -269,25 +317,58 @@ router.post('/crear-entrada-regalo', async (req, res) => {
           direccionEvento,
           fechaActuacion
         });
-      } catch {}
+      } catch (e) {
+        try {
+          await alertAdmin({
+            area: 'entradas.regalo.firestore',
+            email,
+            err: e,
+            meta: { codigo, formularioId, slug: normalizar(nombreProducto || descripcionProducto), accion: 'registrarEntradaFirestore' }
+          });
+        } catch (_) {}
+      }
     }
 
-    await enviarEmailConEntradas({
-      email,
-      nombre: beneficiarioNombre,
-      entradas: buffers,
-      descripcionProducto,
-      importe: 0,
-      facturaAdjunta: null,
-      modo: 'regalo',
-      fecha: fechaActuacion,
-      direccion: direccionEvento
-    });
+    try {
+      await enviarEmailConEntradas({
+        email,
+        nombre: beneficiarioNombre,
+        entradas: buffers,
+        descripcionProducto,
+        importe: 0,
+        facturaAdjunta: null,
+        modo: 'regalo',
+        fecha: fechaActuacion,
+        direccion: direccionEvento
+      });
+    } catch (e) {
+      try {
+        await alertAdmin({
+          area: 'entradas.regalo.email',
+          email,
+          err: e,
+          meta: { enviados: buffers.length, codigos, formularioId, descripcionProducto, accion: 'enviarEmailConEntradas' }
+        });
+      } catch (_) {}
+      throw e; // mantener comportamiento original (propaga al catch general)
+    }
 
     console.log(`✅ Entradas REGALO generadas y enviadas a ${email} (${buffers.length})`);
     res.status(201).json({ ok: true, enviados: buffers.length, codigos, sheetId, formularioId });
   } catch (err) {
     console.error('❌ /entradas/crear-entrada-regalo:', err?.message || err);
+    try {
+      await alertAdmin({
+        area: 'entradas.regalo.route',
+        email: String(req.body?.beneficiarioEmail || '-').toLowerCase(),
+        err: err,
+        meta: {
+          formularioId: String(req.body?.formularioId || '22').trim(),
+          descripcionProducto: String(req.body?.descripcionProducto || '').trim(),
+          codigos: typeof codigos !== 'undefined' ? codigos : undefined
+        }
+      });
+    } catch (_) {}
     res.status(500).json({ ok: false, error: 'Error interno' });
   }
 });

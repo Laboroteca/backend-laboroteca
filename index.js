@@ -130,6 +130,24 @@ const entradasLimiter = rateLimit({
   }
 });
 
+// 🔒 Rate limit específico para REENVÍO de entradas (más controlado)
+// Ajustable por entorno: REENVIO_RL_WINDOW_MS y REENVIO_RL_MAX
+const reenvioLimiter = rateLimit({
+  windowMs: Number(process.env.REENVIO_RL_WINDOW_MS || 10 * 60 * 1000), // 10 min
+  max: Number(process.env.REENVIO_RL_MAX || 12), // por IP en ventana
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Demasiadas solicitudes de reenvío. Inténtalo más tarde.' }
+});
+
+// 🔒 Rate limit para acciones de cuenta (evitar abuso)
+// Ajustable por entorno: ACCOUNT_RL_WINDOW_MS y ACCOUNT_RL_MAX
+const accountLimiter = rateLimit({
+  windowMs: Number(process.env.ACCOUNT_RL_WINDOW_MS || 60 * 60 * 1000), // 1 h
+  max: Number(process.env.ACCOUNT_RL_MAX || 10), // por IP en ventana
+  standardHeaders: true,
+  legacyHeaders: false
+});
 // NUEVO: ruta para registrar consentimiento (vía /api/…)
 app.use('/api', registrarConsentimiento);
 console.log('📌 Ruta de consentimientos montada en /api/registrar-consentimiento');
@@ -143,8 +161,10 @@ const canjearRouter = require('./regalos/routes/canjear-codigo');
 // el router YA expone /regalos/canjear-codigo y /regalos/canjear-codigo-regalo
 app.use('/regalos', canjearLimiter, canjearRouter);
 
-app.use('/regalos', require('./regalos/routes/crear-codigo-regalo'));
+app.use('/regalos', canjearLimiter, require('./regalos/routes/crear-codigo-regalo'));
 
+// ⚠️ Aplica ANTES de montar routers que sirvan /entradas/reenviar
+app.use('/entradas/reenviar', reenvioLimiter);
 
 app.use('/entradas/crear', entradasLimiter, require('./entradas/routes/crearEntrada'));
 app.use('/entradas/sesion', entradasLimiter, require('./entradas/routes/create-session-entrada'));
@@ -371,7 +391,7 @@ app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
   }
 });
 
-app.post('/activar-membresia-club', async (req, res) => {
+app.post('/activar-membresia-club', accountLimiter, async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'Falta el email' });
 
@@ -396,7 +416,7 @@ app.post('/activar-membresia-club', async (req, res) => {
 
 app.options('/cancelar-suscripcion-club', cors(corsOptions));
 
-app.post('/cancelar-suscripcion-club', cors(corsOptions), async (req, res) => {
+app.post('/cancelar-suscripcion-club', cors(corsOptions), accountLimiter, async (req, res) => {
   const { email, password } = req.body;
 
   if (!email || !password) {
@@ -473,7 +493,7 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), async (req, res) => {
   }
 });
 
-app.post('/eliminar-cuenta', async (req, res) => {
+app.post('/eliminar-cuenta', accountLimiter, async (req, res) => {
   const { email, password, token } = req.body;
   const tokenEsperado = 'eliminarCuenta@2025!';
 
@@ -508,7 +528,7 @@ app.post('/eliminar-cuenta', async (req, res) => {
   }
 });
 
-app.post('/crear-portal-cliente', async (req, res) => {
+app.post('/crear-portal-cliente', accountLimiter, async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'Falta el email' });
 

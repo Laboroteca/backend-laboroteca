@@ -11,6 +11,7 @@ const admin     = require('../../firebase');
 const firestore = admin.firestore();
 
 const { marcarEntradaComoUsada, SHEETS_EVENTOS } = require('../utils/sheetsEntradas');
+const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 
 const router = express.Router();
 
@@ -166,6 +167,19 @@ const paths = ['/validar-entrada','/entradas/validar-entrada'];
 router.post(paths, async (req, res) => {
   const auth = verifyAuth(req);
   if (!auth.ok) {
+    try {
+      await alertAdmin({
+        area: 'validador.auth',
+        email: String(req.body?.validadorEmail || '-').toLowerCase(),
+        err: new Error(auth.msg || 'Unauthorized'),
+        meta: {
+          code: auth.code || 401,
+          ip: clientIp(req),
+          path: req.originalUrl || '',
+          ct: String(req.headers['content-type'] || ''),
+        }
+      });
+    } catch (_) {}
     return res.status(auth.code || 401).json({ error: auth.msg || 'Unauthorized', errorCode: 'unauthorized' });
   }
 
@@ -213,6 +227,14 @@ router.post(paths, async (req, res) => {
 
     if (!resultado || !matchedSlug) {
       console.warn('[VAL]', 'NOT_FOUND', { codigo: codigoLimpio, tried: candidates });
+      try {
+        await alertAdmin({
+          area: 'validador.not_found',
+          email: String(req.body?.validadorEmail || '-').toLowerCase(),
+          err: new Error('Código no encontrado'),
+          meta: { codigo: codigoLimpio, tried: candidates, lastError }
+        });
+      } catch (_) {}
       return res.status(404).json({ error: 'Código no encontrado.', errorCode: 'not_found' });
     }
 
@@ -240,6 +262,14 @@ router.post(paths, async (req, res) => {
         return res.status(409).json({ error: 'Entrada ya validada.', errorCode: 'already_validated' });
       }
       console.error('[VAL]', 'FIRESTORE_ERROR', e?.message || e);
+      try {
+        await alertAdmin({
+          area: 'validador.firestore',
+          email: String(req.body?.validadorEmail || '-').toLowerCase(),
+          err: e,
+          meta: { codigo: codigoLimpio, slug: matchedSlug }
+        });
+      } catch (_) {}
       return res.status(500).json({ error: 'Error registrando validación.', errorCode: 'firestore_error' });
     }
 
@@ -248,6 +278,18 @@ router.post(paths, async (req, res) => {
 
   } catch (err) {
     console.error('[VAL]', 'INTERNAL_ERROR', err?.stack || err);
+    try {
+      await alertAdmin({
+        area: 'validador.route',
+        email: String(req.body?.validadorEmail || '-').toLowerCase(),
+        err: err,
+        meta: {
+          ip: clientIp(req),
+          path: req.originalUrl || '',
+          bodyKeys: Object.keys(req.body || {})
+        }
+      });
+    } catch (_) {}
     return res.status(500).json({ error: 'Error interno al validar entrada.', errorCode: 'internal' });
   }
 });

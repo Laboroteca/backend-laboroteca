@@ -8,24 +8,40 @@ const firestore = admin.firestore();
 const { Storage } = require('@google-cloud/storage');
 const { enviarEmailConEntradas } = require('../services/enviarEmailConEntradas');
 const crypto = require('crypto');
+const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 
 
 // ───────────────────────── Config seguridad (rate limit + firma)
-const RESEND_LIMIT_COUNT = Number(process.env.RESEND_LIMIT_COUNT || 3);      // máx. reenvíos por ventana
-const RESEND_LIMIT_WINDOW_MS = Number(process.env.RESEND_LIMIT_WINDOW_MS || (60 * 60 * 1000)); // 1h
+const RESEND_LIMIT_COUNT = Number(process.env.RESEND_LIMIT_COUNT || 3);                  // máx. reenvíos por ventana
+const RESEND_LIMIT_WINDOW_MS = Number(process.env.RESEND_LIMIT_WINDOW_MS || 60 * 60 * 1000); // 1h (prod); en dev puedes bajar
 const HMAC_SHARED_SECRET =
   process.env.LB_SHARED_SECRET ||
   process.env.VALIDADOR_ENTRADAS_TOKEN || '';
 const DEBUG_REENVIOS = process.env.DEBUG_REENVIOS === '1';
 
   
-// Bucket GCS
-const storage = new Storage({
-  credentials: JSON.parse(
-    Buffer.from(process.env.GCP_CREDENTIALS_BASE64 || '', 'base64').toString('utf8')
-  ),
-});
-const bucket = storage.bucket('laboroteca-facturas');
+// Bucket GCS (con alerta si credenciales mal formadas o ausentes)
+let storage, bucket;
+try {
+  const credsJson = Buffer.from(process.env.GCP_CREDENTIALS_BASE64 || '', 'base64').toString('utf8');
+  const creds = JSON.parse(credsJson);
+  storage = new Storage({ credentials: creds });
+  bucket = storage.bucket('laboroteca-facturas');
+} catch (e) {
+  console.error('❌ Error cargando credenciales GCS:', e.message || e);
+  try {
+    await alertAdmin({
+      area: 'micuenta.gcs.creds',
+      email: '-',
+      err: e,
+      meta: {
+        hasEnv: !!process.env.GCP_CREDENTIALS_BASE64,
+        b64len: (process.env.GCP_CREDENTIALS_BASE64 || '').length
+      }
+    });
+  } catch (_) {}
+  // bucket queda undefined, pero los endpoints fallarán controlados
+}
 
 // ───────────────────────── Utils
 function slugify(s) {
@@ -116,6 +132,13 @@ async function cargarEventosFuturos(email) {
 
 // ───────────────────────── Rate limit en memoria (usar Redis en multi instancia)
 const resendBuckets = new Map(); // key -> { count, resetAt }
+// limpieza simple cada 5 min (no crítico; en multi instancia usa Redis)
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of resendBuckets.entries()) {
+    if (!v || v.resetAt <= now) resendBuckets.delete(k);
+  }
+}, 5 * 60 * 1000).unref?.();
 
 /**
  * Controla cuota de reenvíos por clave.
@@ -150,6 +173,14 @@ router.get('/cuenta/entradas', async (req, res) => {
     res.json({ ok: true, items });
   } catch (e) {
     console.error('❌ GET /cuenta/entradas', e);
+    try {
+      await alertAdmin({
+        area: 'micuenta.entradas.list',
+        email: String(req.query?.email || '-').toLowerCase(),
+        err: e,
+        meta: {}
+      });
+    } catch (_) {}
     res.status(500).json({ error: 'Error listando entradas' });
   }
 });
@@ -176,6 +207,14 @@ router.get('/cuenta/entradas-lite', async (req, res) => {
     res.json({ ok: true, count, items, first: items[0] || null });
   } catch (e) {
     console.error('❌ GET /cuenta/entradas-lite', e);
+    try {
+      await alertAdmin({
+        area: 'micuenta.entradas.lite',
+        email: String(req.query?.email || '-').toLowerCase(),
+        err: e,
+        meta: {}
+      });
+    } catch (_) {}
     res.status(500).json({ error: 'Error listando entradas' });
   }
 });
@@ -232,12 +271,28 @@ router.post('/entradas/reenviar', async (req, res) => {
     // ── Verificación HMAC (prueba de propiedad desde WP)
     if (!HMAC_SHARED_SECRET) {
       console.warn('⚠️ HMAC_SHARED_SECRET no configurado (LB_SHARED_SECRET o VALIDADOR_ENTRADAS_TOKEN); bloqueando por seguridad.');
+      try {
+        await alertAdmin({
+          area: 'micuenta.reenvio.hmac',
+          email: comprador,
+          err: new Error('HMAC_SHARED_SECRET ausente'),
+          meta: { to, desc }
+        });
+      } catch (_) {}
       return res.status(401).json({ error: 'Firma requerida' });
     }
     const ts  = Number(body.ts || 0);
     const sig = String(body.sig || '');
 
     if (!ts || !sig) {
+      try {
+        await alertAdmin({
+          area: 'micuenta.reenvio.hmac',
+          email: comprador,
+          err: new Error('Faltan ts/sig'),
+          meta: { to, desc }
+        });
+      } catch (_) {}
       return res.status(401).json({ error: 'Firma requerida' });
     }
     // Ventana de 15 minutos
@@ -249,6 +304,14 @@ router.post('/entradas/reenviar', async (req, res) => {
         console.warn('[REENVIO DEBUG] Firma expirada', { now, ts, skew: Math.abs(now - ts) });
         return res.status(401).json({ error: 'Firma expirada', debug: { now, ts, skew: Math.abs(now - ts) } });
       }
+      try {
+        await alertAdmin({
+          area: 'micuenta.reenvio.hmac',
+          email: comprador,
+          err: new Error('Firma expirada'),
+          meta: { to, desc, skew: Math.abs(now - ts) }
+        });
+      } catch (_) {}
       return res.status(401).json({ error: 'Firma expirada' });
     }
 
@@ -282,15 +345,31 @@ router.post('/entradas/reenviar', async (req, res) => {
           debug: { base, sig, expected, compradorNorm, descNorm }
         });
       }
+      try {
+        await alertAdmin({
+          area: 'micuenta.reenvio.hmac',
+          email: comprador,
+          err: new Error('Firma inválida'),
+          meta: { to, desc }
+        });
+      } catch (_) {}
       return res.status(401).json({ error: 'Firma inválida' });
     }
 
 
-    // ── Rate limit (anti-spam) por (emailComprador, descripcion)
-    const quotaKey = `${compradorNorm}::${descNorm}`;
+// ── Rate limit (anti-spam) por (emailComprador, descripcion, destino)
+const quotaKey = `${compradorNorm}::${descNorm}::${to}`;
     const q = checkResendQuota(quotaKey);
     if (!q.ok) {
       const secs = Math.ceil((q.retryAt - Date.now()) / 1000);
+      try {
+        await alertAdmin({
+          area: 'micuenta.reenvio.ratelimit',
+          email: comprador,
+          err: new Error('Límite de reenvíos alcanzado'),
+          meta: { to, desc, retryInSec: secs }
+        });
+      } catch (_) {}
       return res.status(429).json({ error: `Límite de reenvíos alcanzado. Inténtalo en ${secs}s.` });
     }
 
@@ -322,12 +401,28 @@ router.post('/entradas/reenviar', async (req, res) => {
     q2.forEach(d => { const x = d.data(); if (x?.codigo) codigos.add(x.codigo); pickMeta(x); });
 
     if (codigos.size === 0) {
+      try {
+        await alertAdmin({
+          area: 'micuenta.reenvio.busqueda',
+          email: comprador,
+          err: new Error('Sin entradas para ese evento'),
+          meta: { to, desc }
+        });
+      } catch (_) {}
       return res.status(404).json({ error: 'No se han encontrado entradas para ese evento' });
     }
 
     // ── Descargar PDFs de GCS
     const buffers = await obtenerBuffersPdfsPorCodigos(desc, Array.from(codigos));
     if (buffers.length === 0) {
+      try {
+        await alertAdmin({
+          area: 'micuenta.reenvio.gcs',
+          email: comprador,
+          err: new Error('Sin PDFs en GCS para ese evento'),
+          meta: { to, desc, codigos: Array.from(codigos) }
+        });
+      } catch (_) {}
       return res.status(404).json({ error: 'No se han encontrado PDFs en GCS para ese evento' });
     }
 
@@ -337,17 +432,29 @@ router.post('/entradas/reenviar', async (req, res) => {
       : (comprador.split('@')[0] || '');
 
     // ── Enviar email con plantilla de reenvío
-    await enviarEmailConEntradas({
-      email: to,
-      nombre: nombreMostrar,
-      entradas: buffers,
-      descripcionProducto: desc,
-      importe: 0,      // opcional en reenvío (se mostraría como importe original si quisieras)
-      modo: 'reenvio',
-      fecha,
-      direccion
-      // subject/html opcionales
-    });
+    try {
+      await enviarEmailConEntradas({
+        email: to,
+        nombre: nombreMostrar,
+        entradas: buffers,
+        descripcionProducto: desc,
+        importe: 0,      // opcional en reenvío (se mostraría como importe original si quisieras)
+        modo: 'reenvio',
+        fecha,
+        direccion
+        // subject/html opcionales
+      });
+    } catch (e) {
+      try {
+        await alertAdmin({
+          area: 'micuenta.reenvio.email',
+          email: comprador,
+          err: e,
+          meta: { to, desc, adjuntos: buffers.length }
+        });
+      } catch (_) {}
+      return res.status(500).json({ error: 'No se pudo enviar el email de reenvío' });
+    }
 
     // ── Auditoría
     try {
@@ -368,6 +475,17 @@ router.post('/entradas/reenviar', async (req, res) => {
     res.json({ ok: true, reenviadas: buffers.length });
   } catch (e) {
     console.error('❌ POST /entradas/reenviar', e);
+    try {
+      await alertAdmin({
+        area: 'micuenta.reenvio.route',
+        email: String(req?.body?.emailComprador || '-').toLowerCase(),
+        err: e,
+        meta: {
+          to: String(req?.body?.emailDestino || ''),
+          desc: String(req?.body?.descripcionProducto || '')
+        }
+      });
+    } catch (_) {}
     res.status(500).json({ error: 'Error reenviando entradas' });
   }
 });
@@ -464,6 +582,14 @@ router.get('/entradas/disponibilidad', async (req, res) => {
     });
   } catch (e) {
     console.error('❌ GET /entradas/disponibilidad', e);
+    try {
+      await alertAdmin({
+        area: 'micuenta.disponibilidad.route',
+        email: '-',
+        err: e,
+        meta: { desc: String(req?.query?.descripcion || ''), formId: String(req?.query?.formId || '') }
+      });
+    } catch (_) {}
     return res.status(500).json({ error: 'Error calculando disponibilidad' });
   }
 });

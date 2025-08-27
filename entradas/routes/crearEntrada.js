@@ -7,7 +7,7 @@ const router = express.Router();
 
 const generarEntradas = require('../services/generarEntradas');
 const { enviarEmailConEntradas } = require('../services/enviarEmailConEntradas');
-const { alertAdmin } = require('../../utils/alertAdmin'); // avisos al admin
+const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy'); // avisos al admin (proxy seguro)
 
 /* ───────────────────── Seguridad / Flags ───────────────────── */
 const API_KEY        = (process.env.ENTRADAS_API_KEY || '').trim();          // p.ej. L4bo_Entradas_xxx
@@ -51,12 +51,15 @@ function mask(s) {
 let warnedConfigMissing = false;
 async function safeAlert(mensaje, extra = {}) {
   try {
+    // Adaptado a la firma real: { area, email, err, meta }
     await alertAdmin({
-      asunto: '⚠️ Entradas – Incidencia',
-      mensaje,
-      contexto: 'entradas/routes/crearEntrada.js',
-      severidad: 'CRITICO',
-      ...extra,
+      area: 'entradas.crear',
+      email: String(extra.email || '-').toLowerCase(),
+      err: new Error(String(mensaje)),
+      meta: {
+        contexto: 'entradas/routes/crearEntrada.js',
+        ...extra,
+      }
     });
   } catch { /* nunca romper el flujo por fallo de alertas */ }
 }
@@ -158,15 +161,35 @@ router.post('/', async (req, res) => {
     const provided = okBearerOrRaw(req.headers.authorization);
     if (REQUIRE_HMAC) {
       console.warn('[ENTR HMAC FAIL][REQUIRE_HMAC=1]', h.msg || 'legacy disabled');
+      // Aviso cuando se bloquea por HMAC obligatorio
+      safeAlert('❌ HMAC inválido con REQUIRE_HMAC=1 (bloqueado)', {
+        motivo: h.msg || 'bad hmac',
+        ip: clientIp(req),
+        ua: req.get('user-agent') || '',
+        path: expectedPath,
+      });
       return res.status(h.code || 401).json({ error: 'Unauthorized' });
     }
     if (!LEGACY_TOKEN || provided !== LEGACY_TOKEN) {
       console.warn('[ENTR SECURITY FAIL]', h.msg || 'legacy token mismatch');
+      // Aviso por token legacy inválido
+      safeAlert('⚠️ Intento con token legacy inválido', {
+        motivo: h.msg || 'legacy token mismatch',
+        ip: clientIp(req),
+        ua: req.get('user-agent') || '',
+        path: expectedPath,
+      });
       return res.status(h.code || 403).json({ error: 'Token inválido' });
     }
     const ip = clientIp(req);
     if (IP_ALLOW.length && !IP_ALLOW.includes(ip)) {
       console.warn('[ENTR LEGACY BLOCKED IP]', { ip, allow: IP_ALLOW });
+      // Aviso por IP bloqueada en modo legacy
+      safeAlert('⚠️ IP no permitida en modo legacy', {
+        ip,
+        allow: IP_ALLOW,
+        path: expectedPath,
+      });
       return res.status(401).json({ error: 'Unauthorized' });
     }
     // ✅ LOG IRREFUTABLE DE LEGACY OK
@@ -196,11 +219,13 @@ router.post('/', async (req, res) => {
   if (!email || !slugEvento || !fechaEvento || !descripcionProducto || !numEntradas) {
     console.warn('⚠️ Datos incompletos para crear entrada');
     // aviso ALTA (bloquea generación)
-    safeAlert(
-      `⚠️ Datos incompletos en /entradas/crear para ${email || '(sin email)'}: ` +
-      `{slugEvento:${!!slugEvento}, fechaEvento:${!!fechaEvento}, descripcionProducto:${!!descripcionProducto}, numEntradas:${!!numEntradas}}`,
-      { severidad: 'ALTA' }
-    );
+    safeAlert('⚠️ Datos incompletos en /entradas/crear', {
+      email,
+      slugEvento: !!slugEvento,
+      fechaEvento: !!fechaEvento,
+      descripcionProducto: !!descripcionProducto,
+      numEntradas: !!numEntradas,
+    });
     return res.status(400).json({ error: 'Faltan datos obligatorios' });
   }
 
@@ -239,8 +264,9 @@ router.post('/', async (req, res) => {
       });
     } catch (e) {
       console.error('❌ Error enviando email de entradas:', e.message || e);
-      await safeAlert(`❌ Fallo crítico enviando email de entradas a ${email} (${slugEvento}).`, {
-        severidad: 'CRITICO',
+      await safeAlert('❌ Fallo crítico enviando email de entradas', {
+        email,
+        slugEvento,
         detalle: e?.message || String(e),
       });
       return res.status(500).json({ error: 'No se pudo enviar el email con entradas.' });
@@ -259,15 +285,21 @@ router.post('/', async (req, res) => {
         console.error('⚠️ No se pudo avisar al admin (email personalizado):', e.message || e);
       }
       // alerta discreta adicional
-      safeAlert(`⚠️ Errores no críticos en generarEntradas para ${email}: ${JSON.stringify(errores)}`, { severidad: 'MEDIA' });
+      safeAlert('⚠️ Errores no críticos en generarEntradas', {
+        email,
+        slugEvento,
+        idFormulario,
+        errores,
+      });
     }
 
     console.log(`✅ Entradas generadas y enviadas a ${email} (${numEntradas})`);
     return res.status(200).json({ ok: true, mensaje: 'Entradas generadas y enviadas' });
   } catch (err) {
     console.error('❌ Error en /entradas/crear:', err.message || err);
-    await safeAlert(`❌ Error generando entradas para ${email} (${slugEvento}).`, {
-      severidad: 'CRITICO',
+    await safeAlert('❌ Error generando entradas', {
+      email,
+      slugEvento,
       detalle: err?.message || String(err),
     });
     return res.status(500).json({ error: 'Error generando entradas' });

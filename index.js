@@ -50,6 +50,7 @@ const registrarConsentimiento = require('./routes/registrar-consentimiento');
 const marketingConsent = require('./routes/marketing-consent');
 const marketingUnsubscribe = require('./routes/marketing-unsubscribe');
 const marketingSend = require('./routes/marketing-send');
+const marketingCron = require('./routes/marketing-cron');
 
 const app = express();
 app.set('trust proxy', 1);

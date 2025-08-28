@@ -47,6 +47,9 @@ const desactivarMembresiaClub = require('./services/desactivarMembresiaClub');
 const validarEntrada = require('./entradas/routes/validarEntrada');
 const crearCodigoRegalo = require('./regalos/routes/crear-codigo-regalo');
 const registrarConsentimiento = require('./routes/registrar-consentimiento');
+const marketingConsent = require('./routes/marketing-consent');
+const marketingUnsubscribe = require('./routes/marketing-unsubscribe');
+const marketingSend = require('./routes/marketing-send');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -89,7 +92,9 @@ const corsOptions = {
     // HMAC headers para validador
     'x-api-key','x-val-ts','x-val-sig',
     'x-entr-ts','x-entr-sig',
-    'x-e-ts','x-e-sig'
+    'x-e-ts','x-e-sig',
+    // HMAC del panel Newsletter
+    'x-lb-ts','x-lb-sig'
   ],
   credentials: false // pon true solo si usas cookies/sesión
 };
@@ -102,7 +107,8 @@ app.use('/webhook', require('./routes/webhook'));
 
 // ⬇️ IMPORTANTE: capturamos rawBody para HMAC (validador)
 app.use(express.json({
-  limit: '2mb',
+  // un poco más grande para cuerpo HTML del newsletter
+  limit: '5mb',
   verify: (req, _res, buf) => {
     req.rawBody = buf ? buf.toString('utf8') : '';
   }
@@ -148,10 +154,27 @@ const accountLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false
 });
+
+// 🔒 Rate limit específico para marketing (altas/bajas newsletter)
+const marketingLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 min
+  max: 5,              // 5 req/min por IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Demasiadas solicitudes a marketing. Inténtalo más tarde.' }
+});
+
 // NUEVO: ruta para registrar consentimiento (vía /api/…)
 app.use('/api', registrarConsentimiento);
 console.log('📌 Ruta de consentimientos montada en /api/registrar-consentimiento');
 
+// 📩 Newsletter / Marketing (consent + unsubscribe)
+app.use('/marketing', marketingLimiter, marketingConsent);
+app.use('/marketing', marketingLimiter, marketingUnsubscribe);
+app.use('/marketing', marketingLimiter, marketingCron);
+app.use('/marketing', marketingLimiter, marketingSend);
+console.log('📌 Rutas de marketing montadas en /marketing/consent y /marketing/unsubscribe');
+console.log('📌 Ruta de envío newsletter montada en /marketing/send-newsletter');
 
 // DESPUÉS DEL WEBHOOK, LOS BODY PARSERS
 app.use(require('./routes/solicitarEliminacionCuenta'));

@@ -10,7 +10,7 @@ const crypto = require('crypto');
 const https  = require('https');
 const http   = require('http');
 const { URL } = require('url');
-const { alertAdmin } = require('./alertAdmin');
+const { alertAdminProxy: alertAdmin } = require('./alertAdminProxy');
 
 // ───────────────────────────── Config ─────────────────────────────
 const BUCKET_NAME =

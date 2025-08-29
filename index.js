@@ -576,12 +576,18 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), accountLimiter, async 
   try {
     let resultado;
     let email;
+    let via = 'legacy';
 
     if (hasHmac) {
       if (!BAJA_HMAC_SECRET) {
         return res.status(500).json({ cancelada:false, mensaje:'Config HMAC ausente' });
       }
       // Verificar HMAC: ts.POST.<path>.sha256(body)
+      if (LAB_DEBUG) {
+        const raw = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body||{});
+        const bodyHash10 = _first10Sha256(raw);
+        console.log('[BAJA HMAC IN]', { path: req.path, ts, bodyHash10, sig10: String(sig).slice(0,10), reqId });
+      }
       const v = verifyHmac({
         method: 'POST',
         path: req.path,
@@ -590,16 +596,25 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), accountLimiter, async 
         secret: BAJA_HMAC_SECRET
       });
       if (!v.ok) {
+        if (LAB_DEBUG) console.warn('[BAJA HMAC FAIL]', v.error, { reqId, ts, sig10: String(sig).slice(0,10) });
         return res.status(401).json({ cancelada:false, mensaje:'Auth HMAC inválida', error: v.error });
       }
       email = String((req.body || {}).email || '').trim().toLowerCase();
       if (!email || !email.includes('@')) {
         return res.status(400).json({ cancelada:false, mensaje:'Email inválido' });
       }
+      // Log inequívoco (aunque LAB_DEBUG=0) de que se usó HMAC
+      console.log('[BAJA HMAC USED]', { reqId, email });
+      if (LAB_DEBUG) console.log('[BAJA HMAC OK]', { reqId, email });
+      via = 'hmac';
       // Llamada al servicio con SENTINEL (saltamos verificación de contraseña)
       resultado = await desactivarMembresiaClub(email, WP_ASSERTED_SENTINEL);
     } else {
+      if (REQUIRE_HMAC) {
+        return res.status(401).json({ cancelada:false, mensaje:'HMAC requerido (LAB_REQUIRE_HMAC=1)' });
+      }
       // Compatibilidad: flujo antiguo (email + password desde cliente)
+      if (LAB_DEBUG) console.log('[BAJA LEGACY IN] (sin HMAC)');
       email = (req.body && req.body.email) ? String(req.body.email).trim().toLowerCase() : '';
       const password = String((req.body || {}).password || '');
       if (!email || !password) {
@@ -653,7 +668,9 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), accountLimiter, async 
         console.warn('⚠️ calcular fecha efectos (informativa):', e?.message || e);
       }
 
-      return res.json({ cancelada: true, efectos: efectosISO });
+      // Señaliza si vino por HMAC y añade cabecera informativa
+      res.setHeader('X-HMAC-Checked', via === 'hmac' ? '1' : '0');
+      return res.json({ cancelada: true, efectos: efectosISO, via });
     }
 
     // ⚠️ Si no canceló pero no se marcó como error

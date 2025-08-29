@@ -12,13 +12,32 @@ const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 
 
 // ───────────────────────── Config seguridad (rate limit + firma)
-const RESEND_LIMIT_COUNT = Number(process.env.RESEND_LIMIT_COUNT || 3);                  // máx. reenvíos por ventana
+const RESEND_LIMIT_COUNT = Number(process.env.RESEND_LIMIT_COUNT || 3);                 // máx. reenvíos por ventana
 const RESEND_LIMIT_WINDOW_MS = Number(process.env.RESEND_LIMIT_WINDOW_MS || 60 * 60 * 1000); // 1h (prod); en dev puedes bajar
 const HMAC_SHARED_SECRET =
   process.env.LB_SHARED_SECRET ||
   process.env.VALIDADOR_ENTRADAS_TOKEN || '';
 const DEBUG_REENVIOS = process.env.DEBUG_REENVIOS === '1';
+const REQUIRE_HMAC_ENTRADAS = process.env.LAB_REQUIRE_HMAC_ENTRADAS === '1';
 
+// ───────────────────────── HMAC simple para GET (email|ts)
+function verifySimpleHmacFromHeaders(req) {
+  if (!HMAC_SHARED_SECRET) return { ok:false, error:'secret_missing' };
+  const ts  = Number(req.headers['x-entr-ts'] || 0);
+  const sig = String(req.headers['x-entr-sig'] || '');
+  const email = String(req.query?.email || '').trim().toLowerCase();
+  if (!ts || !sig || !email) return { ok:false, error:'missing_params' };
+  const now = Math.floor(Date.now()/1000);
+  if (Math.abs(now - ts) > 900) return { ok:false, error:'expired' };
+  const base = `${email}|${ts}`;
+  const expected = crypto.createHmac('sha256', HMAC_SHARED_SECRET).update(base).digest('hex');
+  try {
+    const ok = crypto.timingSafeEqual(Buffer.from(sig,'hex'), Buffer.from(expected,'hex'));
+    if (!ok) return { ok:false, error:'invalid' };
+  } catch { return { ok:false, error:'invalid' }; }
+  if (DEBUG_REENVIOS) console.log('[ENTRADAS GET HMAC OK]', { email, ts });
+  return { ok:true };
+}
   
 // Bucket GCS (con alerta si credenciales mal formadas o ausentes)
 let storage, bucket;
@@ -167,6 +186,10 @@ router.get('/cuenta/entradas', async (req, res) => {
   try {
     const email = String(req.query.email || '').trim().toLowerCase();
     if (!email) return res.status(400).json({ error: 'Falta email' });
+    if (REQUIRE_HMAC_ENTRADAS) {
+      const v = verifySimpleHmacFromHeaders(req);
+      if (!v.ok) return res.status(401).json({ error: 'Firma requerida' });
+    }
 
     const items = await cargarEventosFuturos(email);
     res.json({ ok: true, items });
@@ -189,6 +212,10 @@ router.get('/cuenta/entradas-lite', async (req, res) => {
   try {
     const email = String(req.query.email || '').trim().toLowerCase();
     if (!email) return res.status(400).json({ error: 'Falta email' });
+    if (REQUIRE_HMAC_ENTRADAS) {
+      const v = verifySimpleHmacFromHeaders(req);
+      if (!v.ok) return res.status(401).json({ error: 'Firma requerida' });
+    }
 
     const items = await cargarEventosFuturos(email);
     const count = items.reduce((acc, it) => acc + (Number(it.cantidad) || 0), 0);
@@ -221,6 +248,11 @@ router.get('/cuenta/entradas-lite', async (req, res) => {
 // ───────────────────────── Reenvío por email
 
 async function obtenerBuffersPdfsPorCodigos(descripcion, codigos) {
+  // Si no hay bucket por credenciales, evita excepciones y fuerza 404 lógico más abajo
+  if (!bucket) {
+    console.warn('⚠️ GCS bucket no inicializado; no se podrán descargar PDFs.');
+    return [];
+  }
   const entradasBuffers = [];
   const unique = Array.from(new Set(codigos)).filter(Boolean);
 
@@ -258,13 +290,13 @@ async function obtenerBuffersPdfsPorCodigos(descripcion, codigos) {
 router.post('/entradas/reenviar', async (req, res) => {
   try {
     const body = req.body || {};
-    const to         = String(body.emailDestino || '').trim().toLowerCase();
+    const toFromBody = String(body.emailDestino || '').trim().toLowerCase();
     const comprador  = String(body.emailComprador || '').trim().toLowerCase();
     const desc       = String(body.descripcionProducto || '').trim();
 
     // ── Validaciones mínimas de payload
-    if (!to || !comprador || !desc) {
-      return res.status(400).json({ error: 'Faltan campos: emailDestino, emailComprador, descripcionProducto' });
+    if (!comprador || !desc) {
+      return res.status(400).json({ error: 'Faltan campos: emailComprador, descripcionProducto' });
     }
 
     // ── Verificación HMAC (prueba de propiedad desde WP)
@@ -275,7 +307,7 @@ router.post('/entradas/reenviar', async (req, res) => {
           area: 'micuenta.reenvio.hmac',
           email: comprador,
           err: new Error('HMAC_SHARED_SECRET ausente'),
-          meta: { to, desc }
+          meta: { to: toFromBody, desc }
         });
       } catch (_) {}
       return res.status(401).json({ error: 'Firma requerida' });
@@ -289,7 +321,7 @@ router.post('/entradas/reenviar', async (req, res) => {
           area: 'micuenta.reenvio.hmac',
           email: comprador,
           err: new Error('Faltan ts/sig'),
-          meta: { to, desc }
+          meta: { to: toFromBody, desc }
         });
       } catch (_) {}
       return res.status(401).json({ error: 'Firma requerida' });
@@ -308,7 +340,7 @@ router.post('/entradas/reenviar', async (req, res) => {
           area: 'micuenta.reenvio.hmac',
           email: comprador,
           err: new Error('Firma expirada'),
-          meta: { to, desc, skew: Math.abs(now - ts) }
+          meta: { to: toFromBody, desc, skew: Math.abs(now - ts) }
         });
       } catch (_) {}
       return res.status(401).json({ error: 'Firma expirada' });
@@ -349,15 +381,21 @@ router.post('/entradas/reenviar', async (req, res) => {
           area: 'micuenta.reenvio.hmac',
           email: comprador,
           err: new Error('Firma inválida'),
-          meta: { to, desc }
+          meta: { to: toFromBody, desc }
         });
       } catch (_) {}
       return res.status(401).json({ error: 'Firma inválida' });
     }
 
 
-// ── Rate limit (anti-spam) por (emailComprador, descripcion, destino)
-const quotaKey = `${compradorNorm}::${descNorm}::${to}`;
+    // 🔒 Forzar destino = comprador (ignora lo que envíe el cliente)
+    const to = compradorNorm;
+    if (DEBUG_REENVIOS && toFromBody && toFromBody !== to) {
+      console.warn('[REENVIO DEBUG] Destino forzado al comprador', { toFromBody, to });
+    }
+
+    // ── Rate limit (anti-spam) por (emailComprador, descripcion, destino)
+    const quotaKey = `${compradorNorm}::${descNorm}::${to}`;
     const q = checkResendQuota(quotaKey);
     if (!q.ok) {
       const secs = Math.ceil((q.retryAt - Date.now()) / 1000);

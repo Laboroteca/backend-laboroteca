@@ -61,6 +61,10 @@ const { activarMembresiaClub } = require('./services/activarMembresiaClub');
 const { syncMemberpressClub } = require('./services/syncMemberpressClub');
 const desactivarMembresiaClubForm = require('./routes/desactivarMembresiaClub');
 const desactivarMembresiaClub = require('./services/desactivarMembresiaClub');
+// ✔️ HMAC para baja voluntaria (WP → Backend)
+const { verifyHmac } = require('./utils/verifyHmac');
+const WP_ASSERTED_SENTINEL = process.env.WP_ASSERTED_SENTINEL || '__WP_ASSERTED__';
+const BAJA_HMAC_SECRET = (process.env.BAJA_HMAC_SECRET || '').trim();
 const validarEntrada = require('./entradas/routes/validarEntrada');
 const crearCodigoRegalo = require('./regalos/routes/crear-codigo-regalo');
 const registrarConsentimiento = require('./routes/registrar-consentimiento');
@@ -114,6 +118,8 @@ const corsOptions = {
     'x-e-ts','x-e-sig',
     // HMAC del panel Newsletter
     'x-lb-ts','x-lb-sig',
+    // HMAC Baja Club (WP → Backend)
+    'x-lab-ts','x-lab-sig','x-request-id',
     // Cron key para /marketing/cron-send
     'x-cron-key'
   ],
@@ -549,17 +555,46 @@ app.post('/activar-membresia-club', accountLimiter, async (req, res) => {
 app.options('/cancelar-suscripcion-club', cors(corsOptions));
 
 app.post('/cancelar-suscripcion-club', cors(corsOptions), accountLimiter, async (req, res) => {
-  const { email, password } = req.body;
-
-  if (!email || !password) {
-    return res.status(400).json({
-      cancelada: false,
-      mensaje: 'Faltan datos obligatorios'
-    });
-  }
+  // Si vienen cabeceras HMAC desde WP, usamos el flujo nuevo (sin password)
+  const ts = String(req.headers['x-lab-ts'] || '');
+  const sig = String(req.headers['x-lab-sig'] || '');
+  const reqId = String(req.headers['x-request-id'] || '');
+  const hasHmac = !!ts || !!sig || !!reqId;
 
   try {
-    const resultado = await desactivarMembresiaClub(email, password);
+    let resultado;
+    let email;
+
+    if (hasHmac) {
+      if (!BAJA_HMAC_SECRET) {
+        return res.status(500).json({ cancelada:false, mensaje:'Config HMAC ausente' });
+      }
+      // Verificar HMAC: ts.POST.<path>.sha256(body)
+      const v = verifyHmac({
+        method: 'POST',
+        path: req.path,
+        bodyRaw: req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body || {}),
+        headers: req.headers,
+        secret: BAJA_HMAC_SECRET
+      });
+      if (!v.ok) {
+        return res.status(401).json({ cancelada:false, mensaje:'Auth HMAC inválida', error: v.error });
+      }
+      email = String((req.body || {}).email || '').trim().toLowerCase();
+      if (!email || !email.includes('@')) {
+        return res.status(400).json({ cancelada:false, mensaje:'Email inválido' });
+      }
+      // Llamada al servicio con SENTINEL (saltamos verificación de contraseña)
+      resultado = await desactivarMembresiaClub(email, WP_ASSERTED_SENTINEL);
+    } else {
+      // Compatibilidad: flujo antiguo (email + password desde cliente)
+      email = (req.body && req.body.email) ? String(req.body.email).trim().toLowerCase() : '';
+      const password = String((req.body || {}).password || '');
+      if (!email || !password) {
+        return res.status(400).json({ cancelada:false, mensaje:'Faltan datos obligatorios' });
+      }
+      resultado = await desactivarMembresiaClub(email, password);
+    }
 
     // ❌ Si el objeto resultado indica fallo en validación
     if (!resultado.ok) {

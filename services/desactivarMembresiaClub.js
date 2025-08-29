@@ -13,6 +13,8 @@ const { enviarEmailSolicitudBajaVoluntaria } = require('./email'); // acuse inme
 const ACTIVE_STATUSES = ['active', 'trialing', 'past_due'];
 
 const nowISO = () => new Date().toISOString();
+// ✔️ Sentinel para llamadas autenticadas por HMAC desde WP (no romper otros flujos)
+const WP_ASSERTED_SENTINEL = process.env.WP_ASSERTED_SENTINEL || '__WP_ASSERTED__';
 
 /** Resolución robusta del NOMBRE y APELLIDOS para la fila de baja y el email */
 async function getNombreCompleto(email, subContext) {
@@ -108,33 +110,36 @@ async function desactivarMembresiaClub(email, password, enviarEmailConfirmacion 
   if (!email || typeof email !== 'string' || !email.includes('@')) {
     return { ok: false, mensaje: 'Email inválido.' };
   }
-  if (!password || typeof password !== 'string' || password.length < 4) {
+  // Permitimos el "sentinel" cuando la llamada ya viene autenticada por HMAC desde WP.
+  const isWpAsserted = (typeof password === 'string' && password === WP_ASSERTED_SENTINEL);
+  if (!isWpAsserted && (!password || typeof password !== 'string' || password.length < 4)) {
     return { ok: false, mensaje: 'Contraseña incorrecta.' };
   }
   email = email.trim().toLowerCase();
 
-  // Paso 0) Validar credenciales en WP (solo verifica, no elimina)
-  try {
-    const resp = await axios.post(
-      'https://www.laboroteca.es/wp-json/laboroteca/v1/verificar-login',
-      { email, password },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': process.env.LABOROTECA_API_KEY,
-        },
-        timeout: 15000,
+// Paso 0) Validar credenciales en WP (solo si NO viene el sentinel)
+  if (!isWpAsserted) {
+    try {
+      const resp = await axios.post(
+        'https://www.laboroteca.es/wp-json/laboroteca/v1/verificar-login',
+        { email, password },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': process.env.LABOROTECA_API_KEY,
+          },
+          timeout: 15000,
+        }
+      );
+      if (!resp?.data?.ok) {
+        return { ok: false, mensaje: 'Contraseña incorrecta' };
       }
-    );
-    if (!resp?.data?.ok) {
-      const msg = resp?.data?.mensaje || 'Credenciales no válidas';
+    } catch (err) {
+      await alertAdmin({ area: 'desactivarMembresiaClub_login', email, err, meta: { email } });
       return { ok: false, mensaje: 'Contraseña incorrecta' };
     }
-  } catch (err) {
-    const msg = err?.response?.data?.mensaje || err?.message || 'Error al validar credenciales.';
-    await alertAdmin({ area: 'desactivarMembresiaClub_login', email, err, meta: { email } });
-    return { ok: false, mensaje: 'Contraseña incorrecta' };
   }
+
 
   // Paso 1) Stripe — Programar fin de ciclo
   let suscripcionesActualizadas = 0;

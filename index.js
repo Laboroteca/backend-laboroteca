@@ -143,17 +143,16 @@ app.use(express.json({
 app.use(express.urlencoded({ extended: true }));
 
 // ───────────────────────────────────────────────────────────
-// BRIDGE DEDICADO NEWSLETTER → firma HMAC y reenvía a /marketing/consent
-// Úsalo en Fluent Forms como URL del webhook
+// BRIDGE: /marketing/consent-bridge  (para Fluent Forms sin HMAC)
+// Acepta solo x-api-key y reenvía al router real firmando HMAC.
 app.post('/marketing/consent-bridge', async (req, res) => {
   try {
+    console.log('🟢 [/marketing/consent-bridge] IN ip=%s ua=%s', req.ip, req.headers['user-agent'] || '');
     const body = req.body || {};
-    const email = (body.email || '').toLowerCase();
-    if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    if (!(body.email && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(body.email)))) {
       return res.status(400).json({ ok:false, error:'EMAIL_REQUIRED' });
     }
-    // Firma HMAC (ts + sha256(rawBody))
-    const ts = Math.floor(Date.now() / 1000);
+    const ts = Math.floor(Date.now()/1000);
     const raw = Buffer.from(JSON.stringify(body), 'utf8');
     const rawHash = require('crypto').createHash('sha256').update(raw).digest('hex');
     const sig = require('crypto')
@@ -161,7 +160,7 @@ app.post('/marketing/consent-bridge', async (req, res) => {
       .update(`${ts}.${rawHash}`).digest('hex');
 
     const target = `http://127.0.0.1:${process.env.PORT || 8080}/marketing/consent`;
-    const r = await require('node-fetch')(target, {
+    const r = await fetch(target, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -169,13 +168,15 @@ app.post('/marketing/consent-bridge', async (req, res) => {
         'x-lb-ts': String(ts),
         'x-lb-sig': sig
       },
-      body: JSON.stringify(body)
+      body: raw
     });
     const data = await r.json().catch(() => ({}));
+    console.log('🟢 [/marketing/consent-bridge] OUT status=%s ok=%s', r.status, data?.ok);
     return res.status(r.status).json(data);
   } catch (e) {
-    console.error('❌ consent-bridge → marketing/consent:', e?.message || e);
-    return res.status(500).json({ ok:false, error:'CONSENT_BRIDGE_ERROR' });
+    console.error('❌ consent-bridge error:', e?.message || e);
+    try { await alertAdmin({ area:'marketing_consent_bridge', email: req.body?.email || '-', err: e }); } catch(_){}
+    return res.status(500).json({ ok:false, error:'BRIDGE_ERROR' });
   }
 });
 // ───────────────────────────────────────────────────────────

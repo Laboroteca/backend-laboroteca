@@ -13,9 +13,13 @@
 
 const express = require('express');
 const admin = require('firebase-admin');
-const fetch = require('node-fetch');
 const crypto = require('crypto');
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
+
+// fetch: usa el nativo (Node 18+) y si no existe, carga node-fetch dinámicamente
+const fetch = (global.fetch)
+  ? global.fetch
+  : (...args) => import('node-fetch').then(m => m.default(...args));
 
 if (!admin.apps.length) { try { admin.initializeApp(); } catch (_) {} }
 const db = admin.firestore();
@@ -25,8 +29,11 @@ const router = express.Router();
 // ───────── CONFIG ─────────
 const CRON_KEY = process.env.MKT_CRON_KEY || ''; // cabecera x-cron-key
 const SMTP2GO_API_KEY = process.env.SMTP2GO_API_KEY || '';
-const FROM_EMAIL = process.env.EMAIL_FROM || 'newsletter@laboroteca.es';
-const FROM_NAME  = process.env.EMAIL_FROM_NAME || 'Laboroteca Newsletter';
+const FROM_EMAIL = process.env.EMAIL_FROM || 'noticias@boletin.laboroteca.es';
+const FROM_NAME  = process.env.EMAIL_FROM_NAME || 'Newsletter Laboroteca';
+// URL del endpoint (para runner CLI). Puede sobreescribirse por env.
+const CRON_TARGET_URL = process.env.CRON_TARGET_URL
+  || 'https://laboroteca-production.up.railway.app/marketing/cron-send';
 
 const MAX_JOBS_PER_RUN = Number(process.env.CRON_MAX_JOBS || 8);
 const CHUNK_SIZE = Number(process.env.CRON_CHUNK_SIZE || 80); // destinatarios por llamada SMTP
@@ -249,3 +256,32 @@ router.post('/cron-send', async (req, res) => {
 });
 
 module.exports = router;
+
+
+// ───────── Runner CLI opcional ─────────
+// Permite ejecutar: `node routes/marketing-cron.js --ping`
+// Útil para Railway (Custom Start Command) sin crear archivos adicionales.
+if (require.main === module) {
+  const argv = new Set(process.argv.slice(2));
+  if (argv.has('--ping')) {
+    (async () => {
+      const url = CRON_TARGET_URL;
+      if (!CRON_KEY) {
+        console.error('❌ Falta MKT_CRON_KEY en el entorno');
+        process.exit(1);
+      }
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'x-cron-key': CRON_KEY }
+        });
+        const text = await res.text();
+        console.log('Cron response:', res.status, text.slice(0, 500));
+        process.exit(res.ok ? 0 : 1);
+      } catch (e) {
+        console.error('❌ Error lanzando cron:', e?.message || e);
+        process.exit(1);
+      }
+    })();
+  }
+}

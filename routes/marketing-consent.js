@@ -1,19 +1,20 @@
 // routes/marketing-consent.js
 // ─────────────────────────────────────────────────────────────────────────────
-// Registro de consentimiento Newsletter + Comercial (UN SOLO ARCHIVO, 1 colección)
+// Registro consentimiento Newsletter + Comercial (1 colección) y
+// ENVÍO del EMAIL DE BIENVENIDA con enlace de baja (tokenizado).
+//
 // POST /marketing/consent
-// - Auth: x-api-key == process.env.MKT_API_KEY
-// - Valida email, consent_marketing y ≥1 materia
-// - Rate limit básico (IP+email)
-// - Firestore: marketingConsents (merge por email)  ← ÚNICA colección
-// - GCS: snapshot HTML del consentimiento (general por versión + individual)
-// - Sheets: Consents!A:E (A Nombre, B Email, C Comercial SÍ/NO, D Materias, E Fecha alta)
-// - Alertas: utiliza utils/alertAdminProxy
-// Requisitos: express, firebase-admin, googleapis
-// Entorno:
-//   GOOGLE_APPLICATION_CREDENTIALS=<ruta al JSON de servicio>
-//   MKT_API_KEY=<clave para x-api-key>
-//   GCS_CONSENTS_BUCKET=<bucket GCS> (opcional pero recomendado)
+// Auth: header x-api-key == process.env.MKT_API_KEY
+//
+// Entorno mínimo:
+//   GOOGLE_APPLICATION_CREDENTIALS=... (si usas Sheets o snapshots GCS)
+//   MKT_API_KEY=xxxx
+//   GCS_CONSENTS_BUCKET=... (opcional para snapshots)
+//   SMTP2GO_API_KEY=xxxx
+//   EMAIL_FROM=newsletter@tudominio
+//   EMAIL_FROM_NAME="Newsletter Nombre"
+//   MKT_UNSUB_KEY=clave-secreta-para-tokens
+//   MKT_UNSUB_PAGE=https://www.laboroteca.es/baja-newsletter/   (slug WP con shortcode)
 // ─────────────────────────────────────────────────────────────────────────────
 'use strict';
 
@@ -24,6 +25,7 @@ const http = require('http');
 const https = require('https');
 const { URL } = require('url');
 const { google } = require('googleapis');
+const fetch = require('node-fetch');
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
 const router = express.Router();
@@ -32,10 +34,18 @@ const router = express.Router();
 const API_KEY = (process.env.MKT_API_KEY || '').trim();
 const SHEET_ID = '1beWTOMlWjJvtmaGAVDegF2mTts16jZ_nKBrksnEg4Co';
 const SHEET_RANGE = 'Consents!A:E'; // A Nombre, B Email, C Comercial, D Materias, E Fecha alta
+
 const BUCKET_NAME =
   (process.env.GCS_CONSENTS_BUCKET ||
    process.env.GCS_BUCKET ||
    process.env.GCLOUD_STORAGE_BUCKET || '').trim();
+
+const SMTP2GO_API_KEY = (process.env.SMTP2GO_API_KEY || '').trim();
+const FROM_EMAIL = (process.env.EMAIL_FROM || 'newsletter@laboroteca.es').trim();
+const FROM_NAME  = (process.env.EMAIL_FROM_NAME || 'Laboroteca Newsletter').trim();
+
+const UNSUB_SECRET = (process.env.MKT_UNSUB_SECRET || API_KEY || 'laboroteca-unsub').trim();
+const UNSUB_PAGE = (process.env.MKT_UNSUB_PAGE || 'https://www.laboroteca.es/baja-newsletter/').trim();
 
 const MATERIAS_ORDER = [
   'derechos',
@@ -191,7 +201,6 @@ async function upsertConsentRow({ nombre, email, comercialYES, materiasStr, fech
 
   if (targetIdx >= 0) {
     const rowNum = targetIdx + 1;
-    // Actualizar A–D; E solo si estaba vacío
     const currentE = rows[targetIdx][4] || '';
     const values = [
       [ nombre || (rows[targetIdx][0] || ''), email, comercialYES, materiasStr, currentE || fechaAltaISO ]
@@ -217,9 +226,53 @@ async function upsertConsentRow({ nombre, email, comercialYES, materiasStr, fech
   }
 }
 
+// ───────── Helpers de email ─────────
+function tpl(str, data = {}) {
+  if (!str) return str;
+  return str
+    .replace(/\{\{\s*([A-Z0-9_]+)\s*\}\}/gi, (_, k) => data[k] ?? '')
+    .replace(/\{\s*([A-Z0-9_]+)\s*\}/gi,     (_, k) => data[k] ?? '')
+    .replace(/%([A-Z0-9_]+)%/gi,             (_, k) => data[k] ?? '');
+}
+
+async function sendSMTP2GO({ to, subject, html }) {
+  if (!SMTP2GO_API_KEY) throw new Error('SMTP2GO_API_KEY missing');
+
+  const payload = {
+    api_key: SMTP2GO_API_KEY,
+    to: Array.isArray(to) ? to : [to],
+    sender: `${FROM_NAME} <${FROM_EMAIL}>`,
+    subject,
+    html_body: html
+  };
+
+  const res = await fetch('https://api.smtp2go.com/v3/email/send', {
+    method: 'POST',
+    headers: { 'Content-Type':'application/json' },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await res.json().catch(()=> ({}));
+  const ok = res.ok && (Array.isArray(data?.data?.succeeded) ? data.data.succeeded.length > 0 : true);
+  if (!ok) {
+    throw new Error(`SMTP2GO failed: ${JSON.stringify(data)}`);
+  }
+  return data;
+}
+
+// Token de baja: base64url(email.ts).firma(hmac)
+function makeUnsubToken(email) {
+  const ts = Math.floor(Date.now()/1000);
+  const base = `${String(email||'').toLowerCase()}.${ts}`;
+  const sig  = crypto.createHmac('sha256', UNSUB_SECRET).update(base).digest('hex').slice(0,32);
+  const payload = Buffer.from(base).toString('base64url');
+  return `${payload}.${sig}`;
+}
+
+
 // ───────── Rate limit básico (IP + email) ─────────
 const RATE_WINDOW_MS = 10 * 60 * 1000; // 10 minutos
-const RATE_MAX = 8; // máximo de 8 altas/updates por ventana
+const RATE_MAX = 8;
 const rlStore = new Map(); // clave: ip|email → { count, resetAt }
 
 function checkRateLimit(ip, email){
@@ -236,7 +289,7 @@ function checkRateLimit(ip, email){
 }
 
 // ───────── Ruta principal ─────────
-router.post('/marketing/consent', async (req, res) => {
+router.post('/consent', async (req, res) => {
   if (!requireApiKey(req, res)) return;
   const ts = nowISO();
 
@@ -272,7 +325,6 @@ router.post('/marketing/consent', async (req, res) => {
 
     const consentUrl = s(consentData.consentUrl, 'https://www.laboroteca.es/consentimiento-newsletter/');
     const consentVersion = s(consentData.consentVersion, 'v1.0');
-    // El hash real lo calculamos sobre el HTML descargado
     let consentTextHash = '';
 
     const sourceForm = s(req.body?.sourceForm, 'preferencias_marketing');
@@ -285,7 +337,6 @@ router.post('/marketing/consent', async (req, res) => {
     let snapshotGeneralPath = '';
     try {
       if (!BUCKET_NAME) {
-        // Sin bucket configurado: avisar una vez
         await alertAdmin('ℹ️ Newsletter: BUCKET_NAME no configurado; no se guardarán snapshots', {});
       } else {
         const rawHtml = await fetchHtml(consentUrl);
@@ -297,7 +348,6 @@ router.post('/marketing/consent', async (req, res) => {
           extra: { consentVersion, sourceForm, formularioId }
         });
 
-        // General por versión (no sobreescribir si ya existe)
         const generalPath = `consents/newsletter/${consentVersion}.html`;
         await uploadHtmlToGCS({
           path: generalPath,
@@ -307,7 +357,6 @@ router.post('/marketing/consent', async (req, res) => {
         });
         snapshotGeneralPath = generalPath;
 
-        // Individual por aceptación
         const individualId = sha256Hex(`${email}.${ts}.${Math.random()}`);
         const indivPath = `consents/newsletter/${consentVersion}/${individualId}.html`;
         await uploadHtmlToGCS({
@@ -323,7 +372,6 @@ router.post('/marketing/consent', async (req, res) => {
     } catch (e) {
       console.warn('Snapshot error:', e?.message || e);
       try { await alertAdmin(`⚠️ Error guardando snapshot de consentimiento`, { email, consentUrl, err: e?.message || String(e) }); } catch {}
-      // seguimos sin bloquear el alta
     }
 
     // Firestore: marketingConsents (docId = email)
@@ -357,23 +405,58 @@ router.post('/marketing/consent', async (req, res) => {
       return res.status(500).json({ ok:false, error:'FIRESTORE_WRITE_FAILED' });
     }
 
-    // Sheets: upsert fila A–E
+    // Sheets: upsert fila A–E (no bloqueante)
     const comercialYES = consent_comercial ? 'SÍ' : 'NO';
     const materiasStr = materiasToString(materias);
-    try {
-      await upsertConsentRow({
-        nombre,
-        email,
-        comercialYES,
-        materiasStr,
-        fechaAltaISO: ts
-      });
-    } catch (e) {
+    upsertConsentRow({
+      nombre, email, comercialYES, materiasStr, fechaAltaISO: ts
+    }).catch(async (e) => {
       console.warn('Sheets upsert warn:', e?.message || e);
       try { await alertAdmin(`⚠️ No se pudo actualizar Google Sheets (alta newsletter)`, { email, err: e?.message || String(e) }); } catch {}
-      // no bloqueamos respuesta por fallo de Sheets
+    });
+
+    // ───────── Email de bienvenida ─────────
+    try {
+      const token = makeUnsubToken(email);
+      const unsubUrl = `${UNSUB_PAGE}${UNSUB_PAGE.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
+
+      const nombreSafe = nombre || (email.split('@')[0] || '').replace(/[._-]+/g, ' ');
+      const tokens = { NOMBRE: nombreSafe };
+
+      const subject = tpl('¡Bienvenido a la newsletter de Laboroteca, {NOMBRE}!', tokens);
+
+      const bodyTop = tpl(
+        `<p>Hola {NOMBRE},</p>
+         <p>¡Gracias por suscribirte a la newsletter de <strong>Laboroteca</strong>!</p>
+         <p>Desde ahora recibirás novedades por email sobre las materias que has seleccionado.
+         Puedes visitar nuestro <a href="https://www.laboroteca.es/boletin-informativo/">Boletín</a> cuando quieras para ver los últimos contenidos.</p>
+         <p>Si en algún momento quieres cambiar tus preferencias o darte de baja, podrás hacerlo desde el enlace incluido en cada email.</p>`,
+        tokens
+      );
+
+      const legal =
+        `<hr style="border:0;height:1px;width:100%;background:#e5e5e5;margin:16px 0;">
+         <p style="color:#6b6b6b;font-size:12px;line-height:1.5;margin:0 0 8px">
+           Este mensaje se ha enviado a <strong>${email}</strong> porque te has dado de alta en la newsletter.
+           Si no deseas seguir recibiéndola, puedes <a href="${unsubUrl}">darte de baja aquí</a>.
+         </p>
+         <p style="color:#6b6b6b;font-size:12px;line-height:1.5">
+           En cumplimiento del Reglamento (UE) 2016/679 (RGPD), te informamos de que tu dirección de correo electrónico forma parte de la base de datos de
+           <strong>Ignacio Solsona Fernández-Pedrera</strong> (DNI 20481042W, C/ Enmedio nº 22, 3ºE, 12001 Castellón de la Plana).
+           Puedes ejercer tus derechos de acceso, rectificación, supresión, limitación, portabilidad u oposición escribiendo a
+           <a href="mailto:ignacio.solsona@icacs.com">ignacio.solsona@icacs.com</a>. También puedes presentar una reclamación ante la autoridad de control.
+         </p>`;
+
+      const html = bodyTop + legal;
+
+      await sendSMTP2GO({ to: email, subject, html });
+    } catch (e) {
+      console.warn('Welcome email failed:', e?.message || e);
+      try { await alertAdmin(`⚠️ Fallo enviando email de bienvenida newsletter`, { email, err: e?.message || String(e) }); } catch {}
+      // no bloqueamos la respuesta
     }
 
+    // Respuesta OK
     return res.json({
       ok: true,
       flow: 'newsletter',
@@ -394,20 +477,12 @@ router.post('/marketing/consent', async (req, res) => {
 
 module.exports = router;
 
-/* Montaje:
-   const express = require('express');
-   const app = express();
-   app.use(express.json());
-   app.use(require('./routes/marketing-consent'));
-   app.listen(process.env.PORT || 3000);
-
-Fluent Forms – campos relevantes:
-  • email           → (visible, editable) → Email de ENVÍO (único email que guardamos)
+/* Campos esperados (Fluent Forms):
+  • email           (obligatorio)
   • nombre
-  • materias[...]   → derechos, cotizaciones, desempleo, bajas_ip, jubilacion, ahorro_privado, otras_prestaciones
+  • materias[derechos|cotizaciones|desempleo|bajas_ip|jubilacion|ahorro_privado|otras_prestaciones]
   • consent_marketing (obligatorio)
   • consent_comercial (opcional)
-  • consentData (JSON) → { trigger:1, consentUrl:"https://www.laboroteca.es/consentimiento-newsletter/", consentVersion:"v1.0", consentTextHash:"" }
-  • sourceForm, formularioId
-  • ip={remote_ip}, ua={user_agent}
+  • consentData (JSON) → { consentUrl:"https://www.laboroteca.es/consentimiento-newsletter/", consentVersion:"v1.0" }
+  • sourceForm, formularioId (opcionales)
 */

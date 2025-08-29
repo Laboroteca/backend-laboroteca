@@ -54,6 +54,7 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
+const fetch = require('node-fetch');
 const { eliminarUsuarioWordPress } = require('./services/eliminarUsuarioWordPress');
 const procesarCompra = require('./services/procesarCompra');
 const { activarMembresiaClub } = require('./services/activarMembresiaClub');
@@ -140,6 +141,65 @@ app.use(express.json({
   }
 }));
 app.use(express.urlencoded({ extended: true }));
+
+// ───────────────────────────────────────────────────────────
+// COMPAT: WP/legacy → reenviar a /marketing/consent (newsletter)
+// Toma los "checkboxes" del legacy como materias (array de labels),
+// y usa privacy/terms para consent_marketing.
+app.post('/registrar-consentimiento', async (req, res) => {
+  try {
+    const bodyLegacy = req.body || {};
+    const email = (bodyLegacy.email || '').toLowerCase();
+    if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      return res.status(400).json({ ok:false, error:'EMAIL_REQUIRED' });
+    }
+
+    const materias = Array.isArray(bodyLegacy.checkboxes) ? bodyLegacy.checkboxes : [];
+    const consent_marketing = String(bodyLegacy.privacy || '').toLowerCase() === 'yes' || bodyLegacy.privacy === true;
+    const consent_comercial = false; // si algún día lo pasas desde WP, mapea aquí
+    const consentData = {
+      consentUrl: bodyLegacy.termsUrl || bodyLegacy.privacyUrl || 'https://www.laboroteca.es/consentimiento-newsletter/',
+      consentVersion: bodyLegacy.termsVersion || bodyLegacy.privacyVersion || 'v1.0'
+    };
+
+    const bodyNew = {
+      email,
+      nombre: bodyLegacy.nombre || '',
+      materias,                       // el router nuevo normaliza arrays de labels → slugs
+      consent_marketing,
+      consent_comercial,
+      consentData,
+      sourceForm: 'wordpress_legacy',
+      formularioId: String(bodyLegacy.formularioId || '')
+    };
+
+    // Firmar HMAC para /marketing/consent
+    const ts = Math.floor(Date.now()/1000);
+    const raw = Buffer.from(JSON.stringify(bodyNew), 'utf8');
+    const rawHash = require('crypto').createHash('sha256').update(raw).digest('hex');
+    const sig = require('crypto')
+      .createHmac('sha256', process.env.MKT_CONSENT_SECRET || '')
+      .update(`${ts}.${rawHash}`).digest('hex');
+
+    const target = `http://127.0.0.1:${process.env.PORT || 8080}/marketing/consent`;
+    const r = await fetch(target, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': String(process.env.MKT_API_KEY || ''),
+        'x-lb-ts': String(ts),
+        'x-lb-sig': sig
+      },
+      body: JSON.stringify(bodyNew)
+    });
+    const data = await r.json().catch(() => ({}));
+    return res.status(r.status).json(data);
+  } catch (e) {
+    console.error('❌ compat registrar-consentimiento → marketing/consent:', e?.message || e);
+    return res.status(500).json({ ok:false, error:'COMPAT_FORWARD_ERROR' });
+  }
+});
+// ───────────────────────────────────────────────────────────
 
 // 🔒 Rate limit específico para canje (5 req/min por IP)
 const canjearLimiter = rateLimit({

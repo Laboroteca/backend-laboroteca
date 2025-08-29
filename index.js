@@ -143,46 +143,25 @@ app.use(express.json({
 app.use(express.urlencoded({ extended: true }));
 
 // ───────────────────────────────────────────────────────────
-// COMPAT: WP/legacy → reenviar a /marketing/consent (newsletter)
-// Toma los "checkboxes" del legacy como materias (array de labels),
-// y usa privacy/terms para consent_marketing.
-app.post('/registrar-consentimiento', async (req, res) => {
+// BRIDGE DEDICADO NEWSLETTER → firma HMAC y reenvía a /marketing/consent
+// Úsalo en Fluent Forms como URL del webhook
+app.post('/marketing/consent-bridge', async (req, res) => {
   try {
-    const bodyLegacy = req.body || {};
-    const email = (bodyLegacy.email || '').toLowerCase();
+    const body = req.body || {};
+    const email = (body.email || '').toLowerCase();
     if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
       return res.status(400).json({ ok:false, error:'EMAIL_REQUIRED' });
     }
-
-    const materias = Array.isArray(bodyLegacy.checkboxes) ? bodyLegacy.checkboxes : [];
-    const consent_marketing = String(bodyLegacy.privacy || '').toLowerCase() === 'yes' || bodyLegacy.privacy === true;
-    const consent_comercial = false; // si algún día lo pasas desde WP, mapea aquí
-    const consentData = {
-      consentUrl: bodyLegacy.termsUrl || bodyLegacy.privacyUrl || 'https://www.laboroteca.es/consentimiento-newsletter/',
-      consentVersion: bodyLegacy.termsVersion || bodyLegacy.privacyVersion || 'v1.0'
-    };
-
-    const bodyNew = {
-      email,
-      nombre: bodyLegacy.nombre || '',
-      materias,                       // el router nuevo normaliza arrays de labels → slugs
-      consent_marketing,
-      consent_comercial,
-      consentData,
-      sourceForm: 'wordpress_legacy',
-      formularioId: String(bodyLegacy.formularioId || '')
-    };
-
-    // Firmar HMAC para /marketing/consent
-    const ts = Math.floor(Date.now()/1000);
-    const raw = Buffer.from(JSON.stringify(bodyNew), 'utf8');
+    // Firma HMAC (ts + sha256(rawBody))
+    const ts = Math.floor(Date.now() / 1000);
+    const raw = Buffer.from(JSON.stringify(body), 'utf8');
     const rawHash = require('crypto').createHash('sha256').update(raw).digest('hex');
     const sig = require('crypto')
       .createHmac('sha256', process.env.MKT_CONSENT_SECRET || '')
       .update(`${ts}.${rawHash}`).digest('hex');
 
     const target = `http://127.0.0.1:${process.env.PORT || 8080}/marketing/consent`;
-    const r = await fetch(target, {
+    const r = await require('node-fetch')(target, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -190,13 +169,13 @@ app.post('/registrar-consentimiento', async (req, res) => {
         'x-lb-ts': String(ts),
         'x-lb-sig': sig
       },
-      body: JSON.stringify(bodyNew)
+      body: JSON.stringify(body)
     });
     const data = await r.json().catch(() => ({}));
     return res.status(r.status).json(data);
   } catch (e) {
-    console.error('❌ compat registrar-consentimiento → marketing/consent:', e?.message || e);
-    return res.status(500).json({ ok:false, error:'COMPAT_FORWARD_ERROR' });
+    console.error('❌ consent-bridge → marketing/consent:', e?.message || e);
+    return res.status(500).json({ ok:false, error:'CONSENT_BRIDGE_ERROR' });
   }
 });
 // ───────────────────────────────────────────────────────────

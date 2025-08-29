@@ -1,17 +1,20 @@
 // routes/marketing-consent.js
 // ─────────────────────────────────────────────────────────────────────────────
 // Alta de consentimiento Newsletter (y opcional Comercial) con seguridad
-// de producción: API Key + HMAC, anti-replay, rate limit, snapshots GCS,
-// alta/merge en Firestore, upsert en Google Sheets y email de bienvenida.
-// 
+// de producción: API Key + HMAC (o bridge interno), anti-replay, rate limit,
+// snapshots GCS, upsert en Firestore, upsert en Google Sheets y email de
+// bienvenida por SMTP2GO.
+//
 // POST /marketing/consent
 //  Headers:
-//    - x-api-key        = MKT_API_KEY
-//    - x-lb-ts          = epoch seconds (HMAC window)
-//    - x-lb-sig         = hex(HMAC_SHA256( MKT_CONSENT_SECRET, `${ts}.${rawBodySha256}` ))
-//  Body (FF típico):
-//    { email, nombre, materias:[...]/obj, consent_marketing:true, consent_comercial:false,
-//      consentData:{ consentUrl, consentVersion }, sourceForm?, formularioId? }
+//    - x-api-key  = MKT_API_KEY (siempre)
+//    - x-lb-ts    = epoch seconds (si firmas fuera del bridge)
+//    - x-lb-sig   = hex(HMAC_SHA256( MKT_CONSENT_SECRET, `${ts}.${rawBodySha256}` ))
+//    - x-internal-bridge: 1  (lo pone el bridge interno; permite saltar HMAC puro)
+//
+// Body (FF típico):
+//   { email, nombre, materias:[...]/obj, consent_marketing:true, consent_comercial:false,
+//     consentData:{ consentUrl, consentVersion }, sourceForm?, formularioId? }
 //
 // Entorno mínimo:
 //  - GOOGLE_APPLICATION_CREDENTIALS=... (Sheets/GCS)
@@ -21,7 +24,8 @@
 //  - EMAIL_FROM, EMAIL_FROM_NAME
 //  - MKT_UNSUB_SECRET=xxxx
 //  - MKT_UNSUB_PAGE=https://www.laboroteca.es/baja-newsletter/
-//   GOOGLE_CLOUD_BUCKET=... (o GCS_CONSENTS_BUCKET/GCS_BUCKET/GCLOUD_STORAGE_BUCKET)
+//  - GOOGLE_CLOUD_BUCKET o GCS_CONSENTS_BUCKET/GCS_BUCKET/GCLOUD_STORAGE_BUCKET
+//  - MKT_DEBUG=1 (opcional para logs verbosos)
 // ─────────────────────────────────────────────────────────────────────────────
 'use strict';
 
@@ -46,7 +50,7 @@ const SHEET_ID   = '1beWTOMlWjJvtmaGAVDegF2mTts16jZ_nKBrksnEg4Co';
 const SHEET_READ_RANGE  = 'Consents!A:E'; // A Nombre, B Email, C Comercial, D Materias, E Fecha alta
 const SHEET_WRITE_RANGE = 'Consents!A:E';
 
-// Bucket: prioriza tu GOOGLE_CLOUD_BUCKET; mantiene otros alias como fallback
+// Bucket: prioriza GOOGLE_CLOUD_BUCKET; mantiene otros alias como fallback
 const BUCKET_NAME =
   (process.env.GOOGLE_CLOUD_BUCKET ||
    process.env.GCS_CONSENTS_BUCKET ||
@@ -114,8 +118,7 @@ function requireApiKey(req, res) {
   const key = s(req.headers['x-api-key']);
   if (!API_KEY || key !== API_KEY) {
     if (DEBUG) {
-      console.warn('⛔ API KEY mismatch en /marketing/consent · present=%s match=%s',
-        !!key, key === API_KEY);
+      console.warn('⛔ API KEY mismatch · present=%s match=%s', !!key, key === API_KEY);
     }
     res.status(401).json({ ok:false, error:'UNAUTHORIZED' });
     return false;
@@ -140,19 +143,24 @@ function verifyHmac(req){
   try {
     const ok = crypto.timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(expect, 'hex'));
     if (!ok && DEBUG) {
-      console.warn('⛔ HMAC BAD · ts=%s · rawLen=%s · providedSigLen=%s',
-        ts, raw.length, sig.length);
+      console.warn('⛔ HMAC BAD · ts=%s · rawLen=%s · providedSigLen=%s', ts, raw.length, sig.length);
     }
     return ok;
-  } catch {
-    if (DEBUG) console.warn('⛔ HMAC compare error (bad hex?)');
+  } catch (e) {
+    if (DEBUG) console.warn('⛔ HMAC compare error (bad hex?): %s', e?.message || e);
     return false;
   }
 }
 
-// Normaliza materias desde array de textos u objeto booleano
+// Normaliza materias desde array de textos u objeto booleano (acepta fallback checkboxes[])
 function normalizeMaterias(input, bodyFallback = {}) {
   const out = Object.fromEntries(MATERIAS_ORDER.map(k => [k, false]));
+
+  // 0) si viene "checkboxes" como array de labels, mapear
+  if (!input && Array.isArray(bodyFallback.checkboxes)) {
+    input = bodyFallback.checkboxes;
+  }
+
   // 1) array de labels
   if (Array.isArray(input)) {
     for (const raw of input) {
@@ -163,12 +171,14 @@ function normalizeMaterias(input, bodyFallback = {}) {
     }
     return { obj: out, any: Object.values(out).some(Boolean) };
   }
+
   // 2) objeto booleano
   if (input && typeof input === 'object') {
     for (const k of MATERIAS_ORDER) out[k] = toBool(input[k], out[k]);
     return { obj: out, any: Object.values(out).some(Boolean) };
   }
-  // 3) claves sueltas en body
+
+  // 3) claves sueltas en body (materias_x)
   for (const k of MATERIAS_ORDER) out[k] = toBool(bodyFallback[k] ?? bodyFallback[`materias_${k}`], out[k]);
   return { obj: out, any: Object.values(out).some(Boolean) };
 }
@@ -240,7 +250,12 @@ function getBucket() {
   catch { return null; }
 }
 
-console.log('🗄  BUCKET (consents):', BUCKET_NAME ? `set (${BUCKET_NAME})` : 'not set');
+if (DEBUG) {
+  console.log('🗄  BUCKET (consents):', BUCKET_NAME ? `set (${BUCKET_NAME})` : 'not set');
+  console.log('🔐 SMTP2GO key present:', !!SMTP2GO_API_KEY);
+  console.log('📧 FROM:', `${FROM_NAME} <${FROM_EMAIL}>`);
+  console.log('📊 SHEET_ID present:', !!SHEET_ID);
+}
 
 async function uploadHtmlToGCS({ path, htmlBuffer, metadata, skipIfExists=false }) {
   const bucket = getBucket();
@@ -374,6 +389,7 @@ router.post('/consent', async (req, res) => {
       !!req.headers['x-lb-sig']
     );
   }
+
   // API Key
   if (!requireApiKey(req, res)) return;
 
@@ -386,13 +402,17 @@ router.post('/consent', async (req, res) => {
     if (!allow.has(ip)) return res.status(403).json({ ok:false, error:'IP_FORBIDDEN' });
   }
 
-  // HMAC: si viene del bridge interno, lo permitimos aunque falle la verificación.
-  const isInternalBridge = req.headers['x-internal-bridge'] === '1' &&
-    (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1');
+  // HMAC:
+  // Si viene del bridge interno, bastará con x-internal-bridge: 1 (no exigimos ip 127.x por si trust proxy altera ip).
+  const isInternalBridge = req.headers['x-internal-bridge'] === '1';
   if (HMAC_SEC && !isInternalBridge && !verifyHmac(req)) {
     console.warn('⛔ BAD_HMAC en /marketing/consent ip=%s', ip);
+    if (DEBUG) {
+      console.warn('⛔ BAD_HMAC detail · ts=%s sig=%s', req.headers['x-lb-ts'], (req.headers['x-lb-sig']||'').slice(0,16)+'…');
+    }
     return res.status(401).json({ ok:false, error:'BAD_HMAC' });
   }
+  if (DEBUG) console.log('🔐 HMAC check: %s', isInternalBridge ? 'via INTERNAL BRIDGE' : 'verified/exempt');
 
   const ts = nowISO();
 
@@ -403,19 +423,34 @@ router.post('/consent', async (req, res) => {
 
     if (!isEmail(email)) return res.status(400).json({ ok:false, error:'EMAIL_REQUIRED' });
 
+    if (DEBUG) {
+      const keys = Object.keys(req.body || {});
+      console.log('🧾 Body keys:', keys);
+      console.log('🧾 Raw sha256:', req.rawBody ? sha256HexBuf(req.rawBody) : '(no-raw)');
+    }
+
     console.log(`🟢 [/marketing/consent] email=${email} formId=${s(req.body?.formularioId)} ip=${ip} internal=${isInternalBridge}`);
 
     // Rate limit (IP+email)
     if (!checkRateLimit(ip || '0.0.0.0', email)) {
-      await alertAdmin(`🚦 Rate limit newsletter alcanzado`, { email, ip });
+      await alertAdmin({ area:'newsletter_rate_limit', email, err: new Error('RATE_LIMIT'), meta:{ ip } });
       return res.status(429).json({ ok:false, error:'RATE_LIMIT' });
     }
 
+    // Materias
     const { obj: materias, any } = normalizeMaterias(req.body?.materias, req.body || {});
-    if (!any) return res.status(400).json({ ok:false, error:'MATERIAS_REQUIRED' });
+    if (!any) {
+      if (DEBUG) console.warn('⛔ MATERIAS_REQUIRED para %s (body puede no traer materias)', email);
+      return res.status(400).json({ ok:false, error:'MATERIAS_REQUIRED' });
+    }
+    if (DEBUG) console.log('📚 Materias:', materiasToList(materias));
 
+    // Consentimiento marketing
     const consent_marketing = toBool(req.body?.consent_marketing ?? req.body?.privacy, false);
-    if (!consent_marketing) return res.status(400).json({ ok:false, error:'CONSENT_MARKETING_REQUIRED' });
+    if (!consent_marketing) {
+      if (DEBUG) console.warn('⛔ CONSENT_MARKETING_REQUIRED para %s', email);
+      return res.status(400).json({ ok:false, error:'CONSENT_MARKETING_REQUIRED' });
+    }
 
     const consent_comercial = toBool(req.body?.consent_comercial, false);
 
@@ -440,7 +475,8 @@ router.post('/consent', async (req, res) => {
     let snapshotGeneralPath = '';
     try {
       if (!BUCKET_NAME) {
-        await alertAdmin('ℹ️ Newsletter: BUCKET_NAME no configurado (revisa GOOGLE_CLOUD_BUCKET); no se guardarán snapshots', {});
+        await alertAdmin({ area:'newsletter_snapshot', email, err: new Error('BUCKET_MISSING'), meta:{} });
+        if (DEBUG) console.log('ℹ️ BUCKET no configurado, se omite snapshot');
       } else {
         const rawHtml  = await fetchHtml(consentUrl);
         consentTextHash = `sha256:${sha256HexBuf(rawHtml)}`;
@@ -472,10 +508,12 @@ router.post('/consent', async (req, res) => {
           }
         });
         snapshotIndividualPath = indivPath;
+
+        if (DEBUG) console.log('🗂  Snapshots GCS → general=%s individual=%s', snapshotGeneralPath, snapshotIndividualPath);
       }
     } catch (e) {
       console.warn('Snapshot error:', e?.message || e);
-      try { await alertAdmin(`⚠️ Error guardando snapshot de consentimiento`, { email, consentUrl, err: e?.message || String(e) }); } catch {}
+      try { await alertAdmin({ area:'newsletter_snapshot_error', email, err: e, meta:{ consentUrl } }); } catch {}
     }
 
     // Firestore: marketingConsents (docId = email) – idempotente
@@ -507,24 +545,26 @@ router.post('/consent', async (req, res) => {
           createdAt
         }, { merge: true });
       });
+      if (DEBUG) console.log('🔥 Firestore upsert OK → marketingConsents/%s', email);
     } catch (e) {
       console.error('Firestore set error:', e?.message || e);
-      try { await alertAdmin(`❌ Error guardando marketingConsents`, { email, err: e?.message || String(e) }); } catch {}
+      try { await alertAdmin({ area:'newsletter_firestore_error', email, err: e, meta:{} }); } catch {}
       return res.status(500).json({ ok:false, error:'FIRESTORE_WRITE_FAILED' });
     }
 
     // Aviso de éxito
-    try { await alertAdmin(`✅ Alta newsletter`, { email, materias: materiasToList(materias) }); } catch {}
+    try { await alertAdmin({ area:'newsletter_alta_ok', email, err:null, meta:{ materias: materiasToList(materias) } }); } catch {}
 
     // Sheets: upsert fila A–E (no bloqueante)
     const comercialYES = consent_comercial ? 'SÍ' : 'NO';
     const materiasStr  = materiasToString(materias);
     upsertConsentRow({ nombre, email, comercialYES, materiasStr, fechaAltaISO: ts })
+      .then((r) => { if (DEBUG) console.log('📊 Sheets upsert OK →', r); })
       .catch(async (e) => {
         console.warn('Sheets upsert warn:', e?.message || e);
-        try { await alertAdmin(`⚠️ No se pudo actualizar Google Sheets (alta newsletter)`, { email, err: e?.message || String(e) }); } catch {}
+        try { await alertAdmin({ area:'newsletter_sheets_warn', email, err: e, meta:{} }); } catch {}
       });
-    if (DEBUG) console.log('📊 Sheets: upsert encolado para %s', email);
+
     // Email de bienvenida (no bloqueante)
     (async () => {
       try {
@@ -558,7 +598,7 @@ router.post('/consent', async (req, res) => {
         if (DEBUG) console.log('📧 Welcome email OK → %s (%s)', email, smtpRes?.request_id || 'no-id');
       } catch (e) {
         console.warn('Welcome email failed:', e?.message || e);
-        try { await alertAdmin(`⚠️ Fallo enviando email de bienvenida newsletter`, { email, err: e?.message || String(e) }); } catch {}
+        try { await alertAdmin({ area:'newsletter_welcome_fail', email, err: e, meta:{} }); } catch {}
       }
     })();
 
@@ -576,7 +616,7 @@ router.post('/consent', async (req, res) => {
 
   } catch (err) {
     console.error('marketing/consent error:', err?.message || err);
-    try { await alertAdmin(`🔥 Error inesperado en /marketing/consent`, { err: err?.message || String(err) }); } catch {}
+    try { await alertAdmin({ area:'newsletter_consent_unexpected', email: s(req.body?.email).toLowerCase(), err, meta:{} }); } catch {}
     return res.status(500).json({ ok:false, error:'SERVER_ERROR' });
   }
 });
@@ -587,6 +627,7 @@ module.exports = router;
   • email           (obligatorio)
   • nombre
   • materias (array de textos o {derechos,cotizaciones,desempleo,bajas_ip,jubilacion,ahorro_privado,otras_prestaciones})
+    (también acepta fallback desde checkboxes[])
   • consent_marketing (obligatorio; alias aceptado: privacy)
   • consent_comercial (opcional)
   • consentData (JSON) → { consentUrl, consentVersion }

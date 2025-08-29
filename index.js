@@ -142,47 +142,84 @@ app.use(express.json({
 }));
 app.use(express.urlencoded({ extended: true }));
 
+
 // ───────────────────────────────────────────────────────────
-// BRIDGE: /marketing/consent-bridge  (para Fluent Forms sin HMAC)
-// Acepta solo x-api-key y reenvía al router real firmando HMAC.
+// BRIDGE: /marketing/consent-bridge  (Fluent Forms sin HMAC)
+// - Exige x-api-key válida (la misma que usa /marketing/consent).
+// - Reenvía al router real firmando HMAC con MKT_CONSENT_SECRET.
+// - Añade timeout y logs detallados de ida/vuelta.
+// ───────────────────────────────────────────────────────────
 app.post('/marketing/consent-bridge', async (req, res) => {
+  const apiKeyIn = String(req.headers['x-api-key'] || '').trim();
+  const API_KEY  = String(process.env.MKT_API_KEY || '').trim();
+  const HSEC     = String(process.env.MKT_CONSENT_SECRET || '').trim();
+
   try {
-    console.log('🟢 [/marketing/consent-bridge] IN ip=%s ua=%s', req.ip, req.headers['user-agent'] || '');
+    const ip  = (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim();
+    const ua  = (req.headers['user-agent'] || '').slice(0, 180);
     const body = req.body || {};
-    if (!(body.email && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(body.email)))) {
+
+    console.log('🟢 [/marketing/consent-bridge] IN ip=%s ua=%s rawKeys=%s',
+      ip, ua, Object.keys(body || {}).join(','));
+
+    // 1) API KEY de entrada (la que pone Fluent Forms)
+    if (!API_KEY || apiKeyIn !== API_KEY) {
+      console.warn('⛔ [/marketing/consent-bridge] UNAUTHORIZED · header hasKey=%s matches=%s',
+        !!apiKeyIn, apiKeyIn === API_KEY);
+      return res.status(401).json({ ok:false, error:'UNAUTHORIZED' });
+    }
+
+    // 2) Validación mínima
+    const email = String(body.email || '').toLowerCase();
+    if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
       return res.status(400).json({ ok:false, error:'EMAIL_REQUIRED' });
     }
-    const ts = Math.floor(Date.now()/1000);
+
+    // 3) Firmar HMAC para el router real
+    const ts  = Math.floor(Date.now() / 1000);
     const raw = Buffer.from(JSON.stringify(body), 'utf8');
     const rawHash = require('crypto').createHash('sha256').update(raw).digest('hex');
-    const sig = require('crypto')
-      .createHmac('sha256', process.env.MKT_CONSENT_SECRET || '')
-      .update(`${ts}.${rawHash}`).digest('hex');
+    const sig = require('crypto').createHmac('sha256', HSEC).update(`${ts}.${rawHash}`).digest('hex');
 
+    // 4) Enviar al router real (mismo proceso) con timeout
     const target = `http://127.0.0.1:${process.env.PORT || 8080}/marketing/consent`;
-    const r = await fetch(target, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': String(process.env.MKT_API_KEY || ''),
-        'x-lb-ts': String(ts),
-        'x-lb-sig': sig,
-        'x-internal-bridge': '1'
-      },
-      body: raw
-    });
-    const data = await r.json().catch(() => ({}));
-    console.log('🟢 [/marketing/consent-bridge] OUT status=%s ok=%s err=%s',
-      r.status, data?.ok, data?.error);
-    console.log('🟢 [/marketing/consent-bridge] OUT status=%s ok=%s', r.status, data?.ok);
-    console.log('🟢 [/marketing/consent-bridge] OUT status=%s ok=%s', r.status, data?.ok);
+    const { AbortController } = require('abort-controller');
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 12000); // 12s
+
+    let r, text = '';
+    try {
+      r = await fetch(target, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': API_KEY,
+          'x-lb-ts': String(ts),
+          'x-lb-sig': sig,
+          'x-internal-bridge': '1'
+        },
+        body: raw,
+        signal: controller.signal
+      });
+      text = await r.text();
+    } finally {
+      clearTimeout(t);
+    }
+
+    let data;
+    try { data = JSON.parse(text); } catch { data = { ok:false, error:'NON_JSON_RESPONSE', _raw:text?.slice(0,200) }; }
+
+    console.log('🟢 [/marketing/consent-bridge] OUT status=%s ok=%s error=%s',
+      r.status, data?.ok, data?.error || '-');
+
     return res.status(r.status).json(data);
   } catch (e) {
-    console.error('❌ consent-bridge error:', e?.message || e);
+    console.error('❌ [/marketing/consent-bridge] ERROR:', e?.message || e);
     try { await alertAdmin({ area:'marketing_consent_bridge', email: req.body?.email || '-', err: e }); } catch(_){}
     return res.status(500).json({ ok:false, error:'BRIDGE_ERROR' });
   }
 });
+
 // ───────────────────────────────────────────────────────────
 
 // 🔒 Rate limit específico para canje (5 req/min por IP)

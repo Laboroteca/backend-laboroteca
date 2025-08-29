@@ -166,11 +166,15 @@ app.post('/marketing/consent-bridge', async (req, res) => {
         'content-type': 'application/json',
         'x-api-key': String(process.env.MKT_API_KEY || ''),
         'x-lb-ts': String(ts),
-        'x-lb-sig': sig
+        'x-lb-sig': sig,
+        'x-internal-bridge': '1'
       },
       body: raw
     });
     const data = await r.json().catch(() => ({}));
+    console.log('🟢 [/marketing/consent-bridge] OUT status=%s ok=%s err=%s',
+      r.status, data?.ok, data?.error);
+    console.log('🟢 [/marketing/consent-bridge] OUT status=%s ok=%s', r.status, data?.ok);
     console.log('🟢 [/marketing/consent-bridge] OUT status=%s ok=%s', r.status, data?.ok);
     return res.status(r.status).json(data);
   } catch (e) {

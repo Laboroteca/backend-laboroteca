@@ -40,6 +40,7 @@ const router = express.Router();
 // ───────── CONFIG ─────────
 const API_KEY   = String(process.env.MKT_API_KEY || '').trim();
 const HMAC_SEC  = String(process.env.MKT_CONSENT_SECRET || '').trim();
+const DEBUG     = String(process.env.MKT_DEBUG || '').trim() === '1';
 
 const SHEET_ID   = '1beWTOMlWjJvtmaGAVDegF2mTts16jZ_nKBrksnEg4Co';
 const SHEET_READ_RANGE  = 'Consents!A:E'; // A Nombre, B Email, C Comercial, D Materias, E Fecha alta
@@ -112,6 +113,10 @@ function clientIp(req){
 function requireApiKey(req, res) {
   const key = s(req.headers['x-api-key']);
   if (!API_KEY || key !== API_KEY) {
+    if (DEBUG) {
+      console.warn('⛔ API KEY mismatch en /marketing/consent · present=%s match=%s',
+        !!key, key === API_KEY);
+    }
     res.status(401).json({ ok:false, error:'UNAUTHORIZED' });
     return false;
   }
@@ -133,8 +138,14 @@ function verifyHmac(req){
   const expect = crypto.createHmac('sha256', HMAC_SEC).update(`${ts}.${rawHash}`).digest('hex');
 
   try {
-    return crypto.timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(expect, 'hex'));
+    const ok = crypto.timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(expect, 'hex'));
+    if (!ok && DEBUG) {
+      console.warn('⛔ HMAC BAD · ts=%s · rawLen=%s · providedSigLen=%s',
+        ts, raw.length, sig.length);
+    }
+    return ok;
   } catch {
+    if (DEBUG) console.warn('⛔ HMAC compare error (bad hex?)');
     return false;
   }
 }
@@ -353,6 +364,16 @@ function checkRateLimit(ip, email){
 
 // ───────── Ruta principal ─────────
 router.post('/consent', async (req, res) => {
+  // Log de entrada muy temprano
+  if (DEBUG) {
+    const ip0 = (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim();
+    console.log('🟢 [/marketing/consent] ENTER ip=%s ua=%s rawLen=%s hasAPI=%s hasHMAC=%s',
+      ip0, (req.headers['user-agent'] || '').slice(0,120),
+      Buffer.isBuffer(req.rawBody) ? req.rawBody.length : 0,
+      !!req.headers['x-api-key'],
+      !!req.headers['x-lb-sig']
+    );
+  }
   // API Key
   if (!requireApiKey(req, res)) return;
 
@@ -365,8 +386,11 @@ router.post('/consent', async (req, res) => {
     if (!allow.has(ip)) return res.status(403).json({ ok:false, error:'IP_FORBIDDEN' });
   }
 
-  // HMAC obligatorio si hay secreto configurado
-  if (HMAC_SEC && !verifyHmac(req)) {
+  // HMAC: si viene del bridge interno, lo permitimos aunque falle la verificación.
+  const isInternalBridge = req.headers['x-internal-bridge'] === '1' &&
+    (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1');
+  if (HMAC_SEC && !isInternalBridge && !verifyHmac(req)) {
+    console.warn('⛔ BAD_HMAC en /marketing/consent ip=%s', ip);
     return res.status(401).json({ ok:false, error:'BAD_HMAC' });
   }
 
@@ -379,7 +403,7 @@ router.post('/consent', async (req, res) => {
 
     if (!isEmail(email)) return res.status(400).json({ ok:false, error:'EMAIL_REQUIRED' });
 
-    console.log(`🟢 [/marketing/consent] email=${email} formId=${s(req.body?.formularioId)} ip=${ip}`);
+    console.log(`🟢 [/marketing/consent] email=${email} formId=${s(req.body?.formularioId)} ip=${ip} internal=${isInternalBridge}`);
 
     // Rate limit (IP+email)
     if (!checkRateLimit(ip || '0.0.0.0', email)) {
@@ -500,7 +524,7 @@ router.post('/consent', async (req, res) => {
         console.warn('Sheets upsert warn:', e?.message || e);
         try { await alertAdmin(`⚠️ No se pudo actualizar Google Sheets (alta newsletter)`, { email, err: e?.message || String(e) }); } catch {}
       });
-
+    if (DEBUG) console.log('📊 Sheets: upsert encolado para %s', email);
     // Email de bienvenida (no bloqueante)
     (async () => {
       try {
@@ -530,7 +554,8 @@ router.post('/consent', async (req, res) => {
              <strong>Ignacio Solsona Fernández-Pedrera</strong>. Puedes ejercer tus derechos en
              <a href="mailto:ignacio.solsona@icacs.com">ignacio.solsona@icacs.com</a>.
            </p>`;
-        await sendSMTP2GO({ to: email, subject, html: bodyTop + legal });
+        const smtpRes = await sendSMTP2GO({ to: email, subject, html: bodyTop + legal });
+        if (DEBUG) console.log('📧 Welcome email OK → %s (%s)', email, smtpRes?.request_id || 'no-id');
       } catch (e) {
         console.warn('Welcome email failed:', e?.message || e);
         try { await alertAdmin(`⚠️ Fallo enviando email de bienvenida newsletter`, { email, err: e?.message || String(e) }); } catch {}

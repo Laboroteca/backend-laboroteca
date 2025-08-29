@@ -2,6 +2,22 @@ if (process.env.NODE_ENV !== 'production') {
   require('dotenv').config();
 }
 
+// ───────────────────────────────────────────────────────────
+// GCP creds desde Base64 → GOOGLE_APPLICATION_CREDENTIALS
+// (solo si aún no está definida)
+try {
+  if (process.env.GCP_CREDENTIALS_BASE64 && !process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    const fs = require('fs');
+    const path = '/tmp/gcp_sa.json';
+    fs.writeFileSync(path, Buffer.from(process.env.GCP_CREDENTIALS_BASE64, 'base64'));
+    process.env.GOOGLE_APPLICATION_CREDENTIALS = path;
+    console.log('✅ GOOGLE_APPLICATION_CREDENTIALS => /tmp/gcp_sa.json (desde GCP_CREDENTIALS_BASE64)');
+  }
+} catch (e) {
+  console.error('❌ Error inicializando GOOGLE_APPLICATION_CREDENTIALS:', e?.message || e);
+}
+// ───────────────────────────────────────────────────────────
+
 const { alertAdminProxy: alertAdmin } = require('./utils/alertAdminProxy');
 
 // Utilidad para no mostrar claves en claro
@@ -54,6 +70,7 @@ const marketingCron = require('./routes/marketing-cron');
 
 const app = express();
 app.set('trust proxy', 1);
+app.disable('x-powered-by');
 
 app.use((req, _res, next) => {
   if (req.headers.origin) console.log('🌐 Origin:', req.headers.origin);
@@ -95,7 +112,9 @@ const corsOptions = {
     'x-entr-ts','x-entr-sig',
     'x-e-ts','x-e-sig',
     // HMAC del panel Newsletter
-    'x-lb-ts','x-lb-sig'
+    'x-lb-ts','x-lb-sig',
+    // Cron key para /marketing/cron-send
+    'x-cron-key'
   ],
   credentials: false // pon true solo si usas cookies/sesión
 };
@@ -111,7 +130,13 @@ app.use(express.json({
   // un poco más grande para cuerpo HTML del newsletter
   limit: '5mb',
   verify: (req, _res, buf) => {
-    req.rawBody = buf ? buf.toString('utf8') : '';
+    // Mantener bytes exactos para HMAC (Buffer)
+    req.rawBody = Buffer.from(buf || '');
+    // Precalcular sha256 del raw por conveniencia (algunos handlers lo usan)
+    try {
+      const crypto = require('crypto');
+      req.rawBodySha256 = crypto.createHash('sha256').update(req.rawBody).digest('hex');
+    } catch (_) { /* noop */ }
   }
 }));
 app.use(express.urlencoded({ extended: true }));
@@ -172,9 +197,11 @@ console.log('📌 Ruta de consentimientos montada en /api/registrar-consentimien
 // 📩 Newsletter / Marketing (consent + unsubscribe)
 app.use('/marketing', marketingLimiter, marketingConsent);
 app.use('/marketing', marketingLimiter, marketingUnsubscribe);
+// 👇 CRON de envíos programados (Railway hará POST /marketing/cron-send con cabecera x-cron-key)
 app.use('/marketing', marketingLimiter, marketingCron);
 app.use('/marketing', marketingLimiter, marketingSend);
-console.log('📌 Rutas de marketing montadas en /marketing/consent y /marketing/unsubscribe');
+console.log('📌 Rutas de marketing: /marketing/consent, /marketing/unsubscribe, /marketing/cron-send, /marketing/send-newsletter');
+console.log('🔐 Recuerda definir MKT_CRON_KEY en Railway (service LABOROTECA).');
 console.log('📌 Ruta de envío newsletter montada en /marketing/send-newsletter');
 
 // DESPUÉS DEL WEBHOOK, LOS BODY PARSERS

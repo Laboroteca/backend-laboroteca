@@ -3,7 +3,7 @@ const { google } = require('googleapis');
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
 const spreadsheetId = '1qM9pM-qkPlR6yCeX7eC8i2wBWmAOI1WIDncf8I7pHMM'; // Resumen de bajas del Club
-const RANGE_BASE = 'Hoja 1';
+const RANGE_BASE = "'Hoja 1'";
 const RANGE_APPEND = `${RANGE_BASE}!A2`; // A..F
 
   function fmtES(iso) {

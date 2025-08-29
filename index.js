@@ -150,48 +150,48 @@ app.use(express.urlencoded({ extended: true }));
 
 
 // ───────────────────────────────────────────────────────────
-// BRIDGE: /marketing/consent-bridge  (Fluent Forms sin HMAC)
-// - Exige x-api-key válida (la misma que usa /marketing/consent).
-// - Reenvía al router real firmando HMAC con MKT_CONSENT_SECRET.
-// - Añade timeout y logs detallados de ida/vuelta.
+// BRIDGE: /marketing/consent-bridge (Fluent Forms sin HMAC)
+// - Requiere x-api-key válida
+// - Reenvía a la URL pública firmando HMAC (MKT_CONSENT_SECRET)
+// - Logs claros de ida y vuelta + timeout
+// Requiere: PUBLIC_BASE_URL=https://laboroteca-production.up.railway.app
 // ───────────────────────────────────────────────────────────
 app.post('/marketing/consent-bridge', async (req, res) => {
-  const apiKeyIn = String(req.headers['x-api-key'] || '').trim();
-  const API_KEY  = String(process.env.MKT_API_KEY || '').trim();
-  const HSEC     = String(process.env.MKT_CONSENT_SECRET || '').trim();
+  const API_KEY = String(process.env.MKT_API_KEY || '').trim();
+  const HSEC    = String(process.env.MKT_CONSENT_SECRET || '').trim();
+  const BASE    = String(process.env.PUBLIC_BASE_URL || 'https://laboroteca-production.up.railway.app').replace(/\/+$/,'');
+  const target  = `${BASE}/marketing/consent`;
 
   try {
     const ip  = (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim();
-    const ua  = (req.headers['user-agent'] || '').slice(0, 180);
+    const ua  = (req.headers['user-agent'] || '').slice(0,180);
+    const apiKeyIn = String(req.headers['x-api-key'] || '').trim();
     const body = req.body || {};
 
-    console.log('🟢 [/marketing/consent-bridge] IN ip=%s ua=%s rawKeys=%s',
-      ip, ua, Object.keys(body || {}).join(','));
+    console.log('🟢 [/marketing/consent-bridge] IN ip=%s ua=%s keys=%s',
+      ip, ua, Object.keys(body||{}).join(','));
 
-    // 1) API KEY de entrada (la que pone Fluent Forms)
+    // API KEY de entrada (la que pone Fluent Forms)
     if (!API_KEY || apiKeyIn !== API_KEY) {
-      console.warn('⛔ [/marketing/consent-bridge] UNAUTHORIZED · header hasKey=%s matches=%s',
-        !!apiKeyIn, apiKeyIn === API_KEY);
+      console.warn('⛔ bridge UNAUTHORIZED: header hasKey=%s matches=%s', !!apiKeyIn, apiKeyIn===API_KEY);
       return res.status(401).json({ ok:false, error:'UNAUTHORIZED' });
     }
 
-    // 2) Validación mínima
+    // Validación mínima
     const email = String(body.email || '').toLowerCase();
     if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
       return res.status(400).json({ ok:false, error:'EMAIL_REQUIRED' });
     }
 
-    // 3) Firmar HMAC para el router real
-    const ts  = Math.floor(Date.now() / 1000);
+    // Firmar HMAC para el router real
+    const ts  = Math.floor(Date.now()/1000);
     const raw = Buffer.from(JSON.stringify(body), 'utf8');
     const rawHash = require('crypto').createHash('sha256').update(raw).digest('hex');
     const sig = require('crypto').createHmac('sha256', HSEC).update(`${ts}.${rawHash}`).digest('hex');
 
-    // 4) Enviar al router real (mismo proceso) con timeout
-    const target = `http://127.0.0.1:${process.env.PORT || 8080}/marketing/consent`;
-    const { AbortController } = require('abort-controller');
-    const controller = new AbortController();
-    const t = setTimeout(() => controller.abort(), 12000); // 12s
+    // Forward a la URL pública (evita loopback y middlewares locales)
+    const controller = new (require('abort-controller'))();
+    const timer = setTimeout(() => controller.abort(), 15000);
 
     let r, text = '';
     try {
@@ -202,29 +202,34 @@ app.post('/marketing/consent-bridge', async (req, res) => {
           'x-api-key': API_KEY,
           'x-lb-ts': String(ts),
           'x-lb-sig': sig,
-          'x-internal-bridge': '1'
+          // pista al backend (opcional)
+          'x-bridge': 'wp',
+          'x-forwarded-for': ip,
+          'user-agent': ua
         },
         body: raw,
         signal: controller.signal
       });
       text = await r.text();
     } finally {
-      clearTimeout(t);
+      clearTimeout(timer);
     }
 
     let data;
-    try { data = JSON.parse(text); } catch { data = { ok:false, error:'NON_JSON_RESPONSE', _raw:text?.slice(0,200) }; }
+    try { data = JSON.parse(text); }
+    catch { data = { ok:false, error:'NON_JSON_RESPONSE', _raw:text?.slice(0,200) }; }
 
     console.log('🟢 [/marketing/consent-bridge] OUT status=%s ok=%s error=%s',
       r.status, data?.ok, data?.error || '-');
 
     return res.status(r.status).json(data);
   } catch (e) {
-    console.error('❌ [/marketing/consent-bridge] ERROR:', e?.message || e);
+    console.error('❌ consent-bridge ERROR:', e?.message || e);
     try { await alertAdmin({ area:'marketing_consent_bridge', email: req.body?.email || '-', err: e }); } catch(_){}
     return res.status(500).json({ ok:false, error:'BRIDGE_ERROR' });
   }
 });
+
 
 // ───────────────────────────────────────────────────────────
 

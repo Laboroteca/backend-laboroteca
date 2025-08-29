@@ -23,11 +23,13 @@ const { alertAdminProxy: alertAdmin } = require('./utils/alertAdminProxy');
 // Utilidad para no mostrar claves en claro
 const crypto = require('crypto');
 const hash8 = v => v ? crypto.createHash('sha256').update(String(v)).digest('hex').slice(0,8) : 'MISSING';
+const LAB_DEBUG = (process.env.LAB_DEBUG === '1' || process.env.DEBUG === '1');
 
 console.log('🧠 INDEX REAL EJECUTÁNDOSE');
 console.log('🌍 NODE_ENV:', process.env.NODE_ENV);
 console.log('🔑 STRIPE_SECRET_KEY presente:', !!process.env.STRIPE_SECRET_KEY);
 console.log('🔐 STRIPE_WEBHOOK_SECRET presente:', !!process.env.STRIPE_WEBHOOK_SECRET);
+console.log('🔒 LAB_BAJA_HMAC_SECRET presente:', !!process.env.LAB_BAJA_HMAC_SECRET);
 
 // Log seguro de MemberPress (sin exponer la clave)
 console.log('🛠 MemberPress config:');
@@ -76,6 +78,11 @@ const marketingCron = require('./routes/marketing-cron');
 const app = express();
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
+// util solo para logs de depuración (no imprime secretos completos)
+function _first10Sha256(str) {
+  try { return crypto.createHash('sha256').update(String(str),'utf8').digest('hex').slice(0,10); }
+  catch { return 'errhash'; }
+}
 
 app.use((req, _res, next) => {
   if (req.headers.origin) console.log('🌐 Origin:', req.headers.origin);

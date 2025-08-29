@@ -24,12 +24,16 @@ const { alertAdminProxy: alertAdmin } = require('./utils/alertAdminProxy');
 const crypto = require('crypto');
 const hash8 = v => v ? crypto.createHash('sha256').update(String(v)).digest('hex').slice(0,8) : 'MISSING';
 const LAB_DEBUG = (process.env.LAB_DEBUG === '1' || process.env.DEBUG === '1');
+// 🔒 flag global para obligar HMAC en endpoints duros
+const REQUIRE_HMAC = (process.env.LAB_REQUIRE_HMAC === '1');
 
 console.log('🧠 INDEX REAL EJECUTÁNDOSE');
 console.log('🌍 NODE_ENV:', process.env.NODE_ENV);
 console.log('🔑 STRIPE_SECRET_KEY presente:', !!process.env.STRIPE_SECRET_KEY);
 console.log('🔐 STRIPE_WEBHOOK_SECRET presente:', !!process.env.STRIPE_WEBHOOK_SECRET);
 console.log('🔒 LAB_BAJA_HMAC_SECRET presente:', !!process.env.LAB_BAJA_HMAC_SECRET);
+console.log('🔒 LAB_ELIM_HMAC_SECRET presente:', !!process.env.LAB_ELIM_HMAC_SECRET);
+console.log('🧷 LAB_REQUIRE_HMAC activo:', REQUIRE_HMAC);
 
 // Log seguro de MemberPress (sin exponer la clave)
 console.log('🛠 MemberPress config:');

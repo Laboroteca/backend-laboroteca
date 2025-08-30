@@ -1,30 +1,45 @@
+// firebase.js (seguro, sin exponer claves)
+'use strict';
+
 const admin = require('firebase-admin');
 
-// --- DEPURACIÓN: Ver exactamente cómo se recibe la variable de entorno ---
-console.log('CLAVE RECIBIDA:', process.env.FIREBASE_ADMIN_KEY ? process.env.FIREBASE_ADMIN_KEY.slice(0, 120) + '...' : '(vacía)');
-if (!process.env.FIREBASE_ADMIN_KEY) {
-  throw new Error('❌ Falta FIREBASE_ADMIN_KEY en variables de entorno');
-}
+function readServiceAccount() {
+  // Acepta JSON plano o JSON en base64 (compat)
+  const raw =
+    process.env.FIREBASE_ADMIN_KEY ||
+    (process.env.GCP_CREDENTIALS_BASE64
+      ? Buffer.from(process.env.GCP_CREDENTIALS_BASE64, 'base64').toString('utf8')
+      : '');
 
-let serviceAccount;
-try {
-  // Intenta parsear el JSON y muestra parte del objeto para depurar
-  serviceAccount = JSON.parse(process.env.FIREBASE_ADMIN_KEY);
-  console.log('✅ JSON OK. Tipo:', typeof serviceAccount, 'ProjectID:', serviceAccount.project_id);
-} catch (err) {
-  console.error('❌ NO ES JSON válido:', err.message);
-  console.error('--- Variable recibida (copia y pega esto en https://jsonlint.com para depurar): ---');
-  console.error(process.env.FIREBASE_ADMIN_KEY);
-  throw new Error('❌ FIREBASE_ADMIN_KEY no es un JSON válido');
+  if (!raw) {
+    throw new Error('Falta FIREBASE_ADMIN_KEY (o GCP_CREDENTIALS_BASE64) en variables de entorno');
+  }
+
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    // No imprimir el contenido; solo el motivo
+    throw new Error(`FIREBASE_ADMIN_KEY no es JSON válido: ${err.message}`);
+  }
 }
 
 if (!admin.apps.length) {
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount)
-  });
-  if (process.env.NODE_ENV !== 'production') {
-    console.log('✅ Firebase inicializado');
+  const creds = readServiceAccount();
+  admin.initializeApp({ credential: admin.credential.cert(creds) });
+
+  // Log mínimo y seguro (solo si se pide)
+  const lvl = String(process.env.PLANB_LOG_LEVEL || '').toLowerCase();
+  if (lvl === 'debug') {
+    console.log(
+      JSON.stringify({
+        at: new Date().toISOString(),
+        area: 'firebase',
+        msg: 'init ok',
+        meta: { project_id: creds.project_id || '(desconocido)' }, // no es secreto
+      })
+    );
   }
 }
 
 module.exports = admin;
+

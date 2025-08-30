@@ -123,8 +123,8 @@ async function syncMemberpressClub({
         'Content-Type': 'application/json',
         'User-Agent': 'LaborotecaMP/1.0',
         'x-api-key': API_KEY,
-        'x-mp-ts': ts,
-        'x-mp-sig': sig,
+        'x-lab-ts': ts,
+        'x-lab-sig': sig,
         'x-request-id': reqId
       },
       body: bodyStr,

@@ -222,6 +222,19 @@ if (!isFirstBaja) {
         motivo: 'impago',
         verificacion: 'CORRECTO'
       });
+      // Log operativo en Firestore (bajasClubLog)
+      try {
+        await logBajaFirestore({
+          email,
+          nombre: nombreCompleto || nombre,
+          motivo: 'impago',
+          verificacion: 'CORRECTO',
+          fechaSolicitudISO: new Date().toISOString(),
+          fechaEfectosISO: new Date().toISOString(),
+          subscriptionId,
+          source: 'stripe.invoice.payment_failed'
+        });
+      } catch (_) {}
 
       const docRefIntento = firestore.collection('intentosImpago').doc(paymentIntentId);
 

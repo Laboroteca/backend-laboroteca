@@ -7,12 +7,17 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "build": "echo 'no build step'", 
+    "build": "echo 'no build step'",
     "audit:facturas": "node scripts/auditarFacturas.js",
     "audit:ventas": "node scripts/auditarVentasMensuales.js",
     "audit:club": "node scripts/auditarClubSemanal.js --mode=auto",
     "audit:club:weekly": "node scripts/auditarClubSemanal.js --mode=weekly",
-    "audit:club:monthly": "node scripts/auditarClubSemanal.js --mode=monthly"
+    "audit:club:monthly": "node scripts/auditarClubSemanal.js --mode=monthly",
+
+    "job:bajasClub:replayer": "node jobs/stripe_bajasClub_planB.js replayer",
+    "job:bajasClub:reconciler": "node jobs/stripe_bajasClub_planB.js reconciler",
+    "job:bajasClub:bajas": "node jobs/stripe_bajasClub_planB.js bajas",
+    "job:bajasClub:sanity": "node jobs/stripe_bajasClub_planB.js sanity"
   },
   "engines": {
     "node": "18.x"

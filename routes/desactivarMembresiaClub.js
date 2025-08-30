@@ -30,7 +30,10 @@ async function desactivarMembresiaClub(email, password) {
   }
   email = email.trim().toLowerCase();
 
-  const esVoluntaria = typeof password === 'string';
+  const SENTINEL = process.env.WP_ASSERTED_SENTINEL || '__WP_ASSERTED__';
+  // Voluntaria si viene sentinel (form WP) o una contraseña (string no vacío);
+  // el servicio valida la contraseña real contra WP.
+  const esVoluntaria = (typeof password === 'string') && (password === SENTINEL || password.length > 0);
 
   // ────────────────────────────────────────────────────────────────────────────
   // A) BAJA VOLUNTARIA → delegar 100% en el servicio (no duplicamos lógica)

@@ -207,7 +207,7 @@ if (!isFirstBaja) {
 
       await syncMemberpressClub({
         email,
-        accion: 'desactivar',
+        accion: 'desactivar_inmediata',
         membership_id: MEMBERPRESS_IDS['el club laboroteca']
       });
 
@@ -282,6 +282,17 @@ if (event.type === 'invoice.paid') {
     const invoiceId = invoice.id;
     const customerId = invoice.customer;
     const billingReason = invoice.billing_reason;
+
+  // ⏱️ Determinar fecha de fin de ciclo de Stripe (para alinear MP.expires_at)
+  let expiresAtISO = null;
+  try {
+    if (invoice.subscription) {
+      const subForExpiry = await stripe.subscriptions.retrieve(invoice.subscription);
+      if (subForExpiry?.current_period_end) {
+        expiresAtISO = new Date(subForExpiry.current_period_end * 1000).toISOString();
+      }
+    }
+  } catch (_) {}
 
     if (!invoiceId || !customerId) {
       console.warn('⚠️ Falta invoiceId o customerId en invoice.paid');
@@ -663,7 +674,8 @@ if (emailSeguro.includes('@')) {
       email: emailSeguro,
       accion: 'activar',
       membership_id: MEMBERPRESS_IDS['el club laboroteca'],
-      importe: (invoice.amount_paid || 999) / 100
+      importe: (invoice.amount_paid || 999) / 100,
+      ...(expiresAtISO ? { expires_at: expiresAtISO } : {})
     });
   } catch (e) {
     console.error('❌ syncMemberpressClub (invoice.paid):', e?.message || e);
@@ -771,7 +783,7 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
         if (motivo === 'impago') {
           // ✅ Se mantiene tu comportamiento de baja inmediata (ya realizada)
           try {
-            await syncMemberpressClub({ email, accion: 'desactivar', membership_id: MEMBERPRESS_IDS['el club laboroteca'] });
+            await syncMemberpressClub({ email, accion: 'desactivar_inmediata', membership_id: MEMBERPRESS_IDS['el club laboroteca'] });
             await firestore.collection('usuariosClub').doc(email).set({ activo: false, fechaBaja: new Date().toISOString() }, { merge: true });
             await registrarBajaClub({ email, motivo: 'impago' });
           // (Sin escritura en Sheets de bajas)
@@ -783,7 +795,7 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
          } else if (motivo === 'eliminacion_cuenta') {
            // 🔴 ELIMINACIÓN DE CUENTA → inmediata (única fila en Sheets)
           try {
-             await syncMemberpressClub({ email, accion: 'desactivar', membership_id: MEMBERPRESS_IDS['el club laboroteca'] });
+             await syncMemberpressClub({ email, accion: 'desactivar_inmediata', membership_id: MEMBERPRESS_IDS['el club laboroteca'] });
              await firestore.collection('usuariosClub').doc(email).set({ activo: false, fechaBaja: new Date().toISOString() }, { merge: true });
              const nombreCompleto = await nombreCompletoPorEmail(email, nombre);
              await registrarBajaClub({ email, nombre: nombreCompleto, motivo: 'eliminacion_cuenta', verificacion: 'CORRECTO' });
@@ -804,7 +816,7 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
             // No enviar email adicional: el flujo de eliminación ya avisa por su canal propio
           } else if (eraFinDeCiclo || origenBaja === 'formulario_usuario') {
             // 🟢 VOLUNTARIA ejecutada ahora (fin de ciclo)
-          await syncMemberpressClub({ email, accion: 'desactivar', membership_id: MEMBERPRESS_IDS['el club laboroteca'] });
+          await syncMemberpressClub({ email, accion: 'desactivar_inmediata', membership_id: MEMBERPRESS_IDS['el club laboroteca'] });
           await firestore.collection('usuariosClub').doc(email).set({ activo: false, fechaBaja: new Date().toISOString() }, { merge: true });
 
           // Firestore baja: ejecutada + correcto
@@ -845,7 +857,7 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
         } else {
           // 🟠 MANUAL INMEDIATA (dashboard u otros) → inmediata
             try {
-            await syncMemberpressClub({ email, accion: 'desactivar', membership_id: MEMBERPRESS_IDS['el club laboroteca'] });
+            await syncMemberpressClub({ email, accion: 'desactivar_inmediata', membership_id: MEMBERPRESS_IDS['el club laboroteca'] });
             await firestore.collection('usuariosClub').doc(email).set({ activo: false, fechaBaja: new Date().toISOString() }, { merge: true });
             const nombreCompleto = await nombreCompletoPorEmail(email, nombre);
             await registrarBajaClub({
@@ -1218,7 +1230,23 @@ try {
           paymentIntentId: pi ? String(pi) : null,
           via: 'webhook:checkout.session.completed'
         });
-        await syncMemberpressClub({ email, accion: 'activar', membership_id: memberpressId, importe: datosCliente.importe });
+        // Si el checkout creó suscripción, alineamos caducidad en MP
+        let subExpiresISO = null;
+        try {
+          if (session.subscription) {
+            const sub = await stripe.subscriptions.retrieve(session.subscription);
+            if (sub?.current_period_end) {
+              subExpiresISO = new Date(sub.current_period_end * 1000).toISOString();
+            }
+          }
+        } catch (_) {}
+        await syncMemberpressClub({
+          email,
+          accion: 'activar',
+          membership_id: memberpressId,
+          importe: datosCliente.importe,
+          ...(subExpiresISO ? { expires_at: subExpiresISO } : {})
+        });
         console.log('✅ CLUB activado inmediatamente');
       } else if (memberpressId === 7994) {
         await syncMemberpressLibro({ email, accion: 'activar', importe: datosCliente.importe });

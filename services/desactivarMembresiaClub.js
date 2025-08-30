@@ -112,6 +112,7 @@ async function desactivarMembresiaClub(email, password, enviarEmailConfirmacion 
   }
   // Permitimos el "sentinel" cuando la llamada ya viene autenticada por HMAC desde WP.
   const isWpAsserted = (typeof password === 'string' && password === WP_ASSERTED_SENTINEL);
+  // Voluntaria solo si: sentinel válido O password real (≥4) que luego validamos contra WP
   if (!isWpAsserted && (!password || typeof password !== 'string' || password.length < 4)) {
     return { ok: false, mensaje: 'Contraseña incorrecta.' };
   }

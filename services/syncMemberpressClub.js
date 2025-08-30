@@ -16,7 +16,11 @@ const maskTail = (s) => (s ? `••••${String(s).slice(-4)}` : null);
 const nowIso   = () => new Date().toISOString();
 const shortId  = () => crypto.randomBytes(6).toString('hex');
 
-// Firma: HMAC-SHA256(ts.POST.<pathname>.sha256(body))
+/**
+ * Firma HMAC:
+ * base = ts + ".POST." + <pathname> + "." + sha256(body)
+ * header: x-lab-ts / x-lab-sig
+ */
 function signRequest(apiUrl, bodyStr) {
   const ts        = String(Date.now());
   const pathname  = new URL(apiUrl).pathname;
@@ -30,31 +34,33 @@ function signRequest(apiUrl, bodyStr) {
  * Sincroniza una membresía del CLUB en MemberPress (activar / desactivar).
  * Seguridad:
  *  - x-api-key (.env)
- *  - x-mp-ts + x-mp-sig (HMAC SHA256 de ts.POST.<path>.sha256(body))
- *
- * Reutilizable: puedes pasar apiUrl para otros endpoints.
+ *  - x-lab-ts + x-lab-sig (HMAC SHA256 de ts.POST.<path>.sha256(body))
  *
  * @param {Object} params
- * @param {string} params.email                 Email del usuario
- * @param {'activar'|'desactivar'} params.accion
- * @param {number} [params.membership_id=10663] ID MemberPress del producto
- * @param {number} [params.importe=9.99]        Importe en euros
- * @param {string} [params.apiUrl]              (Opcional) URL del endpoint WP a usar
- * @returns {Promise<Object>}                   Respuesta JSON del endpoint WP
+ * @param {string} params.email                   Email del usuario
+ * @param {'activar'|'desactivar'} params.accion  Acción solicitada
+ * @param {number} [params.membership_id=10663]   ID MemberPress del producto
+ * @param {number} [params.importe=9.99]          Importe en euros (solo para activar)
+ * @param {string} [params.expires_at]            (Opcional) ISO o 'YYYY-MM-DD HH:mm:ss' UTC
+ * @param {string} [params.apiUrl]                (Opcional) URL del endpoint WP
+ * @returns {Promise<Object>}                     Respuesta JSON del endpoint WP
  */
 async function syncMemberpressClub({
   email,
   accion,
   membership_id = 10663,
   importe = 9.99,
+  expires_at,
   apiUrl
 }) {
   // —— Validaciones de entrada
   if (!email || typeof email !== 'string' || !email.includes('@')) {
     throw new Error('❌ Email inválido en syncMemberpressClub');
   }
-  if (!['activar', 'desactivar'].includes(accion)) {
-    throw new Error("❌ Acción inválida: debe ser 'activar' o 'desactivar'");
+  // Acepta sinónimos entrantes, pero normaliza a lo que entiende WP: activar | desactivar
+  const ALLOWED_IN = ['activar','desactivar','desactivar_inmediata','desactivar_fin_ciclo'];
+  if (!ALLOWED_IN.includes(accion)) {
+    throw new Error("❌ Acción inválida: usa 'activar' o 'desactivar'");
   }
   if (!Number.isInteger(membership_id)) {
     throw new Error('❌ membership_id debe ser un número entero');
@@ -71,13 +77,20 @@ async function syncMemberpressClub({
     ? parseFloat(importe.toFixed(2))
     : 9.99;
 
+  // —— Normalización de acción hacia WP (solo acepta 'activar' | 'desactivar')
+  const accionOut = (accion === 'activar') ? 'activar' : 'desactivar';
+
   // —— Payload
   const payload = {
     email,
-    accion,
+    accion: accionOut,
     membership_id,
     importe: importeNum
   };
+  if (typeof expires_at === 'string' && expires_at.trim()) {
+    payload.expires_at = expires_at.trim(); // el endpoint lo aceptará para fin de ciclo
+  }
+
   const bodyStr = JSON.stringify(payload);
 
   // —— Firma HMAC + trazas de depuración (opt-in)
@@ -90,33 +103,46 @@ async function syncMemberpressClub({
       ts,
       bodyHash10: bodyHash.slice(0, 10),
       sig10: sig.slice(0, 10),
-      apiKeyMasked: maskTail(API_KEY)
+      apiKeyMasked: maskTail(API_KEY),
+      accionOut,
+      hasExpiresAt: Boolean(payload.expires_at)
     });
   }
 
   // —— Log operativo mínimo
   const reqId = shortId();
-  console.log(`⏩ [syncMemberpressClub#${reqId}] '${accion}' → ${email} (ID:${membership_id}, €${importeNum})`);
+  console.log(`⏩ [syncMemberpressClub#${reqId}] '${accionOut}' → ${email} (ID:${membership_id}${accionOut==='activar' ? `, €${importeNum}` : ''}${payload.expires_at ? `, expires_at=${payload.expires_at}` : ''})`);
 
-  // —— Petición
+  // —— Petición (con 1 reintento simple ante 502/503/504)
   let response;
   let text;
-  try {
-    response = await fetch(API_URL, {
+  const attempt = async () => {
+    const r = await fetch(API_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'User-Agent': 'LaborotecaMP/1.0',
         'x-api-key': API_KEY,
-        'x-mp-ts': ts,
-        'x-mp-sig': sig,
+        'x-lab-ts': ts,
+        'x-lab-sig': sig,
         'x-request-id': reqId
       },
       body: bodyStr,
       timeout: 15000 // 15s
     });
+    const t = await r.text();
+    return { r, t };
+  };
 
-    text = await response.text();
+  try {
+    ({ r: response, t: text } = await attempt());
+
+    // Reintento simple si es 502/503/504
+    if ([502, 503, 504].includes(response.status)) {
+      if (MP_SYNC_DEBUG) console.warn(`[syncMemberpressClub#${reqId}] retry por ${response.status}`);
+      await new Promise(res => setTimeout(res, 500));
+      ({ r: response, t: text } = await attempt());
+    }
 
     // —— Parseo de JSON
     let data;
@@ -128,22 +154,16 @@ async function syncMemberpressClub({
 
     // —— Errores HTTP
     if (!response.ok) {
-      const errorMsg = (data && data.message) || (data && data.error) || response.statusText || 'HTTP error';
+      const errorMsg = (data && (data.message || data.error)) || response.statusText || 'HTTP error';
       throw new Error(`❌ Error HTTP ${response.status} en syncMemberpressClub: ${errorMsg}`);
     }
 
-    // —— Validación SEMÁNTICA (200 pero sin efecto real)
+    // —— Validación semántica: el endpoint devuelve { ok: true, ... }
     if (!data || data.ok !== true) {
       throw new Error(`❌ Respuesta WP inesperada (ok=${String(data?.ok)})`);
     }
-    if (accion === 'activar') {
-      const tx = Number(data.transaction_id);
-      if (!Number.isFinite(tx) || tx <= 0) {
-        throw new Error('❌ WP respondió OK pero sin transaction_id válido');
-      }
-    }
 
-    console.log(`✅ [MemberPressClub#${reqId}] '${accion}' OK para ${email} ${accion === 'activar' ? `(tx=${data.transaction_id})` : ''}`);
+    console.log(`✅ [MemberPressClub#${reqId}] '${accionOut}' OK para ${email}`);
     return data;
 
   } catch (err) {
@@ -152,12 +172,11 @@ async function syncMemberpressClub({
 
     try {
       await alertAdmin({
-        // mantenemos el área histórica para no romper filtros existentes
         area: 'memberpress_sync',
         email,
         err,
         meta: {
-          accion,
+          accion: accionOut,
           membership_id,
           importe: importeNum,
           apiUrl: API_URL,

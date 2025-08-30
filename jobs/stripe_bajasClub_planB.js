@@ -33,9 +33,44 @@ const db = admin.firestore();
 // --- Reutilizamos tu cliente HMAC para WP (MU plugin)
 const { syncMemberpressClub } = require('../services/syncMemberpressClub');
 
-// ======================= Logger super verboso =======================
-const redactEmail = (s) =>
-  typeof s === 'string' && s.includes('@') ? s.replace(/(.{2}).*(@.*)/, '$1***$2') : s;
+// --- logger seguro (no filtra secretos a logs) ---
+
+const SENSITIVE_KEYS = /(^|_)(private|secret|token|key|password|sig|hmac|authorization|stripe_signature)$/i;
+const MAX_LOG_BYTES = 2048;
+
+function mask(str, keepStart = 3, keepEnd = 2) {
+  const s = String(str ?? '');
+  if (s.length <= keepStart + keepEnd) return '***';
+  return s.slice(0, keepStart) + '…' + s.slice(-keepEnd);
+}
+
+function redactObject(input) {
+  if (input == null) return input;
+  if (Array.isArray(input)) return input.map(redactObject);
+
+  if (typeof input === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(input)) {
+      out[k] = SENSITIVE_KEYS.test(k) ? mask(v) : redactObject(v);
+    }
+    return out;
+  }
+
+  if (typeof input === 'string') {
+    // oculta emails y PEMs, y limita cadenas larguísimas
+    let s = input.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, (m) => mask(m));
+    s = s.replace(/-----BEGIN [^-]+ PRIVATE KEY-----[\s\S]*?-----END [^-]+ PRIVATE KEY-----/g, '***REDACTED_PRIVATE_KEY***');
+    return s.length > 300 ? (s.slice(0, 200) + '…[truncated]') : s;
+  }
+
+  return input;
+}
+
+function safeStringify(obj) {
+  let s = JSON.stringify(obj);
+  if (s.length > MAX_LOG_BYTES) s = s.slice(0, MAX_LOG_BYTES) + '…[truncated]';
+  return s;
+}
 
 function vlog(area, msg, meta = {}) {
   try {
@@ -43,16 +78,19 @@ function vlog(area, msg, meta = {}) {
       at: new Date().toISOString(),
       area,
       msg,
-      ...Object.fromEntries(Object.entries(meta).map(([k, v]) => [k, redactEmail(v)])),
+      meta: redactObject(meta),   // ⟵ no aplanamos; lo limpiamos
     };
-    console.log(JSON.stringify(line));
+    console.log(safeStringify(line));
   } catch {
-    console.log(`[${area}] ${msg}`, meta);
+    // último recurso: no imprimir objetos crudos
+    console.log(`[${area}] ${msg}`);
   }
 }
+
 function verror(area, err, meta = {}) {
   const msg = err?.message || String(err);
-  vlog(area, `❌ ${msg}`, { ...meta, stack: err?.stack?.slice(0, 600) });
+  const stack = (err?.stack || '').split('\n').slice(0, 6).join(' | ').slice(0, 600);
+  vlog(area, `❌ ${msg}`, { ...meta, stack });
 }
 
 // ======================= Idempotencia (locks en Firestore) =======================

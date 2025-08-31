@@ -24,6 +24,9 @@ const db = admin.firestore();
 // Cliente HMAC hacia WP (MU plugin)
 const { syncMemberpressClub } = require('../services/syncMemberpressClub');
 
+// Alertas al administrador
+const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
+
 /* ===================== Logger seguro ===================== */
 const SENSITIVE_KEYS = /(^|_)(private|secret|token|key|password|sig|hmac|authorization|stripe_signature)$/i;
 const MAX_LOG_BYTES = 2048;
@@ -44,7 +47,6 @@ function redactObject(input) {
     return out;
   }
   if (typeof input === 'string') {
-    // Oculta emails/PEMs y recorta textos larguísimos
     let s = input.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, (m) => mask(m));
     s = s.replace(/-----BEGIN [^-]+ PRIVATE KEY-----[\s\S]*?-----END [^-]+ PRIVATE KEY-----/g, '***REDACTED_PRIVATE_KEY***');
     return s.length > 300 ? s.slice(0, 200) + '…[truncated]' : s;
@@ -73,6 +75,58 @@ function verror(area, err, meta = {}) {
   const msg = err?.message || String(err);
   const stack = (err?.stack || '').split('\n').slice(0, 6).join(' | ').slice(0, 600);
   vlog(area, `❌ ${msg}`, { ...meta, stack });
+}
+
+/* ===================== Alertas (helpers) ===================== */
+// proxy seguro; si falla la alerta, no rompe el flujo
+async function sendAdmin(subject, text, meta = {}) {
+  try {
+    await alertAdmin({ subject, text, meta });
+  } catch {
+    /* no-op */
+  }
+}
+
+// dedupe suave por proceso (para errores puntuales)
+const __alertOnce = new Set();
+async function notifyOnce(area, err, meta = {}, key = null) {
+  try {
+    const k = key || `${area}:${JSON.stringify(meta).slice(0, 200)}`;
+    if (__alertOnce.has(k)) return;
+    __alertOnce.add(k);
+    const subject = `[${area}] ${err ? 'ERROR' : 'Aviso'}`;
+    const text = err ? (err?.message || String(err)) : 'Evento';
+    await sendAdmin(subject, text, meta);
+  } catch { /* no-op */ }
+}
+
+// alerta de éxito “Plan B ejecutado”
+async function alertPlanBSuccess(source, { email, subId, reason, extra = {} }) {
+  // rate-limit de 6h por suscripción/email para no spamear
+  const key = `planB.success:${source}:${subId || email}`;
+  const res = await ensureOnce('alertPlanB', key, 6 * 3600, async () => {
+    let subject, text;
+    if (source === 'replayer' || source === 'reconciler') {
+      subject = `✅ Plan B (${source}) ejecutado — acceso desactivado`;
+      text = `Stripe no entregó/aceptamos el webhook a tiempo o hubo incoherencia.\n` +
+             `El Plan B (${source}) actuó y la membresía del email ${email} ` +
+             `se desactivó correctamente en WordPress.\n` +
+             `SubID: ${subId || 'N/D'} · Motivo: ${reason || 'doDeactivate'}`;
+    } else if (source === 'bajaScheduler') {
+      subject = `✅ Plan B (baja programada) ejecutada — acceso desactivado`;
+      text = `Se ejecutó una baja programada para ${email} con éxito.\n` +
+             `Referencias: ${subId || 'N/D'}.`;
+    } else if (source === 'sanity') {
+      subject = `✅ Plan B (sanity) — acceso purgado sin sub activa en Stripe`;
+      text = `No existe suscripción activa en Stripe para ${email}. ` +
+             `Se purgó el acceso en WP correctamente.`;
+    } else {
+      subject = `✅ Plan B — acceso desactivado`;
+      text = `Plan B (${source}) desactivó con éxito el acceso de ${email}.`;
+    }
+    await sendAdmin(subject, text, { email, subId, reason, source, ...extra });
+  });
+  return res;
 }
 
 /* ===================== Idempotencia (locks) ===================== */
@@ -112,6 +166,26 @@ function needsDeactivation(sub) {
   return false;
 }
 
+/* ======= Deactivación unificada (idempotente + alertas de éxito) ======= */
+async function wpDeactivateOnce(email, subId, source, extraMeta = {}, reason = 'doDeactivate') {
+  const key = subId ? `sub:${subId}` : `email:${email}`;
+  const res = await ensureOnce('wpDeact', key, 24 * 3600, async () => {
+    try {
+      await syncMemberpressClub({ email, accion: 'desactivar', membership_id: CLUB_MEMBERSHIP_ID });
+      vlog(source, '→ desactivar OK', { email, subId, reason });
+      await alertPlanBSuccess(source, { email, subId, reason, extra: extraMeta });
+    } catch (e) {
+      verror(`${source}.sync_fail`, e, { email, subId, reason, ...extraMeta });
+      await notifyOnce(`${source}.sync_fail`, e, { email, subId }, `${source}.sync_fail:${subId || email}`);
+      throw e;
+    }
+  });
+  if (res.skipped) {
+    vlog(source, 'skip wpDeact (recent)', { email, subId });
+  }
+  return res;
+}
+
 /* ===================== 1) Replayer ===================== */
 const REPLAYER_TYPES = [
   'customer.subscription.deleted',
@@ -128,163 +202,201 @@ async function setReplayCheckpoint(ts) {
   await ref.set({ lastCreated: ts, updatedAt: Date.now() }, { merge: true });
 }
 async function jobReplayer() {
-  const since = await getReplayCheckpoint();
-  vlog('replayer', 'start', { since });
+  try {
+    const since = await getReplayCheckpoint();
+    vlog('replayer', 'start', { since });
 
-  let hasMore = true, starting_after;
-  let processed = 0, skipped = 0, maxTs = since;
+    let hasMore = true, starting_after;
+    let processed = 0, skipped = 0, maxTs = since;
 
-  while (hasMore) {
-    const page = await stripe.events.list({
-      types: REPLAYER_TYPES, created: { gt: since }, limit: 100, starting_after,
-    });
-
-    for (const ev of page.data) {
-      maxTs = Math.max(maxTs, ev.created || 0);
-      const info = { id: ev.id, type: ev.type, created: ev.created, livemode: ev.livemode };
-
-      const res = await ensureOnce('replayer', ev.id, 3600, async () => {
-        vlog('replayer', '→ handle', info);
-
-        let subId = null;
-        if (ev.type.startsWith('customer.subscription.')) subId = ev.data?.object?.id;
-        else if (ev.type === 'invoice.payment_failed') subId = ev.data?.object?.subscription || null;
-
-        if (!subId) { vlog('replayer', 'no subId en evento, skip', info); return; }
-
-        const sub = await stripe.subscriptions.retrieve(subId);
-        const email = extractEmailFromSub(sub);
-        const doDeactivate = needsDeactivation(sub);
-
-        vlog('replayer', 'evaluated', {
-          ...info,
-          subId,
-          status: sub.status,
-          cancel_at_period_end: sub.cancel_at_period_end,
-          current_period_end: sub.current_period_end,
-          email,
-          doDeactivate,
-        });
-
-        if (doDeactivate && email) {
-          await syncMemberpressClub({ email, accion: 'desactivar', membership_id: CLUB_MEMBERSHIP_ID });
-          vlog('replayer', '→ desactivar OK', { subId, email });
-        } else {
-          vlog('replayer', 'no-op', { subId, email });
-        }
+    while (hasMore) {
+      const page = await stripe.events.list({
+        types: REPLAYER_TYPES, created: { gt: since }, limit: 100, starting_after,
       });
 
-      if (res.skipped) { skipped++; vlog('replayer', 'skip (already handled)', info); }
-      else { processed++; vlog('replayer', 'done', info); }
+      for (const ev of page.data) {
+        maxTs = Math.max(maxTs, ev.created || 0);
+        const info = { id: ev.id, type: ev.type, created: ev.created, livemode: ev.livemode };
+
+        const res = await ensureOnce('replayer', ev.id, 3600, async () => {
+          vlog('replayer', '→ handle', info);
+
+          let subId = null;
+          if (ev.type.startsWith('customer.subscription.')) subId = ev.data?.object?.id;
+          else if (ev.type === 'invoice.payment_failed') subId = ev.data?.object?.subscription || null;
+
+          if (!subId) { vlog('replayer', 'no subId en evento, skip', info); return; }
+
+          const sub = await stripe.subscriptions.retrieve(subId);
+          const email = extractEmailFromSub(sub);
+          const doDeactivate = needsDeactivation(sub);
+
+          vlog('replayer', 'evaluated', {
+            ...info,
+            subId,
+            status: sub.status,
+            cancel_at_period_end: sub.cancel_at_period_end,
+            current_period_end: sub.current_period_end,
+            email,
+            doDeactivate,
+          });
+
+          if (doDeactivate && email) {
+            await notifyOnce(
+              'planB.replayer.action',
+              null,
+              { subId, email, type: ev.type, created: ev.created, reason: 'doDeactivate=true' },
+              `planB.replayer.action:${subId}`
+            );
+            await wpDeactivateOnce(email, subId, 'replayer', info, 'replayer_doDeactivate');
+          } else {
+            vlog('replayer', 'no-op', { subId, email });
+          }
+        });
+
+        if (res.skipped) { skipped++; vlog('replayer', 'skip (already handled)', info); }
+        else { processed++; /* sin “done” ruidoso */ }
+      }
+
+      hasMore = page.has_more;
+      starting_after = page.data.length ? page.data[page.data.length - 1].id : undefined;
     }
 
-    hasMore = page.has_more;
-    starting_after = page.data.length ? page.data[page.data.length - 1].id : undefined;
+    if (maxTs > since) await setReplayCheckpoint(maxTs);
+    vlog('replayer', 'end', { processed, skipped, newCheckpoint: maxTs });
+  } catch (e) {
+    verror('replayer.fatal', e);
+    await notifyOnce('planB.replayer.fatal', e);
+    throw e;
   }
-
-  if (maxTs > since) await setReplayCheckpoint(maxTs);
-  vlog('replayer', 'end', { processed, skipped, newCheckpoint: maxTs });
 }
 
 /* ===================== 2) Reconciliación ===================== */
 const RECON_QUERY =
   "status:'canceled' OR status:'unpaid' OR status:'incomplete_expired' OR cancel_at_period_end:'true'";
 async function jobReconciler() {
-  vlog('reconciler', 'start', { query: RECON_QUERY });
+  try {
+    vlog('reconciler', 'start', { query: RECON_QUERY });
 
-  let reviewed = 0, acted = 0;
-  let page = null;
+    let reviewed = 0, acted = 0;
+    let page = null;
 
-  do {
-    const res = await stripe.subscriptions.search({ query: RECON_QUERY, limit: 100, page: page || undefined });
+    do {
+      const res = await stripe.subscriptions.search({ query: RECON_QUERY, limit: 100, page: page || undefined });
 
-    for (const sub of res.data) {
-      reviewed++;
-      const email = extractEmailFromSub(sub);
-      const doDeactivate = needsDeactivation(sub);
-      const info = {
-        subId: sub.id,
-        status: sub.status,
-        cancel_at_period_end: sub.cancel_at_period_end,
-        current_period_end: sub.current_period_end,
-        email,
-        doDeactivate,
-      };
+      for (const sub of res.data) {
+        reviewed++;
+        const email = extractEmailFromSub(sub);
+        const doDeactivate = needsDeactivation(sub);
+        const info = {
+          subId: sub.id,
+          status: sub.status,
+          cancel_at_period_end: sub.cancel_at_period_end,
+          current_period_end: sub.current_period_end,
+          email,
+          doDeactivate,
+        };
 
-      if (!doDeactivate || !email) { vlog('reconciler', 'ok/no-op', info); continue; }
+        if (!doDeactivate || !email) { vlog('reconciler', 'ok/no-op', info); continue; }
 
-      const lock = await ensureOnce('reconciler', sub.id, 24 * 3600, async () => {
-        vlog('reconciler', '→ desactivar en WP', info);
-        await syncMemberpressClub({ email, accion: 'desactivar', membership_id: CLUB_MEMBERSHIP_ID });
-      });
-      if (!lock.skipped) { acted++; vlog('reconciler', 'ok', info); }
-      else { vlog('reconciler', 'skip (locked)', info); }
-    }
+        await notifyOnce(
+          'planB.reconciler.action',
+          null,
+          { subId: sub.id, email, status: sub.status, cancel_at_period_end: sub.cancel_at_period_end, current_period_end: sub.current_period_end },
+          `planB.reconciler.action:${sub.id}`
+        );
 
-    page = res.next_page;
-  } while (page);
+        const r = await wpDeactivateOnce(email, sub.id, 'reconciler', info, 'reconciler_doDeactivate');
+        if (!r.skipped) acted++;
+      }
 
-  vlog('reconciler', 'end', { reviewed, acted });
+      page = res.next_page;
+    } while (page);
+
+    vlog('reconciler', 'end', { reviewed, acted });
+  } catch (e) {
+    verror('reconciler.fatal', e);
+    await notifyOnce('planB.reconciler.fatal', e);
+    throw e;
+  }
 }
 
 /* ===================== 3) Reloj de bajas programadas ===================== */
 async function jobBajasScheduler() {
-  const now = Date.now();
-  vlog('bajaScheduler', 'start', { coll: BAJAS_COLL, now });
+  try {
+    const now = Date.now();
+    vlog('bajaScheduler', 'start', { coll: BAJAS_COLL, now });
 
-  const snap = await db.collection(BAJAS_COLL)
-    .where('estadoBaja', '==', 'programada')
-    .where('fechaEfectosMs', '<=', now)
-    .limit(200).get();
+    const snap = await db.collection(BAJAS_COLL)
+      .where('estadoBaja', '==', 'programada')
+      .where('fechaEfectosMs', '<=', now)
+      .limit(200).get();
 
-  if (snap.empty) { vlog('bajaScheduler', 'no pending'); return; }
+    if (snap.empty) { vlog('bajaScheduler', 'no pending'); return; }
 
-  let done = 0, skipped = 0;
-  for (const doc of snap.docs) {
-    const d = doc.data();
-    const email = d.email;
-    const key = `bajaProg:${doc.id}`;
-    const info = { id: doc.id, email, motivo: d.motivo, fechaEfectosMs: d.fechaEfectosMs };
+    let done = 0, skipped = 0;
+    for (const doc of snap.docs) {
+      const d = doc.data();
+      const email = d.email;
+      const info = { id: doc.id, email, motivo: d.motivo, fechaEfectosMs: d.fechaEfectosMs };
 
-    const res = await ensureOnce('bajaScheduler', key, 6 * 3600, async () => {
-      vlog('bajaScheduler', '→ desactivar en WP', info);
-      await syncMemberpressClub({ email, accion: 'desactivar', membership_id: CLUB_MEMBERSHIP_ID });
-      await doc.ref.set({ estadoBaja: 'ejecutada', ejecutadaAt: Date.now() }, { merge: true });
-    });
+      const res = await ensureOnce('bajaScheduler', `bajaProg:${doc.id}`, 6 * 3600, async () => {
+        await notifyOnce('planB.bajas.action', null, info, `planB.bajas.action:${doc.id}`);
+        await wpDeactivateOnce(email, null, 'bajaScheduler', info, 'baja_programada');
+        try {
+          await doc.ref.set({ estadoBaja: 'ejecutada', ejecutadaAt: Date.now() }, { merge: true });
+        } catch (e) {
+          verror('bajaScheduler.firestore_update_fail', e, info);
+          await notifyOnce('planB.bajas.firestore_update_fail', e, info, `planB.bajas.firestore_update_fail:${doc.id}`);
+          throw e;
+        }
+      });
 
-    if (res.skipped) { skipped++; vlog('bajaScheduler', 'skip (locked)', info); }
-    else { done++; vlog('bajaScheduler', 'ok', info); }
+      if (res.skipped) { skipped++; vlog('bajaScheduler', 'skip (locked)', info); }
+      else { done++; vlog('bajaScheduler', 'ok', info); }
+    }
+
+    vlog('bajaScheduler', 'end', { done, skipped });
+  } catch (e) {
+    verror('bajaScheduler.fatal', e);
+    await notifyOnce('planB.bajas.fatal', e);
+    throw e;
   }
-
-  vlog('bajaScheduler', 'end', { done, skipped });
 }
 
 /* ===================== 4) (Opcional) Sanity ===================== */
 async function tryImport(fnPath) { try { return require(fnPath); } catch { return null; } }
 async function jobSanity() {
-  const svc = await tryImport('../services/wpMemberPressList');
-  if (!svc || typeof svc.getWpClubMembers !== 'function') {
-    vlog('sanity', 'skip: falta services/wpMemberPressList.getWpClubMembers()');
-    return;
-  }
-  const emails = await svc.getWpClubMembers();
-  vlog('sanity', 'start', { candidates: emails.length });
-  let fixed = 0;
-
-  for (const email of emails) {
-    const res = await stripe.subscriptions.search({
-      query: `status:'active' AND metadata['email']:'${email}'`,
-      limit: 1,
-    });
-    if (!res.data.length) {
-      vlog('sanity', '→ desactivar (sin sub activa en Stripe)', { email });
-      await syncMemberpressClub({ email, accion: 'desactivar', membership_id: CLUB_MEMBERSHIP_ID });
-      fixed++;
-    } else {
-      vlog('sanity', 'ok', { email, subId: res.data[0].id });
+  try {
+    const svc = await tryImport('../services/wpMemberPressList');
+    if (!svc || typeof svc.getWpClubMembers !== 'function') {
+      vlog('sanity', 'skip: falta services/wpMemberPressList.getWpClubMembers()');
+      return;
     }
+    const emails = await svc.getWpClubMembers();
+    vlog('sanity', 'start', { candidates: emails.length });
+    let fixed = 0;
+
+    for (const email of emails) {
+      const res = await stripe.subscriptions.search({
+        query: `status:'active' AND metadata['email']:'${email}'`,
+        limit: 1,
+      });
+      if (!res.data.length) {
+        vlog('sanity', '→ desactivar (sin sub activa en Stripe)', { email });
+        await notifyOnce('planB.sanity.action', null, { email }, `planB.sanity.action:${email}`);
+        await wpDeactivateOnce(email, null, 'sanity', { email }, 'sin_sub_activa');
+        fixed++;
+      } else {
+        vlog('sanity', 'ok', { email, subId: res.data[0].id });
+      }
+    }
+    vlog('sanity', 'end', { fixed });
+  } catch (e) {
+    verror('sanity.fatal', e);
+    await notifyOnce('planB.sanity.fatal', e);
+    throw e;
   }
-  vlog('sanity', 'end', { fixed });
 }
 
 /* ===================== CLI ===================== */
@@ -304,7 +416,8 @@ async function main() {
       process.exitCode = 2;
     }
   } catch (e) {
-    verror('planB', e);
+    verror('planB.main', e, { cmd });
+    await notifyOnce('planB.main.fatal', e, { cmd });
     process.exitCode = 1;
   }
 }

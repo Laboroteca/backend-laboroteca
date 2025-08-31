@@ -9,6 +9,7 @@
  */
 
 const SMTP2GO_ENDPOINT = 'https://api.smtp2go.com/v3/email/send';
+const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 
 // --- Pie RGPD unificado (mismo separador y estilos) ---
 const PIE_HTML = `
@@ -90,6 +91,13 @@ async function enviarEmailCanjeLibro({ toEmail, nombre = '', apellidos = '', lib
 
   if (!apiKey) {
     console.error('❌ Falta API KEY de SMTP2GO (prueba SMTP2GO_API_KEY | SMTP2GO_KEY | SMTP_API_KEY | SMTP2GO_TOKEN)');
+    try {
+      await alertAdmin({
+        area: 'regalos.email.smtp_config_missing',
+        err: new Error('SMTP2GO_API_KEY missing'),
+        meta: { toEmail: toEmail || null, libro: libroElegido || null }
+      });
+    } catch (_) {}
     return { ok: false, error: 'SMTP2GO_API_KEY missing' };
   }
   if (!toEmail || !libroElegido) {
@@ -127,6 +135,19 @@ async function enviarEmailCanjeLibro({ toEmail, nombre = '', apellidos = '', lib
     // éxito típico: data.data.succeeded === 1
     if (!res.ok || (data && data.data && data.data.succeeded !== 1)) {
       console.error('❌ Error SMTP2GO:', res.status, data);
+      try {
+        await alertAdmin({
+          area: 'regalos.email.smtp_send_error',
+          err: new Error(`SMTP2GO status ${res.status}`),
+          meta: {
+            toEmail,
+            libro: libroElegido,
+            subject,
+            status: res.status,
+            succeeded: data?.data?.succeeded ?? null
+          }
+        });
+      } catch (_) {}
       return { ok: false, error: `SMTP2GO status ${res.status}` };
     }
 
@@ -135,6 +156,13 @@ async function enviarEmailCanjeLibro({ toEmail, nombre = '', apellidos = '', lib
     return { ok: true, id: messageId };
   } catch (err) {
     console.error('❌ Excepción SMTP2GO:', err?.message || err);
+    try {
+      await alertAdmin({
+        area: 'regalos.email.smtp_exception',
+        err,
+        meta: { toEmail, libro: libroElegido, subject }
+      });
+    } catch (_) {}
     return { ok: false, error: String(err?.message || err) };
   }
 }

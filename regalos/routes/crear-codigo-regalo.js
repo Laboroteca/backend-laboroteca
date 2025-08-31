@@ -9,6 +9,7 @@ const firestore = admin.firestore();
 const { google } = require('googleapis');
 const { auth } = require('../../entradas/google/sheetsAuth');
 const { enviarEmailPersonalizado } = require('../../services/email'); // email al beneficiario
+const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 
 const router = express.Router();
 
@@ -26,7 +27,7 @@ const LEGACY_TOKEN  = (process.env.FLUENTFORM_TOKEN || '').trim();
 
 function maskTail(s) { return s ? `••••${String(s).slice(-4)}` : null; }
 
-function verifyRegalosHmac(req, res, next) {
+async function verifyRegalosHmac(req, res, next) {
   // 0) Compat legacy: Authorization Bearer
   const bearer = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim();
   if (bearer && bearer === LEGACY_TOKEN) {
@@ -35,6 +36,13 @@ function verifyRegalosHmac(req, res, next) {
   }
 
   if (!API_KEY || !HMAC_SECRET) {
+    try {
+      await alertAdmin({
+        area: 'regalos.crear.hmac_config_missing',
+        err: new Error('Config incompleta (API_KEY/HMAC_SECRET)'),
+        meta: { hasApiKey: !!API_KEY, hasSecret: !!HMAC_SECRET }
+      });
+    } catch (_) {}
     return res.status(500).json({ error: 'Config incompleta (API_KEY/HMAC_SECRET)' });
   }
 
@@ -83,9 +91,27 @@ function verifyRegalosHmac(req, res, next) {
 
   try {
     if (!crypto.timingSafeEqual(Buffer.from(expected, 'utf8'), Buffer.from(sig, 'utf8'))) {
+      try {
+        await alertAdmin({
+          area: 'regalos.crear.hmac_deny',
+          err: new Error('Unauthorized (sig)'),
+          meta: {
+            path: pathname,
+            ts,
+            sig10: String(sig).slice(0,10)
+          }
+        });
+      } catch (_) {}
       return res.status(401).json({ error: 'Unauthorized (sig)' });
     }
   } catch {
+    try {
+      await alertAdmin({
+        area: 'regalos.crear.hmac_error',
+        err: new Error('Unauthorized (sig-len)'),
+        meta: { path: pathname }
+      });
+    } catch (_) {}
     return res.status(401).json({ error: 'Unauthorized (sig-len)' });
   }
 
@@ -254,6 +280,13 @@ router.post('/crear-codigo-regalo', verifyRegalosHmac, async (req, res) => {
       }
     } catch (sheetErr) {
       console.warn('⚠️ No se pudo registrar en Sheets:', sheetErr?.message || sheetErr);
+      try {
+        await alertAdmin({
+          area: 'regalos.crear.sheets_error',
+          err: sheetErr,
+          meta: { nombre, email, codigo, otorgante_email: otorganteEmail || null, sheetId: SHEET_ID_CONTROL, sheetName: SHEET_NAME_CONTROL }
+        });
+      } catch (_) {}
     }
 
     // ✉️ Email al beneficiario (con RGPD)
@@ -295,12 +328,30 @@ ${PIE_TEXT}`;
     } catch (mailErr) {
       console.warn('⚠️ No se pudo enviar el email al beneficiario:', mailErr?.message || mailErr);
       // No bloqueamos la creación por fallo de email
+      try {
+        await alertAdmin({
+          area: 'regalos.crear.email_error',
+          err: mailErr,
+          meta: { nombre, email, codigo, otorgante_email: otorganteEmail || null }
+        });
+      } catch (_) {}
     }
 
     console.log(`🎁 Código REGALO creado → ${codigo} para ${email} | Otorgante: ${otorganteEmail || 'desconocido'}`);
     return res.status(201).json({ ok: true, codigo, otorgante_email: otorganteEmail || null, emailed: true });
   } catch (err) {
     console.error('❌ Error en /crear-codigo-regalo:', err?.message || err);
+    try {
+      await alertAdmin({
+        area: 'regalos.crear.exception',
+        err,
+        meta: {
+          nombre: String(req.body?.nombre || '').trim() || null,
+          email: String(req.body?.email || '').trim().toLowerCase() || null,
+          codigo: String(req.body?.codigo || '').trim().toUpperCase() || null
+        }
+      });
+    } catch (_) {}
     return res.status(500).json({ ok: false, error: 'Error interno del servidor.' });
   }
 });

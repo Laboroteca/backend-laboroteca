@@ -3,6 +3,7 @@ const express = require('express');
 const { activarMembresiaClub } = require('../services/activarMembresiaClub');
 const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
 const router = express.Router();
 
@@ -36,6 +37,13 @@ router.post('/', async (req, res) => {
     return res.json({ ok: true });
   } catch (error) {
     console.error('❌ Error al activar la membresía:', error?.message || error);
+    try {
+      await alertAdmin({
+        area: 'club.activar_membresia.error',
+        err: error,
+        meta: { email, invoiceId: invoiceId || null, paymentIntentId: paymentIntentId || null }
+      });
+    } catch (_) {}
     return res.status(500).json({ error: 'Error al activar la membresía' });
   }
 });

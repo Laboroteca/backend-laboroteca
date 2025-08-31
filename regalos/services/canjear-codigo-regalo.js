@@ -24,6 +24,8 @@ const marcarCodigoComoCanjeado = require('./marcarCodigoComoCanjeado');
 const registrarCanjeEnSheet   = require('./registrarCanjeEnSheet');
 const { activarMembresiaEnMemberPress } = require('./memberpress');
 const { enviarEmailCanjeLibro } = require('./enviarEmailCanjeLibro');
+const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
+
 
 // Google Sheets (IDs/pestañas)
 const SHEET_ID_REGALOS   = '1MjxXebR3oQIyu0bYeRWo83xj1sBFnDcx53HvRRBiGE'; // Libros GRATIS
@@ -143,6 +145,13 @@ module.exports = async function canjearCodigoRegalo({
         e.message.includes('corresponde')
       )) throw e;
       E(reqId, 'Validación REG falló', e);
+      try {
+        await alertAdmin({
+          area: 'regalos.canje.validacion_reg_error',
+          err: e,
+          meta: { reqId, email: emailNorm, codigo: codigoNorm }
+        });
+      } catch (_) {}
       throw new Error('El código introducido no es válido.');
     }
   } else {
@@ -188,6 +197,13 @@ module.exports = async function canjearCodigoRegalo({
     } catch (e) {
       if (e.message && e.message.includes('no está validada')) throw e;
       E(reqId, 'Validación PRE falló', e);
+      try {
+        await alertAdmin({
+          area: 'regalos.canje.validacion_pre_error',
+          err: e,
+          meta: { reqId, email: emailNorm, codigo: codigoNorm }
+        });
+      } catch (_) {}
       throw new Error('Esta entrada no está validada y no puede canjearse.');
     }
   }
@@ -209,6 +225,13 @@ module.exports = async function canjearCodigoRegalo({
       if (e?.code === 6 || /already\s*exists/i.test(e?.message || '')) {
         throw new Error('Este código ya ha sido utilizado.');
       }
+      try {
+        await alertAdmin({
+          area: 'regalos.canje.firestore_create_error',
+          err: e,
+          meta: { reqId, email: emailNorm, codigo: codigoNorm }
+        });
+      } catch (_) {}
       throw e;
     }
   }, { tries: 4, baseMs: 150 });
@@ -224,7 +247,16 @@ module.exports = async function canjearCodigoRegalo({
         valueInputOption: 'USER_ENTERED',
         requestBody: { values: [[ nombre, apellidos, emailNorm, tsHuman, libroNorm, esRegalo ? 'REGALO' : 'ENTRADA', codigoNorm ]] }
       });
-    } catch (e) { W(reqId, 'Registro en "Libros GRATIS" falló', { msg: e?.message }); }
+    } catch (e) {
+      W(reqId, 'Registro en "Libros GRATIS" falló', { msg: e?.message });
+      try {
+        await alertAdmin({
+          area: 'regalos.canje.sheets_append_error',
+          err: e,
+          meta: { reqId, email: emailNorm, codigo: codigoNorm, libro: libroNorm, sheetId: SHEET_ID_REGALOS, sheetName: SHEET_NAME_REGALOS }
+        });
+      } catch (_) {}
+    }
   })();
 
   /* 4) Activación MemberPress */
@@ -247,18 +279,41 @@ module.exports = async function canjearCodigoRegalo({
   } catch (err) {
     // No tiramos el canje: queda bloqueado y podremos activar manualmente
     E(reqId, 'Activación MP falló (canje bloqueado)', err);
+    try {
+      await alertAdmin({
+        area: 'regalos.canje.memberpress_error',
+        err,
+        meta: { reqId, email: emailNorm, codigo: codigoNorm, libro: libroNorm }
+      });
+    } catch (_) {}
   }
 
   /* 5) Auxiliares (no bloqueantes) */
   (async () => {
     try { await registrarCanjeEnSheet({ nombre, apellidos, email: emailNorm, codigo: codigoNorm, libro: libroNorm }); }
-    catch (e) { W(reqId, 'Registro auxiliar en hoja falló', { msg: e?.message }); }
+    catch (e) { W(reqId, 'Registro auxiliar en hoja falló', { msg: e?.message });
+      try {
+        await alertAdmin({
+          area: 'regalos.canje.sheets_aux_error',
+          err: e,
+          meta: { reqId, email: emailNorm, codigo: codigoNorm, libro: libroNorm }
+        });
+      } catch (_) {}
+    }
   })();
 
   if (esRegalo) {
     (async () => {
       try { await marcarCodigoComoCanjeado(codigoNorm); }
-      catch (e) { W(reqId, 'Marcar REG- como canjeado falló', { msg: e?.message }); }
+      catch (e) { W(reqId, 'Marcar REG- como canjeado falló', { msg: e?.message });
+        try {
+          await alertAdmin({
+            area: 'regalos.canje.marcar_reg_error',
+            err: e,
+            meta: { reqId, codigo: codigoNorm, email: emailNorm }
+          });
+        } catch (_) {}
+      }
     })();
   }
 

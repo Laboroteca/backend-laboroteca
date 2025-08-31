@@ -1,5 +1,6 @@
 // 📂 /regalos/services/memberpress.js
 const axios = require('axios');
+const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 
 // ============================
 // 🔍 CONFIGURACIÓN BASE
@@ -45,7 +46,19 @@ function pickFirstMember(respData) {
 // ============================
 async function getMemberByEmail(email) {
   console.log(`🔎 Buscando miembro por email en MemberPress: ${email}`);
-  const headers = buildHeaders();
+  let headers;
+  try {
+    headers = buildHeaders();
+  } catch (e) {
+    try {
+      await alertAdmin({
+        area: 'memberpress.build_headers_missing_key',
+        err: e,
+        meta: { email }
+      });
+    } catch (_) {}
+    throw e;
+  }
   const params = { search: email };
 
   try {
@@ -63,6 +76,16 @@ async function getMemberByEmail(email) {
       console.error('🔍 Status:', err.response.status);
       console.error('🔍 Body:', err.response.data);
     }
+    try {
+      await alertAdmin({
+        area: 'memberpress.get_member_error',
+        err,
+        meta: {
+          email,
+          status: err?.response?.status ?? null
+        }
+      });
+    } catch (_) {}
     throw err;
   }
 }
@@ -76,13 +99,32 @@ async function activarMembresiaEnMemberPress(email, membershipId) {
 
   const member = await getMemberByEmail(email);
   if (!member || !member.id) {
+    try {
+      await alertAdmin({
+        area: 'memberpress.member_not_found',
+        err: new Error('Usuario no encontrado en MemberPress'),
+        meta: { email, membershipId }
+      });
+    } catch (_) {}
     throw new Error(`Usuario no encontrado en MemberPress por email: ${email}`);
   }
 
-  const headers = {
-    ...buildHeaders(),
-    'Content-Type': 'application/x-www-form-urlencoded',
-  };
+  let headers;
+  try {
+    headers = {
+      ...buildHeaders(),
+      'Content-Type': 'application/x-www-form-urlencoded',
+    };
+  } catch (e) {
+    try {
+      await alertAdmin({
+        area: 'memberpress.build_headers_missing_key',
+        err: e,
+        meta: { email, membershipId }
+      });
+    } catch (_) {}
+    throw e;
+  }
 
   const body = new URLSearchParams({
     member: String(member.id),
@@ -106,6 +148,18 @@ async function activarMembresiaEnMemberPress(email, membershipId) {
       console.error('🔍 Headers:', err.response.headers);
       console.error('🔍 Body:', err.response.data);
     }
+    try {
+      await alertAdmin({
+        area: 'memberpress.transaction_error',
+        err,
+        meta: {
+          email,
+          membershipId,
+          memberId: member?.id ?? null,
+          status: err?.response?.status ?? null
+        }
+      });
+    } catch (_) {}
     throw new Error(typeof err.response?.data === 'string'
       ? err.response.data
       : JSON.stringify(err.response?.data || err.message));

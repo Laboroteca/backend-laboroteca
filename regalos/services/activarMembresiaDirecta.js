@@ -1,6 +1,7 @@
 // 📂 regalos/services/activarMembresiaDirecta.js
 
 const { activarMembresia } = require('./memberpress');
+const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 
 /**
  * Activa directamente una membresía en MemberPress para un usuario dado.
@@ -17,8 +18,20 @@ module.exports = async function activarMembresiaDirecta(email, membershipId) {
     throw new Error('Faltan datos para activar la membresía.');
   }
 
-  // 🚀 Activar en MemberPress
-  await activarMembresia(emailNormalizado, membershipId);
-
-  console.log(`🎯 Membresía ${membershipId} activada directamente para ${emailNormalizado}`);
+  try {
+    // 🚀 Activar en MemberPress
+    await activarMembresia(emailNormalizado, membershipId);
+    console.log(`🎯 Membresía ${membershipId} activada directamente para ${emailNormalizado}`);
+  } catch (err) {
+    console.error(`❌ Error al activar la membresía ${membershipId} para ${emailNormalizado}:`, err?.message || err);
+    try {
+      await alertAdmin({
+        area: 'regalos.activarMembresiaDirecta.error',
+        email: emailNormalizado,
+        err,
+        meta: { membershipId }
+      });
+    } catch (_) {}
+    throw err;
+  }
 };

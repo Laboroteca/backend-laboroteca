@@ -1,6 +1,7 @@
 // 📂 /regalos/services/marcarCodigoComoCanjeado.js
 const { google } = require('googleapis');
 const { auth } = require('../../entradas/google/sheetsAuth');
+const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 
 const SHEET_ID_CONTROL =
   process.env.SHEET_ID_CONTROL ||
@@ -100,6 +101,13 @@ module.exports = async function marcarCodigoComoCanjeado(codigo) {
     const idx = rows.findIndex(r => (r[0] || '').toString().trim().toUpperCase() === cod);
     if (idx < 0) {
       console.warn(`⚠️ Código no encontrado en control: ${cod}`);
+      try {
+        await alertAdmin({
+          area: 'regalos.marcarCodigoComoCanjeado.not_found',
+          err: new Error('Código no encontrado en hoja de control'),
+          meta: { codigo: cod, sheetId: SHEET_ID_CONTROL, sheetName: SHEET_NAME_CONTROL }
+        });
+      } catch (_) {}
       return;
     }
     const rowNumber = idx + 1;
@@ -144,6 +152,13 @@ module.exports = async function marcarCodigoComoCanjeado(codigo) {
     console.log(`✅ REG ${cod} marcado como canjeado (E${rowNumber} = "SÍ" con formato unificado 14pt)`);
   } catch (err) {
     console.error(`❌ Error al marcar ${cod} como canjeado:`, err?.message || err);
+    try {
+      await alertAdmin({
+        area: 'regalos.marcarCodigoComoCanjeado.error',
+        err,
+        meta: { codigo: cod, sheetId: SHEET_ID_CONTROL, sheetName: SHEET_NAME_CONTROL }
+      });
+    } catch (_) {}
     throw err;
   }
 };

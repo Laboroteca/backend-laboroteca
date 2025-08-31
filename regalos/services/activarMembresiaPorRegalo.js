@@ -1,6 +1,7 @@
 // 📂 regalos/services/activarMembresiaPorRegalo.js
 
 const { activarMembresia } = require('./memberpress');
+const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 
 /**
  * Activa la membresía adecuada según el libro canjeado.
@@ -29,11 +30,30 @@ module.exports = async function activarMembresiaPorRegalo(email, libro) {
   ) {
     membershipId = 11006; // Libro: Jubilación anticipada y parcial
   } else {
+    // Alerta operativa: libro no reconocido (no interrumpe el throw)
+    try {
+      await alertAdmin({
+        area: 'regalos.activarMembresiaPorRegalo.libro_desconocido',
+        err: new Error('No se reconoce el libro seleccionado.'),
+        meta: { email: emailNormalizado, libro: libro }
+      });
+    } catch (_) {}
     throw new Error('No se reconoce el libro seleccionado.');
   }
 
   // 🚀 Activar en MemberPress
-  await activarMembresia(emailNormalizado, membershipId);
+  try {
+    await activarMembresia(emailNormalizado, membershipId);
+  } catch (err) {
+    try {
+      await alertAdmin({
+        area: 'regalos.activarMembresiaPorRegalo.error_memberpress',
+        err,
+        meta: { email: emailNormalizado, libro: libro, membershipId }
+      });
+    } catch (_) {}
+    throw err;
+  }
 
   console.log(`🎁 Membresía ${membershipId} activada por regalo para ${emailNormalizado}`);
 };

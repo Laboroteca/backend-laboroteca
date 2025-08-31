@@ -6,6 +6,7 @@ const crypto  = require('crypto');
 
 const router  = express.Router();
 const canjearCodigoRegalo = require('../services/canjear-codigo-regalo');
+const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 
 /* ═════════════════════════════════════════
  *            CONFIG HMAC
@@ -91,7 +92,15 @@ function verifyHmac(req, res, next) {
     if (ok) break;
   }
 if (!ok) {
-    console.warn('[CANJ HMAC DENY]', { ts: String(ts), headerVariant, pathTried: candidates });
+    const meta = { ts: String(ts), headerVariant, pathTried: candidates, email: req.body?.email || null, codigo: req.body?.codigo || req.body?.codigo_regalo || null };
+    console.warn('[CANJ HMAC DENY]', meta);
+    try {
+      await alertAdmin({
+        area: 'regalos.canjear.hmac_deny',
+        err: new Error('HMAC verification failed'),
+        meta
+      });
+    } catch (_) {}
     return res.status(401).json({ ok:false, error:'unauthorized' });
   }
   // Log éxito (compacto)
@@ -178,6 +187,17 @@ async function handleCanje(req, res) {
     });
   } catch (err) {
     const { status, error } = mapError(err?.message || err);
+    try {
+      await alertAdmin({
+        area: 'regalos.canjear.exception',
+        err,
+        meta: {
+          email: req.body?.email || null,
+          codigo: req.body?.codigo || req.body?.codigo_regalo || null,
+          libro: req.body?.libro_elegido || req.body?.libro || null
+        }
+      });
+    } catch (_) {}
     return res.status(status).json({ ok:false, error });
   }
 }

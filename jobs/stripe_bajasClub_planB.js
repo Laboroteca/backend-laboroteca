@@ -1,4 +1,4 @@
-// jobs/stripe_planB.js
+// jobs/stripe_bajasClub_planB.js
 // Plan B de resiliencia Stripe ↔ WP (MemberPress).
 // Replayer de eventos, Reconciliador de suscripciones, Reloj de bajas programadas
 // y (opcional) sanity WP→Stripe. Verboso pero sin filtrar secretos.
@@ -7,7 +7,12 @@
 //   STRIPE_SECRET_KEY
 //   MP_SYNC_API_URL_CLUB, MP_SYNC_API_KEY, MP_SYNC_HMAC_SECRET
 // Opcionales:
-//   MP_SYNC_DEBUG=1, BAJAS_COLL=bajasClub, CLUB_MEMBERSHIP_ID=10663
+//   MP_SYNC_DEBUG=1
+//   BAJAS_COLL=bajasClub
+//   CLUB_MEMBERSHIP_ID=10663
+//   ENABLE_PLANB_DAEMON=1 (activar planificador interno)
+//   PLANB_REPLAYER_MS, PLANB_RECONCILER_MS, PLANB_BAJAS_MS, PLANB_SANITY_MS
+//   PLANB_ENABLE_SANITY=1 (incluir sanity en daemon)
 
 'use strict';
 
@@ -100,10 +105,11 @@ async function alertPlanBSuccess(source, { email, subId, reason, extra = {} }) {
     let subject, text;
     if (source === 'replayer' || source === 'reconciler') {
       subject = `✅ Plan B (${source}) ejecutado — acceso desactivado`;
-      text = `Stripe no entregó/aceptamos el webhook a tiempo o hubo incoherencia.\n` +
-             `El Plan B (${source}) actuó y la membresía del email ${email} ` +
-             `se desactivó correctamente en WordPress.\n` +
-             `SubID: ${subId || 'N/D'} · Motivo: ${reason || 'doDeactivate'}`;
+      text =
+        `Stripe no entregó/aceptamos el webhook a tiempo o hubo incoherencia.\n` +
+        `El Plan B (${source}) actuó y la membresía del email ${email} ` +
+        `se desactivó correctamente en WordPress.\n` +
+        `SubID: ${subId || 'N/D'} · Motivo: ${reason || 'doDeactivate'}`;
     } else if (source === 'bajaScheduler') {
       subject = `✅ Plan B (baja programada) ejecutada — acceso desactivado`;
       text = `Se ejecutó una baja programada para ${email} con éxito.\nReferencias: ${subId || 'N/D'}.`;
@@ -145,18 +151,19 @@ async function ensureOnce(ns, key, ttlSeconds, fn) {
 }
 
 /* ===================== Util Stripe ===================== */
- function extractEmailFromSub(sub) {
-   // 1) Si hemos hecho expand: ['customer'] => sub.customer es objeto
-   if (sub?.customer && typeof sub.customer === 'object') {
-     return sub.customer.email || sub.metadata?.email || null;
-   }
-   // 2) Sin expand, NO hay email en la suscripción; intenta metadata como último recurso
-   return sub?.metadata?.email || null;
- }
+function extractEmailFromSub(sub) {
+  // 1) Si hemos hecho expand: ['customer'] => sub.customer es objeto
+  if (sub?.customer && typeof sub.customer === 'object') {
+    return sub.customer.email || sub.metadata?.email || null;
+  }
+  // 2) Sin expand, NO hay email en la suscripción; intenta metadata como último recurso
+  return sub?.metadata?.email || null;
+}
+
 function needsDeactivation(sub) {
   if (!sub) return false;
-  if (sub.status === 'canceled') return true;
-  // Cancelación programada: replayer la detecta vía customer.subscription.updated
+  const s = String(sub.status || '').toLowerCase();
+  if (['canceled', 'unpaid', 'incomplete_expired'].includes(s)) return true;
   if (sub.cancel_at_period_end && (sub.current_period_end * 1000) < Date.now()) return true;
   return false;
 }
@@ -279,11 +286,12 @@ async function jobReconciler() {
     let page = null;
 
     do {
-       const res = await stripe.subscriptions.search({
+      const res = await stripe.subscriptions.search({
         query: RECON_QUERY,
         limit: 100,
         page: page || undefined,
-        expand: ['data.customer'] });
+        expand: ['data.customer']
+      });
 
       for (const sub of res.data) {
         reviewed++;
@@ -400,20 +408,52 @@ async function jobSanity() {
   }
 }
 
+/* ===================== Daemon interno (opcional) ===================== */
+function makePoller(name, ms, fn) {
+  let running = false;
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    try { await fn(); }
+    catch (e) { verror(`${name}.poll`, e); }
+    finally { running = false; }
+  };
+  setInterval(tick, ms);
+  setTimeout(tick, 1000); // primer disparo pronto
+  vlog('planB.daemon', `poller ${name} armado`, { everyMs: ms });
+}
+
+function startDaemon() {
+  const REPLAYER_MS   = parseInt(process.env.PLANB_REPLAYER_MS   || '120000', 10); // 2 min
+  const RECONC_MS     = parseInt(process.env.PLANB_RECONCILER_MS || '300000', 10); // 5 min
+  const BAJAS_MS      = parseInt(process.env.PLANB_BAJAS_MS      || '60000',  10); // 1 min
+  const SANITY_MS     = parseInt(process.env.PLANB_SANITY_MS     || '3600000',10); // 60 min
+  const ENABLE_SANITY = String(process.env.PLANB_ENABLE_SANITY || '0') === '1';
+
+  makePoller('replayer',   REPLAYER_MS, jobReplayer);
+  makePoller('reconciler', RECONC_MS,   jobReconciler);
+  makePoller('bajas',      BAJAS_MS,    jobBajasScheduler);
+  if (ENABLE_SANITY) makePoller('sanity', SANITY_MS, jobSanity);
+
+  vlog('planB.daemon', 'iniciado', { REPLAYER_MS, RECONC_MS, BAJAS_MS, SANITY_MS, ENABLE_SANITY });
+}
+
 /* ===================== CLI ===================== */
 async function main() {
   const cmd = (process.argv[2] || '').toLowerCase();
   try {
-    if (cmd === 'replayer')       await jobReplayer();
-    else if (cmd === 'reconciler')await jobReconciler();
-    else if (cmd === 'bajas')     await jobBajasScheduler();
-    else if (cmd === 'sanity')    await jobSanity();
+    if (cmd === 'replayer')        await jobReplayer();
+    else if (cmd === 'reconciler') await jobReconciler();
+    else if (cmd === 'bajas')      await jobBajasScheduler();
+    else if (cmd === 'sanity')     await jobSanity();
+    else if (cmd === 'daemon')     startDaemon();
     else {
       console.log(`Usage:
-  node jobs/stripe_planB.js replayer
-  node jobs/stripe_planB.js reconciler
-  node jobs/stripe_planB.js bajas
-  node jobs/stripe_planB.js sanity`);
+  node jobs/stripe_bajasClub_planB.js replayer
+  node jobs/stripe_bajasClub_planB.js reconciler
+  node jobs/stripe_bajasClub_planB.js bajas
+  node jobs/stripe_bajasClub_planB.js sanity
+  node jobs/stripe_bajasClub_planB.js daemon   # planificador interno`);
       process.exitCode = 2;
     }
   } catch (e) {
@@ -422,4 +462,14 @@ async function main() {
     process.exitCode = 1;
   }
 }
-if (require.main === module) main();
+
+// Arranque directo
+if (require.main === module) {
+  main();
+} else {
+  // Si se importa, permite auto-iniciar daemon por ENV
+  if (String(process.env.ENABLE_PLANB_DAEMON || '0') === '1') {
+    try { startDaemon(); vlog('planB.daemon', 'autostart via import + ENABLE_PLANB_DAEMON=1'); }
+    catch (e) { verror('planB.daemon.autostart', e); }
+  }
+}

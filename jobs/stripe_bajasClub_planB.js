@@ -179,6 +179,56 @@ function needsDeactivation(sub) {
   return false;
 }
 
+/* ======= Resolver de email (robusto) ======= */
+async function resolveEmail(sub, evForFallback = null) {
+  // 0) Lo que ya tengamos en el objeto
+  let email = extractEmailFromSub(sub);
+  if (email) return email;
+
+  // 1) Si sub.customer es un ID, traer el customer
+  if (typeof sub?.customer === 'string' && sub.customer) {
+    try {
+      const cust = await stripe.customers.retrieve(sub.customer);
+      if (cust?.email) return cust.email;
+    } catch (e) {
+      verror('email.resolve.customer', e, { customer: sub.customer, subId: sub?.id });
+    }
+  }
+
+  // 2) Si venimos de un evento y hay customer en el payload, úsalo
+  if (!email && evForFallback?.data?.object?.customer && typeof evForFallback.data.object.customer === 'string') {
+    try {
+      const cust2 = await stripe.customers.retrieve(evForFallback.data.object.customer);
+      if (cust2?.email) return cust2.email;
+    } catch (e) {
+      verror('email.resolve.event_customer', e, { customer: evForFallback.data.object.customer, subId: sub?.id });
+    }
+  }
+
+  // 3) latest_invoice como ID (si no estaba expandida)
+  if (!email && typeof sub?.latest_invoice === 'string' && sub.latest_invoice) {
+    try {
+      const inv = await stripe.invoices.retrieve(sub.latest_invoice, { expand: ['customer'] });
+      if (inv?.customer_email) return inv.customer_email;
+      if (inv?.customer && typeof inv.customer === 'object' && inv.customer.email) return inv.customer.email;
+    } catch (e) {
+      verror('email.resolve.invoice', e, { invoice: sub.latest_invoice, subId: sub?.id });
+    }
+  }
+
+  // 4) default_payment_method → billing_details.email
+  if (!email && typeof sub?.default_payment_method === 'string' && sub.default_payment_method) {
+    try {
+      const pm = await stripe.paymentMethods.retrieve(sub.default_payment_method);
+      if (pm?.billing_details?.email) return pm.billing_details.email;
+    } catch (e) {
+      verror('email.resolve.payment_method', e, { pm: sub.default_payment_method, subId: sub?.id });
+    }
+  }
+
+  return null;
+}
+
 /* ======= Deactivación unificada (idempotente + alertas de éxito) ======= */
 async function wpDeactivateOnce(email, subId, source, extraMeta = {}, reason = 'doDeactivate') {
   const key = subId ? `sub:${subId}` : `email:${email}`;
@@ -241,9 +291,9 @@ async function jobReplayer() {
           if (!subId) { vlog('replayer', 'no subId en evento, skip', info); return; }
 
           const sub = await stripe.subscriptions.retrieve(subId, {
-           expand: ['customer', 'latest_invoice.customer']
+            expand: ['customer', 'latest_invoice.customer']
           });
-          const email = extractEmailFromSub(sub);
+          let email = await resolveEmail(sub, ev);
           const doDeactivate = needsDeactivation(sub);
 
           vlog('replayer', 'evaluated', {
@@ -264,6 +314,9 @@ async function jobReplayer() {
               `planB.replayer.action:${subId}`
             );
             await wpDeactivateOnce(email, subId, 'replayer', info, 'replayer_doDeactivate');
+          } else if (doDeactivate && !email) {
+            await notifyOnce('planB.replayer.no_email', new Error('No email found for subscription'), { ...info, subId });
+            vlog('replayer', 'no-op (missing email)', { subId });
           } else {
             vlog('replayer', 'no-op', { subId, email });
           }
@@ -308,7 +361,7 @@ async function jobReconciler() {
 
       for (const sub of res.data) {
         reviewed++;
-        const email = extractEmailFromSub(sub);
+        let email = extractEmailFromSub(sub);
         const doDeactivate = needsDeactivation(sub);
         const info = {
           subId: sub.id,
@@ -319,7 +372,25 @@ async function jobReconciler() {
           doDeactivate,
         };
 
-        if (!doDeactivate || !email) { vlog('reconciler', 'ok/no-op', info); continue; }
+        // Si hay que actuar y falta email, realiza una única consulta puntual
+        if (doDeactivate && !email) {
+          try {
+            const subFull = await stripe.subscriptions.retrieve(sub.id, {
+              expand: ['customer', 'latest_invoice.customer']
+            });
+            email = await resolveEmail(subFull, null);
+            info.email = email;
+          } catch (e) {
+            verror('reconciler.resolve_email', e, { subId: sub.id });
+          }
+        }
+
+        if (!doDeactivate) { vlog('reconciler', 'ok/no-op', info); continue; }
+        if (!email) {
+          await notifyOnce('planB.reconciler.no_email', new Error('No email found for subscription'), { subId: sub.id, status: sub.status });
+          vlog('reconciler', 'no-op (missing email)', { subId: sub.id });
+          continue;
+        }
 
         await notifyOnce(
           'planB.reconciler.action',
@@ -328,7 +399,7 @@ async function jobReconciler() {
           `planB.reconciler.action:${sub.id}`
         );
 
-        const r = await wpDeactivateOnce(email, null,   'reconciler', info, 'reconciler_doDeactivate');
+        const r = await wpDeactivateOnce(email, null, 'reconciler', info, 'reconciler_doDeactivate');
         if (!r.skipped) acted++;
       }
 

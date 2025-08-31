@@ -84,7 +84,12 @@ function verror(area, err, meta = {}) {
 
 /* ===================== Alertas (helpers) ===================== */
 async function sendAdmin(subject, text, meta = {}) {
-  try { await alertAdmin({ subject, text, meta }); } catch {}
+  try {
+    await alertAdmin({ subject, text, meta });
+    vlog('alerts', 'sent', { subject });
+  } catch (e) {
+    verror('alerts.send_fail', e, { subject });
+  }
 }
 const __alertOnce = new Set();
 async function notifyOnce(area, err, meta = {}, key = null) {
@@ -446,6 +451,7 @@ async function main() {
     else if (cmd === 'reconciler') await jobReconciler();
     else if (cmd === 'bajas')      await jobBajasScheduler();
     else if (cmd === 'sanity')     await jobSanity();
+    else if (cmd === 'testalert')  await sendAdmin('[PlanB][TEST]', 'Prueba de alertas OK', { service: 'Fallback Plan B' });
     else if (cmd === 'daemon')     startDaemon();
     else {
       console.log(`Usage:
@@ -453,6 +459,7 @@ async function main() {
   node jobs/stripe_bajasClub_planB.js reconciler
   node jobs/stripe_bajasClub_planB.js bajas
   node jobs/stripe_bajasClub_planB.js sanity
+  node jobs/stripe_bajasClub_planB.js testalert
   node jobs/stripe_bajasClub_planB.js daemon   # planificador interno`);
       process.exitCode = 2;
     }

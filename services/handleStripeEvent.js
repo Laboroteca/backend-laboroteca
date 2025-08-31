@@ -1,3 +1,5 @@
+// services/handleStripeEvent.js
+// 
 const admin = require('../firebase');
 const firestore = admin.firestore();
 

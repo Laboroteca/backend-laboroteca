@@ -85,7 +85,7 @@ function verror(area, err, meta = {}) {
 /* ===================== Alertas (helpers) ===================== */
 async function sendAdmin(subject, text, meta = {}) {
   try {
-    await alertAdmin({ subject, text, meta });
+    await alertAdmin(subject, { text, ...meta });
     vlog('alerts', 'sent', { subject });
   } catch (e) {
     verror('alerts.send_fail', e, { subject });

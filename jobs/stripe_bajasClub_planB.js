@@ -145,9 +145,14 @@ async function ensureOnce(ns, key, ttlSeconds, fn) {
 }
 
 /* ===================== Util Stripe ===================== */
-function extractEmailFromSub(sub) {
-  return sub?.customer_details?.email || sub?.metadata?.email || null;
-}
+ function extractEmailFromSub(sub) {
+   // 1) Si hemos hecho expand: ['customer'] => sub.customer es objeto
+   if (sub?.customer && typeof sub.customer === 'object') {
+     return sub.customer.email || sub.metadata?.email || null;
+   }
+   // 2) Sin expand, NO hay email en la suscripción; intenta metadata como último recurso
+   return sub?.metadata?.email || null;
+ }
 function needsDeactivation(sub) {
   if (!sub) return false;
   if (sub.status === 'canceled') return true;
@@ -217,7 +222,7 @@ async function jobReplayer() {
 
           if (!subId) { vlog('replayer', 'no subId en evento, skip', info); return; }
 
-          const sub = await stripe.subscriptions.retrieve(subId);
+          const sub = await stripe.subscriptions.retrieve(subId, { expand: ['customer'] });
           const email = extractEmailFromSub(sub);
           const doDeactivate = needsDeactivation(sub);
 
@@ -274,7 +279,11 @@ async function jobReconciler() {
     let page = null;
 
     do {
-      const res = await stripe.subscriptions.search({ query: RECON_QUERY, limit: 100, page: page || undefined });
+       const res = await stripe.subscriptions.search({
+        query: RECON_QUERY,
+        limit: 100,
+        page: page || undefined,
+        expand: ['data.customer'] });
 
       for (const sub of res.data) {
         reviewed++;

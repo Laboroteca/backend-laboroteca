@@ -41,7 +41,7 @@ function safeEqHex(aHex, bHex) {
 }
 
 /** Verifica HMAC: ts.POST.<path>.sha256(body) */
-function verifyHmac(req, res, next) {
+async function verifyHmac(req, res, next) {
   const apiKey = req.header('x-api-key')  || '';
   const ts     = req.header('x-entr-ts')  || req.header('x-e-ts')  || '';
   const sig    = req.header('x-entr-sig') || req.header('x-e-sig') || '';
@@ -49,7 +49,16 @@ function verifyHmac(req, res, next) {
 
   if (!HMAC_REQUIRED && (!apiKey || !ts || !sig)) return next();
   if (!apiKey || !ts || !sig) return res.status(401).json({ ok:false, error:'unauthorized' });
-  if (!API_KEYS.length || !SECRETS.length) return res.status(500).json({ ok:false, error:'HMAC config missing' });
+  if (!API_KEYS.length || !SECRETS.length) {
+    try {
+      await alertAdmin({
+        area: 'regalos.canjear.hmac_config_missing',
+        err: new Error('HMAC config missing'),
+        meta: { apiKeys: API_KEYS.length, secrets: SECRETS.length }
+      });
+    } catch (_) {}
+    return res.status(500).json({ ok:false, error:'HMAC config missing' });
+  }
   if (!API_KEYS.includes(apiKey)) return res.status(401).json({ ok:false, error:'unauthorized' });
 
   const tsNum = parseInt(ts, 10);
@@ -111,7 +120,7 @@ if (!ok) {
     headerVariant,
     path: matchedPath
   });
-  next();
+  return next();
 }
 
 /* ═════════════════════════════════════════

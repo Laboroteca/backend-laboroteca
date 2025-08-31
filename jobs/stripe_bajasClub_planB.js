@@ -157,12 +157,18 @@ async function ensureOnce(ns, key, ttlSeconds, fn) {
 
 /* ===================== Util Stripe ===================== */
 function extractEmailFromSub(sub) {
-  // 1) Si hemos hecho expand: ['customer'] => sub.customer es objeto
-  if (sub?.customer && typeof sub.customer === 'object') {
-    return sub.customer.email || sub.metadata?.email || null;
+  // 1) Customer expandido
+  if (sub?.customer && typeof sub.customer === 'object' && sub.customer.email) {
+    return sub.customer.email;
   }
-  // 2) Sin expand, NO hay email en la suscripción; intenta metadata como último recurso
-  return sub?.metadata?.email || null;
+  // 2) Metadata guardada por tu checkout
+  if (sub?.metadata?.email) return sub.metadata.email;
+  // 3) Fallback: email de la última factura
+  if (sub?.latest_invoice?.customer_email) return sub.latest_invoice.customer_email;
+  if (sub?.latest_invoice?.customer && sub.latest_invoice.customer.email) {
+    return sub.latest_invoice.customer.email;
+  }
+  return null;
 }
 
 function needsDeactivation(sub) {
@@ -234,7 +240,9 @@ async function jobReplayer() {
 
           if (!subId) { vlog('replayer', 'no subId en evento, skip', info); return; }
 
-          const sub = await stripe.subscriptions.retrieve(subId, { expand: ['customer'] });
+          const sub = await stripe.subscriptions.retrieve(subId, {
+           expand: ['customer', 'latest_invoice.customer']
+          });
           const email = extractEmailFromSub(sub);
           const doDeactivate = needsDeactivation(sub);
 

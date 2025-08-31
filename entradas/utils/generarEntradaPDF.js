@@ -2,6 +2,15 @@ const PDFDocument = require('pdfkit');
 const QRCode = require('qrcode');
 const fetch = require('node-fetch');
 const sharp = require('sharp');
+const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
+
+// Dedupe simple de alertas en proceso
+const __once = new Set();
+function alertOnce(key, payload) {
+  if (__once.has(key)) return;
+  __once.add(key);
+  try { alertAdmin(payload); } catch (_) {}
+}
 
 async function generarEntradaPDF({
   nombre,
@@ -43,7 +52,18 @@ async function generarEntradaPDF({
   const qrX = 50;
   const qrY = 50;
   const qrPadding = 10;
-  const qrBuffer = await QRCode.toBuffer(`https://laboroteca.es/validar-entrada?codigo=${codigo}`);
+  let qrBuffer;
+  try {
+    qrBuffer = await QRCode.toBuffer(`https://laboroteca.es/validar-entrada?codigo=${codigo}`);
+  } catch (err) {
+    // 🚨 Esto sí requiere intervención: sin QR la entrada no es válida
+    alertOnce(`entradas.pdf.qr.${codigo || 'sin_codigo'}`, {
+      area: 'entradas.pdf.qr_error',
+      err,
+      meta: { codigo, nombreActuacion, descripcionProducto }
+    });
+    throw err;
+  }
 
   doc.fillColor('white')
     .rect(qrX - qrPadding, qrY - qrPadding, qrSize + 2 * qrPadding, qrSize + 2 * qrPadding)

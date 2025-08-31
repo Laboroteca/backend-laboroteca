@@ -1,5 +1,6 @@
 const { google } = require('googleapis');
 const { auth } = require('../google/sheetsAuth');
+const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 
 // MAPEO entre slugEvento y el ID real del Google Sheet
 const SHEETS_EVENTOS = {
@@ -68,6 +69,19 @@ async function guardarEntradaEnSheet({ sheetId, comprador, descripcionProducto =
     console.log(`✅ Entrada registrada en hoja (${sheetId}) código ${codigo}`);
   } catch (err) {
     console.error(`❌ Error al guardar entrada en hoja (${sheetId}):`, err.message);
+    // 🚨 Alerta al admin con datos operativos clave
+    try {
+      await alertAdmin({
+        area: 'entradas.sheets.guardar_error',
+        err,
+        meta: {
+          sheetId,
+          comprador,               // email del comprador
+          descripcionProducto,     // nombre del evento
+          codigo                   // código de la entrada
+        }
+      });
+    } catch (_) {}
     throw err;
   }
 }

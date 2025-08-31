@@ -7,6 +7,7 @@ const storage = new Storage({
 });
 
 const bucket = storage.bucket('laboroteca-facturas');
+const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 
 /**
  * Sube una entrada en PDF a Google Cloud Storage
@@ -21,6 +22,13 @@ async function subirEntrada(nombreArchivo, bufferPDF) {
     console.log(`📂 Entrada subida a GCS: ${nombreArchivo}`);
   } catch (err) {
     console.error(`❌ Error subiendo entrada a GCS: ${err.message}`);
+    try {
+      await alertAdmin({
+        area: 'entradas.gcs.subida',
+        err,
+        meta: { nombreArchivo }
+      });
+    } catch (_) {}
     throw err;
   }
 }

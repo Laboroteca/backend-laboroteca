@@ -16,24 +16,39 @@
 
 'use strict';
 
-const Stripe = require('stripe');
-const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+/* ===================== Stripe ===================== */
+const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
+if (!STRIPE_SECRET_KEY) {
+  // Evita que arranque sin credenciales (fallo temprano y claro)
+  console.error(JSON.stringify({
+    at: new Date().toISOString(),
+    area: 'boot',
+    msg: '❌ Falta STRIPE_SECRET_KEY en entorno',
+  }));
+  process.exit(1);
+}
 
+const Stripe = require('stripe');
+const stripe = Stripe(STRIPE_SECRET_KEY);
+
+/* ===================== Constantes ===================== */
 const CLUB_MEMBERSHIP_ID = parseInt(process.env.CLUB_MEMBERSHIP_ID || '10663', 10);
 const BAJAS_COLL = process.env.BAJAS_COLL || 'bajasClub';
 
-// Firebase (locks / bajas programadas) — NO loguea secretos
+/* ===================== Firebase (locks / bajas) ===================== */
+// NO loguea secretos; inicialización en ../firebase
 const admin = require('../firebase');
 const db = admin.firestore();
 
-// Cliente HMAC hacia WP (MU plugin)
+/* ===================== Cliente HMAC hacia WP ===================== */
 const { syncMemberpressClub } = require('../services/syncMemberpressClub');
 
-// Alertas al administrador
+/* ===================== Alertas al administrador ===================== */
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
 /* ===================== Logger seguro ===================== */
-const SENSITIVE_KEYS = /(^|_)(private|secret|token|key|password|sig|hmac|authorization|stripe_signature)$/i;
+const SENSITIVE_KEYS =
+  /(^|_)(private|secret|token|key|password|sig|hmac|authorization|stripe_signature|api|bearer)$/i;
 const MAX_LOG_BYTES = 2048;
 
 function mask(s, keepStart = 3, keepEnd = 2) {
@@ -41,6 +56,7 @@ function mask(s, keepStart = 3, keepEnd = 2) {
   if (v.length <= keepStart + keepEnd) return '***';
   return v.slice(0, keepStart) + '…' + v.slice(-keepEnd);
 }
+
 function redactObject(input) {
   if (input == null) return input;
   if (Array.isArray(input)) return input.map(redactObject);
@@ -52,17 +68,30 @@ function redactObject(input) {
     return out;
   }
   if (typeof input === 'string') {
-    let s = input.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, (m) => mask(m));
-    s = s.replace(/-----BEGIN [^-]+ PRIVATE KEY-----[\s\S]*?-----END [^-]+ PRIVATE KEY-----/g, '***REDACTED_PRIVATE_KEY***');
+    let s = input.replace(
+      /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g,
+      (m) => mask(m)
+    );
+    s = s.replace(
+      /-----BEGIN [^-]+ PRIVATE KEY-----[\s\S]*?-----END [^-]+ PRIVATE KEY-----/g,
+      '***REDACTED_PRIVATE_KEY***'
+    );
     return s.length > 300 ? s.slice(0, 200) + '…[truncated]' : s;
   }
   return input;
 }
+
 function safeStringify(obj) {
-  let s = JSON.stringify(obj);
-  if (s.length > MAX_LOG_BYTES) s = s.slice(0, MAX_LOG_BYTES) + '…[truncated]';
-  return s;
+  try {
+    let s = JSON.stringify(obj);
+    if (s.length > MAX_LOG_BYTES) s = s.slice(0, MAX_LOG_BYTES) + '…[truncated]';
+    return s;
+  } catch {
+    // En caso de referencias circulares, degradar
+    return String(obj);
+  }
 }
+
 function vlog(area, msg, meta = {}) {
   try {
     const line = {
@@ -76,6 +105,7 @@ function vlog(area, msg, meta = {}) {
     console.log(`[${area}] ${msg}`);
   }
 }
+
 function verror(area, err, meta = {}) {
   const msg = err?.message || String(err);
   const stack = (err?.stack || '').split('\n').slice(0, 6).join(' | ').slice(0, 600);
@@ -85,12 +115,14 @@ function verror(area, err, meta = {}) {
 /* ===================== Alertas (helpers) ===================== */
 async function sendAdmin(subject, text, meta = {}) {
   try {
-    await alertAdmin(subject, { text, ...meta });
+    // El proxy espera SIEMPRE objeto {subject, text, meta}
+    await alertAdmin({ subject, text, meta });
     vlog('alerts', 'sent', { subject });
   } catch (e) {
     verror('alerts.send_fail', e, { subject });
   }
 }
+
 const __alertOnce = new Set();
 async function notifyOnce(area, err, meta = {}, key = null) {
   try {
@@ -100,7 +132,9 @@ async function notifyOnce(area, err, meta = {}, key = null) {
     const subject = `[${area}] ${err ? 'ERROR' : 'Aviso'}`;
     const text = err ? (err?.message || String(err)) : 'Evento';
     await sendAdmin(subject, text, meta);
-  } catch {}
+  } catch {
+    // Silent; ya se logueó en sendAdmin
+  }
 }
 
 // éxito “Plan B ejecutado” (rate-limit 6h por sub/email)
@@ -151,7 +185,7 @@ async function ensureOnce(ns, key, ttlSeconds, fn) {
     const out = await fn();
     return { ...res, ok: true, out };
   } finally {
-    // dejamos expirar
+    // dejamos expirar por TTL
   }
 }
 
@@ -259,6 +293,7 @@ async function getReplayCheckpoint() {
   const snap = await ref.get();
   return (snap.exists && snap.data().lastCreated) || 0;
 }
+
 async function setReplayCheckpoint(ts) {
   const ref = db.collection('system').doc('stripeReplay');
   await ref.set({ lastCreated: ts, updatedAt: Date.now() }, { merge: true });
@@ -274,7 +309,10 @@ async function jobReplayer() {
 
     while (hasMore) {
       const page = await stripe.events.list({
-        types: REPLAYER_TYPES, created: { gt: since }, limit: 100, starting_after,
+        types: REPLAYER_TYPES,
+        created: { gt: since },
+        limit: 100,
+        starting_after,
       });
 
       for (const ev of page.data) {
@@ -291,7 +329,7 @@ async function jobReplayer() {
           if (!subId) { vlog('replayer', 'no subId en evento, skip', info); return; }
 
           const sub = await stripe.subscriptions.retrieve(subId, {
-            expand: ['customer', 'latest_invoice.customer']
+            expand: ['customer', 'latest_invoice.customer'],
           });
           let email = await resolveEmail(sub, ev);
           const doDeactivate = needsDeactivation(sub);
@@ -356,7 +394,7 @@ async function jobReconciler() {
         query: RECON_QUERY,
         limit: 100,
         page: page || undefined,
-        expand: ['data.customer']
+        expand: ['data.customer'],
       });
 
       for (const sub of res.data) {
@@ -372,11 +410,11 @@ async function jobReconciler() {
           doDeactivate,
         };
 
-        // Si hay que actuar y falta email, realiza una única consulta puntual
+        // Si hay que actuar y falta email, realiza una consulta puntual para resolverlo
         if (doDeactivate && !email) {
           try {
             const subFull = await stripe.subscriptions.retrieve(sub.id, {
-              expand: ['customer', 'latest_invoice.customer']
+              expand: ['customer', 'latest_invoice.customer'],
             });
             email = await resolveEmail(subFull, null);
             info.email = email;
@@ -395,7 +433,13 @@ async function jobReconciler() {
         await notifyOnce(
           'planB.reconciler.action',
           null,
-          { subId: sub.id, email, status: sub.status, cancel_at_period_end: sub.cancel_at_period_end, current_period_end: sub.current_period_end },
+          {
+            subId: sub.id,
+            email,
+            status: sub.status,
+            cancel_at_period_end: sub.cancel_at_period_end,
+            current_period_end: sub.current_period_end,
+          },
           `planB.reconciler.action:${sub.id}`
         );
 
@@ -423,7 +467,8 @@ async function jobBajasScheduler() {
     const snap = await db.collection(BAJAS_COLL)
       .where('estadoBaja', '==', 'programada')
       .where('fechaEfectosMs', '<=', now)
-      .limit(200).get();
+      .limit(200)
+      .get();
 
     if (snap.empty) { vlog('bajaScheduler', 'no pending'); return; }
 
@@ -458,7 +503,10 @@ async function jobBajasScheduler() {
 }
 
 /* ===================== 4) (Opcional) Sanity ===================== */
-async function tryImport(fnPath) { try { return require(fnPath); } catch { return null; } }
+async function tryImport(fnPath) {
+  try { return require(fnPath); } catch { return null; }
+}
+
 async function jobSanity() {
   try {
     const svc = await tryImport('../services/wpMemberPressList');
@@ -549,7 +597,7 @@ async function main() {
   }
 }
 
-// Arranque directo
+/* ===================== Arranque directo ===================== */
 if (require.main === module) {
   main();
 } else {
@@ -559,3 +607,11 @@ if (require.main === module) {
     catch (e) { verror('planB.daemon.autostart', e); }
   }
 }
+
+module.exports = {
+  jobReplayer,
+  jobReconciler,
+  jobBajasScheduler,
+  jobSanity,
+  startDaemon,
+};

@@ -7,7 +7,7 @@
 //   STRIPE_SECRET_KEY
 //   MP_SYNC_API_URL_CLUB, MP_SYNC_API_KEY, MP_SYNC_HMAC_SECRET
 // Opcionales:
-//   MP_SYNC_DEBUG=1, BAJAS_COLL=bajasClub, CLUB_MEMBERSHIP_ID=10663, PLANB_LOG_LEVEL=debug
+//   MP_SYNC_DEBUG=1, BAJAS_COLL=bajasClub, CLUB_MEMBERSHIP_ID=10663
 
 'use strict';
 
@@ -78,16 +78,9 @@ function verror(area, err, meta = {}) {
 }
 
 /* ===================== Alertas (helpers) ===================== */
-// proxy seguro; si falla la alerta, no rompe el flujo
 async function sendAdmin(subject, text, meta = {}) {
-  try {
-    await alertAdmin({ subject, text, meta });
-  } catch {
-    /* no-op */
-  }
+  try { await alertAdmin({ subject, text, meta }); } catch {}
 }
-
-// dedupe suave por proceso (para errores puntuales)
 const __alertOnce = new Set();
 async function notifyOnce(area, err, meta = {}, key = null) {
   try {
@@ -97,14 +90,13 @@ async function notifyOnce(area, err, meta = {}, key = null) {
     const subject = `[${area}] ${err ? 'ERROR' : 'Aviso'}`;
     const text = err ? (err?.message || String(err)) : 'Evento';
     await sendAdmin(subject, text, meta);
-  } catch { /* no-op */ }
+  } catch {}
 }
 
-// alerta de éxito “Plan B ejecutado”
+// éxito “Plan B ejecutado” (rate-limit 6h por sub/email)
 async function alertPlanBSuccess(source, { email, subId, reason, extra = {} }) {
-  // rate-limit de 6h por suscripción/email para no spamear
   const key = `planB.success:${source}:${subId || email}`;
-  const res = await ensureOnce('alertPlanB', key, 6 * 3600, async () => {
+  return ensureOnce('alertPlanB', key, 6 * 3600, async () => {
     let subject, text;
     if (source === 'replayer' || source === 'reconciler') {
       subject = `✅ Plan B (${source}) ejecutado — acceso desactivado`;
@@ -114,19 +106,16 @@ async function alertPlanBSuccess(source, { email, subId, reason, extra = {} }) {
              `SubID: ${subId || 'N/D'} · Motivo: ${reason || 'doDeactivate'}`;
     } else if (source === 'bajaScheduler') {
       subject = `✅ Plan B (baja programada) ejecutada — acceso desactivado`;
-      text = `Se ejecutó una baja programada para ${email} con éxito.\n` +
-             `Referencias: ${subId || 'N/D'}.`;
+      text = `Se ejecutó una baja programada para ${email} con éxito.\nReferencias: ${subId || 'N/D'}.`;
     } else if (source === 'sanity') {
       subject = `✅ Plan B (sanity) — acceso purgado sin sub activa en Stripe`;
-      text = `No existe suscripción activa en Stripe para ${email}. ` +
-             `Se purgó el acceso en WP correctamente.`;
+      text = `No existe suscripción activa en Stripe para ${email}. Se purgó el acceso en WP correctamente.`;
     } else {
       subject = `✅ Plan B — acceso desactivado`;
       text = `Plan B (${source}) desactivó con éxito el acceso de ${email}.`;
     }
     await sendAdmin(subject, text, { email, subId, reason, source, ...extra });
   });
-  return res;
 }
 
 /* ===================== Idempotencia (locks) ===================== */
@@ -162,6 +151,7 @@ function extractEmailFromSub(sub) {
 function needsDeactivation(sub) {
   if (!sub) return false;
   if (sub.status === 'canceled') return true;
+  // Cancelación programada: replayer la detecta vía customer.subscription.updated
   if (sub.cancel_at_period_end && (sub.current_period_end * 1000) < Date.now()) return true;
   return false;
 }
@@ -180,9 +170,7 @@ async function wpDeactivateOnce(email, subId, source, extraMeta = {}, reason = '
       throw e;
     }
   });
-  if (res.skipped) {
-    vlog(source, 'skip wpDeact (recent)', { email, subId });
-  }
+  if (res.skipped) vlog(source, 'skip wpDeact (recent)', { email, subId });
   return res;
 }
 
@@ -192,6 +180,7 @@ const REPLAYER_TYPES = [
   'customer.subscription.updated',
   'invoice.payment_failed',
 ];
+
 async function getReplayCheckpoint() {
   const ref = db.collection('system').doc('stripeReplay');
   const snap = await ref.get();
@@ -201,6 +190,7 @@ async function setReplayCheckpoint(ts) {
   const ref = db.collection('system').doc('stripeReplay');
   await ref.set({ lastCreated: ts, updatedAt: Date.now() }, { merge: true });
 }
+
 async function jobReplayer() {
   try {
     const since = await getReplayCheckpoint();
@@ -255,7 +245,7 @@ async function jobReplayer() {
         });
 
         if (res.skipped) { skipped++; vlog('replayer', 'skip (already handled)', info); }
-        else { processed++; /* sin “done” ruidoso */ }
+        else { processed++; }
       }
 
       hasMore = page.has_more;
@@ -272,8 +262,10 @@ async function jobReplayer() {
 }
 
 /* ===================== 2) Reconciliación ===================== */
-const RECON_QUERY =
-  "status:'canceled' OR status:'unpaid' OR status:'incomplete_expired' OR cancel_at_period_end:'true'";
+// ⚠️ Stripe Search no soporta `cancel_at_period_end`, así que NO lo usamos en la query.
+// La parte de cancelación programada la cubre el replayer con customer.subscription.updated.
+const RECON_QUERY = "status:'canceled' OR status:'unpaid' OR status:'incomplete_expired'";
+
 async function jobReconciler() {
   try {
     vlog('reconciler', 'start', { query: RECON_QUERY });

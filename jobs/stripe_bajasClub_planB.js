@@ -315,7 +315,7 @@ async function jobReconciler() {
           `planB.reconciler.action:${sub.id}`
         );
 
-        const r = await wpDeactivateOnce(email, sub.id, 'reconciler', info, 'reconciler_doDeactivate');
+        const r = await wpDeactivateOnce(email, null,   'reconciler', info, 'reconciler_doDeactivate');
         if (!r.skipped) acted++;
       }
 

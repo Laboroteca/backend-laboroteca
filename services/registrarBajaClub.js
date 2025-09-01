@@ -1,4 +1,4 @@
-// services/registrarBajaClub.js
+//  services/registrarBajaClub.js
 const { google } = require('googleapis');
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 

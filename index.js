@@ -27,6 +27,10 @@ const LAB_DEBUG = (process.env.LAB_DEBUG === '1' || process.env.DEBUG === '1');
 // 🔒 flag global para obligar HMAC en endpoints duros
 const REQUIRE_HMAC = (process.env.LAB_REQUIRE_HMAC === '1');
 
+// 🔑 Seguridad de endpoints de pago
+const PAGO_API_KEY = String(process.env.PAGO_API_KEY || '').trim();
+const PAGO_HMAC_SECRET = String(process.env.PAGO_HMAC_SECRET || '').trim();
+
 console.log('🧠 INDEX REAL EJECUTÁNDOSE');
 console.log('🌍 NODE_ENV:', process.env.NODE_ENV);
 console.log('🔑 STRIPE_SECRET_KEY presente:', !!process.env.STRIPE_SECRET_KEY);
@@ -34,6 +38,8 @@ console.log('🔐 STRIPE_WEBHOOK_SECRET presente:', !!process.env.STRIPE_WEBHOOK
 console.log('🔒 LAB_BAJA_HMAC_SECRET presente:', !!process.env.LAB_BAJA_HMAC_SECRET);
 console.log('🔒 LAB_ELIM_HMAC_SECRET presente:', !!process.env.LAB_ELIM_HMAC_SECRET);
 console.log('🧷 LAB_REQUIRE_HMAC activo:', REQUIRE_HMAC);
+console.log('🔑 PAGO_API_KEY presente:', !!PAGO_API_KEY);
+console.log('🔒 PAGO_HMAC_SECRET presente:', !!PAGO_HMAC_SECRET);
 
 // Log seguro de MemberPress (sin exponer la clave)
 console.log('🛠 MemberPress config:');
@@ -88,6 +94,86 @@ function _first10Sha256(str) {
   catch { return 'errhash'; }
 }
 
+// ── MW de cierre para pagos (POST + API KEY + HMAC opcional según flag global) ─────────────
+function enforcePost(req,res,next){
+  if (req.method !== 'POST') return res.status(405).json({ ok:false, error:'METHOD_NOT_ALLOWED' });
+  next();
+}
+
+ function requireApiKeyPago(req,res,next){
+   // Si exigimos HMAC globalmente, el HMAC basta (API key opcional)
+   if (REQUIRE_HMAC) return next();
+   if (!PAGO_API_KEY) return res.status(500).json({ ok:false, error:'PAGO_API_KEY_MISSING' });
+   const key = String(req.headers['x-api-key'] || '').trim();
+   if (key !== PAGO_API_KEY) {
+     if (LAB_DEBUG) console.warn('⛔ API KEY inválida en %s (hasKey=%s)', req.path, !!key);
+     return res.status(401).json({ ok:false, error:'UNAUTHORIZED' });
+   }
+   return next();
+ }
+
+function requireHmacPago(req,res,next){
+  if (!REQUIRE_HMAC) return next();
+  if (!PAGO_HMAC_SECRET) return res.status(500).json({ ok:false, error:'PAGO_HMAC_SECRET_MISSING' });
+  const raw = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body || {});
+  const v = verifyHmac({
+    method: 'POST',
+    path: req.path,
+    bodyRaw: raw,
+    headers: req.headers,
+    secret: PAGO_HMAC_SECRET
+  });
+  if (LAB_DEBUG) {
+    const ts = String(req.headers['x-lab-ts'] || req.headers['x_lb_ts'] || '');
+    const sig = String(req.headers['x-lab-sig'] || req.headers['x_lb_sig'] || '');
+    console.log('[PAGO HMAC IN]', {
+      path: req.path,
+      ts,
+      bodySha256_10: _first10Sha256(raw),
+      sig10: sig.slice(0,10),
+      ok: !!v.ok,
+      err: v.ok ? '-' : v.error
+    });
+  }
+  // Si OK, continuamos
+  if (v.ok) return next();
+
+  
+  // 🛟 Fallbacks por "skew": aceptar sin 401 si el TS venía en ms
+  if (String(v.error || '').toLowerCase() === 'skew') {
+    try {
+      const tsHeader = String(req.headers['x-lab-ts'] || req.headers['x_lb_ts'] || '');
+      const sigHeader = String(req.headers['x-lab-sig'] || req.headers['x_lb_sig'] || '');
+      const tsNum = Number(tsHeader);
+      const tsSec = (tsNum > 1e11) ? Math.floor(tsNum / 1000) : tsNum; // ms → s si hace falta
+      const nowSec = Math.floor(Date.now() / 1000);
+      const maxSkew = Number(process.env.LAB_HMAC_SKEW_SECS || 900); // 15 min por defecto
+      const rawHash = require('crypto').createHash('sha256').update(Buffer.from(raw,'utf8')).digest('hex');
+
+      // a) LEGACY: ts.sha256(body)
+      const expectLegacy = require('crypto')
+        .createHmac('sha256', PAGO_HMAC_SECRET)
+        .update(`${tsSec}.${rawHash}`).digest('hex');
+
+      // b) V2 (bridge): ts.POST.<path>.sha256(body)
+      const expectV2 = require('crypto')
+        .createHmac('sha256', PAGO_HMAC_SECRET)
+        .update(`${tsSec}.POST.${req.path}.${rawHash}`).digest('hex');
+
+      const within = Math.abs(nowSec - tsSec) <= maxSkew;
+      if (within && (sigHeader === expectLegacy || sigHeader === expectV2)) {
+        if (LAB_DEBUG) {
+          console.warn('[PAGO HMAC] aceptado por fallback skew',
+            { match: sigHeader === expectLegacy ? 'legacy' : 'v2', path: req.path });
+        }
+        return next();
+      }
+    } catch (_) { /* noop */ }
+  }
+  // Si llegamos aquí, sigue siendo inválido
+  return res.status(401).json({ ok:false, error:'HMAC_INVALID', detail: v.error });
+}
+
 app.use((req, _res, next) => {
   if (req.headers.origin) console.log('🌐 Origin:', req.headers.origin);
   next();
@@ -132,7 +218,9 @@ const corsOptions = {
     // HMAC Baja Club (WP → Backend)
     'x-lab-ts','x-lab-sig','x-request-id',
     // Cron key para /marketing/cron-send
-    'x-cron-key'
+    'x-cron-key',
+    // auditoría opcional del bridge
+    'x-bridge'
   ],
   credentials: false // pon true solo si usas cookies/sesión
 };
@@ -140,7 +228,7 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
-// ⚠️ WEBHOOK: SIEMPRE EL PRIMERO Y EN RAW
+// ⚠️ WEBHOOK: SIEMPRE EL PRIMERO Y EN RAW 
 app.use('/webhook', require('./routes/webhook'));
 
 // ⬇️ IMPORTANTE: capturamos rawBody para HMAC (validador)
@@ -158,6 +246,95 @@ app.use(express.json({
   }
 }));
 app.use(express.urlencoded({ extended: true }));
+
+// ───────────────────────────────────────────────────────────
+// BRIDGE: /pago/bridge  (WP/Fluent Forms → Backend firmado)
+// - Añade x-api-key + HMAC y reenvía a /crear-sesion-pago o
+//   /crear-suscripcion-club según el caso.
+// - Firma principal: ts.POST.<path>.sha256(body)  ✅
+// - Fallback automático: ts.sha256(body)          🛟
+// ───────────────────────────────────────────────────────────
+app.post('/pago/bridge', async (req, res) => {
+  const API_KEY = PAGO_API_KEY;
+  const HSEC    = PAGO_HMAC_SECRET;
+  const BASE    = String(process.env.PUBLIC_BASE_URL || 'https://laboroteca-production.up.railway.app').replace(/\/+$/,'');
+
+  try {
+    if (!API_KEY || !HSEC) {
+      return res.status(500).json({ ok:false, error:'PAGO_BRIDGE_MISCONFIG' });
+    }
+
+    // Decide destino
+    const force = String(req.query.t || '').toLowerCase(); // 'suscripcion' | 'pago' | ''
+    const body  = req.body || {};
+    const isSubs = force === 'suscripcion'
+      || /suscrip/i.test(String(body?.tipoProducto || ''))
+      || /club/i.test(String(body?.nombreProducto || ''));
+
+    const targetPath = isSubs ? '/crear-suscripcion-club' : '/crear-sesion-pago';
+    const target  = `${BASE}${targetPath}`;
+
+    // Bytes crudos
+    const raw = Buffer.from(JSON.stringify(body), 'utf8');
+    const rawHash = require('crypto').createHash('sha256').update(raw).digest('hex');
+    const ts  = Math.floor(Date.now()/1000);
+
+    // Firma correcta (la que espera verifyHmac de pagos)
+    const msgV2 = `${ts}.POST.${targetPath}.${rawHash}`;
+    const sigV2 = require('crypto').createHmac('sha256', HSEC).update(msgV2).digest('hex');
+
+    // ID de trazabilidad
+    const reqId = `pg_${Date.now().toString(36)}${Math.random().toString(36).slice(2,7)}`;
+
+    if (LAB_DEBUG) {
+      console.log('🟢 [/pago/bridge] → %s ts=%s hash10=%s sig10=%s',
+        targetPath, ts, rawHash.slice(0,10), sigV2.slice(0,10));
+    }
+
+    // Helper para enviar
+    const doFetch = async (sig, note) => {
+      const controller = new (require('abort-controller'))();
+      const timer = setTimeout(() => controller.abort(), 15000);
+      try {
+        const r = await fetch(target, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': API_KEY,
+            'x-lab-ts': String(ts),
+            'x-lab-sig': sig,
+            'x-request-id': reqId,
+            'x-bridge': `wp:${note}` // pista de auditoría
+          },
+          body: raw,
+          signal: controller.signal
+        });
+        const text = await r.text();
+        let data; try { data = JSON.parse(text); } catch { data = { ok:false, error:'NON_JSON_RESPONSE', _raw:text?.slice(0,200) }; }
+        if (LAB_DEBUG) console.log('🟢 [/pago/bridge] OUT %s → %s %s', targetPath, r.status, data?.error || 'ok');
+        return { r, data };
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
+    // 1) Intento con firma correcta (v2)
+    let { r, data } = await doFetch(sigV2, 'v2');
+    // 2) Fallback si el servidor responde HMAC_INVALID
+    if (r.status === 401 && (data?.error === 'HMAC_INVALID' || data?.detail === 'HMAC_INVALID')) {
+      const msgV1 = `${ts}.${rawHash}`; // legacy
+      const sigV1 = require('crypto').createHmac('sha256', HSEC).update(msgV1).digest('hex');
+      if (LAB_DEBUG) console.warn('🛟 [/pago/bridge] Reintentando con firma legacy…');
+      ({ r, data } = await doFetch(sigV1, 'v1fallback'));
+    }
+
+    return res.status(r.status).json(data);
+  } catch (e) {
+    console.error('❌ pago/bridge ERROR:', e?.message || e);
+    try { await alertAdmin({ area:'pago_bridge', email: req.body?.email || '-', err: e }); } catch(_){}
+    return res.status(500).json({ ok:false, error:'BRIDGE_ERROR' });
+  }
+});
 
 
 // ───────────────────────────────────────────────────────────
@@ -346,7 +523,15 @@ app.get('/', (req, res) => {
 });
 
 
-app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
+// REEMPLAZO con MW:
+app.post(
+  '/crear-sesion-pago',
+  enforcePost,
+  pagoLimiter,
+  // Primero HMAC (si LAB_REQUIRE_HMAC=1), luego API key (si LAB_REQUIRE_HMAC=0)
+  requireHmacPago,
+  requireApiKeyPago,
+  async (req, res) => {
   const datos = req.body;
   console.log('📥 Datos recibidos en /crear-sesion-pago:\n', JSON.stringify(datos, null, 2));
 
@@ -445,12 +630,18 @@ app.post('/crear-sesion-pago', pagoLimiter, async (req, res) => {
         });
       } catch (_) {}
 
-      return res.status(500).json({ error: 'Error al crear el pago' });
+    return res.status(500).json({ error: 'Error al crear el pago' });
     }
-
 });
 
-app.post('/crear-suscripcion-club', pagoLimiter, async (req, res) => {
+// Igual para suscripción: aplicar MW de cierre
+app.post(
+  '/crear-suscripcion-club',
+  enforcePost,
+  pagoLimiter,
+  requireHmacPago,
+  requireApiKeyPago,
+  async (req, res) => {
   const datos = req.body;
 
   const email = (typeof datos.email_autorelleno === 'string' && datos.email_autorelleno.includes('@'))

@@ -11,6 +11,47 @@ const { normalizarProducto, MEMBERPRESS_IDS } = require('../utils/productos');
 const { ensureOnce } = require('../utils/dedupe');
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
+const crypto = require('crypto');
+const fetch = require('node-fetch');
+
+// === WP HMAC config ===
+const WP_BASE = process.env.WP_BASE_URL || 'https://www.laboroteca.es';
+const MP_API_KEY = process.env.MP_SYNC_API_KEY || process.env.MEMBERPRESS_KEY; // fallback si aún no tienes MP_SYNC_API_KEY
+const MP_HMAC_SECRET = process.env.MP_SYNC_HMAC_SECRET;
+const WP_PATH_LIBRO = '/wp-json/laboroteca/v1/libro-membership';
+const WP_PATH_CLUB  = '/wp-json/laboroteca/v1/club-membership';
+
+async function postWPHmac(path, payload) {
+  if (!MP_API_KEY || !MP_HMAC_SECRET) {
+    const msg = 'MP_SYNC_API_KEY / MP_SYNC_HMAC_SECRET ausentes';
+    console.warn('[WP HMAC] ' + msg);
+    throw new Error(msg);
+  }
+  const body = JSON.stringify(payload);
+  const ts   = String(Date.now()); // MILISEGUNDOS (lo exige el mu-plugin)
+  const bodyHash = crypto.createHash('sha256').update(body).digest('hex');
+  const base = `${ts}.POST.${path}.${bodyHash}`;
+  const sig  = crypto.createHmac('sha256', MP_HMAC_SECRET).update(base).digest('hex');
+  const res  = await fetch(`${WP_BASE}${path}`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': MP_API_KEY,
+      'x-mp-ts': ts,
+      'x-mp-sig': sig
+    },
+    body
+  });
+  const text = await res.text();
+  let data; try { data = JSON.parse(text); } catch { data = { _raw: text }; }
+  if (!res.ok) {
+    const msg = `WP ${res.status}: ${text.slice(0,300)}`;
+    console.error('[WP HMAC] ' + msg);
+    throw new Error(msg);
+  }
+  return data;
+}
+
 
 // --- helper global ---
 function escapeHtml(s) {
@@ -193,18 +234,14 @@ module.exports = async function procesarCompra(datos) {
 
     const membership_id = MEMBERPRESS_IDS[claveNormalizada];
 
-if (membership_id) { // ← robusto: activa CLUB por mapeo del producto, no por texto "club"
+if (membership_id) {
+  // CLUB → llamada HMAC al mu-plugin
   try {
-    console.log(`🔓 → Activando membresía CLUB con ID ${membership_id} para ${email}`);
-    await activarMembresiaClub(email, {
-      activationRef,
-      invoiceId: datos.invoiceId ? String(datos.invoiceId) : null,
-      via: 'service:procesarCompra'
-    });
-    await syncMemberpressClub({ email, accion: 'activar', membership_id, importe });
-    console.log('✅ Membresía del CLUB activada correctamente');
+    console.log(`🔓 → [WP HMAC] Activando CLUB para ${email}`);
+    await postWPHmac(WP_PATH_CLUB, { email, accion: 'activar', importe });
+    console.log('✅ CLUB activado en WP');
   } catch (err) {
-    console.error('❌ Error activando membresía del CLUB:', err.message || err);
+    console.error('❌ Error activando CLUB (WP HMAC):', err.message || err);
     try {
       await alertAdmin({
         area: 'club_activar_fallo',
@@ -213,16 +250,15 @@ if (membership_id) { // ← robusto: activa CLUB por mapeo del producto, no por 
         meta: { membership_id, importe, producto: claveNormalizada }
       });
     } catch (_) {}
-
   }
 } else if (tipoProducto.toLowerCase() === 'libro') {
+  // LIBRO → llamada HMAC al mu-plugin
   try {
-    const { syncMemberpressLibro } = require('./syncMemberpressLibro');
-    console.log(`📘 → Activando membresía LIBRO para ${email}`);
-    await syncMemberpressLibro({ email, accion: 'activar', importe });
-    console.log('✅ Membresía del LIBRO activada correctamente');
+    console.log(`📘 → [WP HMAC] Activando LIBRO para ${email}`);
+    await postWPHmac(WP_PATH_LIBRO, { email, accion: 'activar', importe });
+    console.log('✅ LIBRO activado en WP');
   } catch (err) {
-    console.error('❌ Error activando membresía del LIBRO:', err.message || err);
+    console.error('❌ Error activando LIBRO (WP HMAC):', err.message || err);
     try {
       await alertAdmin({
         area: 'libro_activar_fallo',
@@ -231,7 +267,6 @@ if (membership_id) { // ← robusto: activa CLUB por mapeo del producto, no por 
         meta: { importe, producto: claveNormalizada }
       });
     } catch (_) {}
-
   }
 }
 

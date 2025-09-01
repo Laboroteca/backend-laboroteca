@@ -13,7 +13,6 @@
     "audit:club": "node scripts/auditarClubSemanal.js --mode=auto",
     "audit:club:weekly": "node scripts/auditarClubSemanal.js --mode=weekly",
     "audit:club:monthly": "node scripts/auditarClubSemanal.js --mode=monthly",
-
     "job:bajasClub:replayer": "node jobs/stripe_bajasClub_planB.js replayer",
     "job:bajasClub:reconciler": "node jobs/stripe_bajasClub_planB.js reconciler",
     "job:bajasClub:bajas": "node jobs/stripe_bajasClub_planB.js bajas",
@@ -24,9 +23,11 @@
   },
   "dependencies": {
     "@google-cloud/storage": "^7.16.0",
+    "abort-controller": "^3.0.0",
     "axios": "^1.9.0",
     "bcryptjs": "^3.0.2",
     "body-parser": "^2.2.0",
+    "compression": "^1.8.1",
     "cors": "^2.8.5",
     "dayjs": "^1.11.13",
     "dotenv": "^16.5.0",
@@ -34,6 +35,8 @@
     "express-rate-limit": "^7.5.0",
     "firebase-admin": "^13.4.0",
     "googleapis": "^148.0.0",
+    "helmet": "^8.1.0",
+    "node-fetch": "^2.7.0",
     "nodemailer": "^7.0.2",
     "pdfkit": "^0.17.1",
     "qrcode": "^1.5.4",

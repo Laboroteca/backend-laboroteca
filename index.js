@@ -65,6 +65,8 @@ const express = require('express');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
+const helmet = require('helmet');
+const compression = require('compression');
 const path = require('path');
 const fetch = require('node-fetch');
 const { eliminarUsuarioWordPress } = require('./services/eliminarUsuarioWordPress');
@@ -93,6 +95,28 @@ function _first10Sha256(str) {
   try { return crypto.createHash('sha256').update(String(str),'utf8').digest('hex').slice(0,10); }
   catch { return 'errhash'; }
 }
+
+const _fallbackSeen = new Map();
+function _fallbackGc(){ const now=Date.now(); for (const [k,exp] of _fallbackSeen) if (exp<=now) _fallbackSeen.delete(k); }
+
+
+// ─────────────────────────────────────
+// Seguridad HTTP y rendimiento (PROD)
+// ─────────────────────────────────────
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+  contentSecurityPolicy: false // dejamos CSP gestionado por WP / frontend
+}));
+app.use(compression());
+
+// Rate-limit global suave (además de los específicos)
+const globalLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: Number(process.env.GLOBAL_RL_MAX || 120),
+  standardHeaders: true,
+  legacyHeaders: false
+});
+app.use(globalLimiter);
 
 // ── MW de cierre para pagos (POST + API KEY + HMAC opcional según flag global) ─────────────
 function enforcePost(req,res,next){
@@ -165,6 +189,15 @@ function requireHmacPago(req,res,next){
         if (LAB_DEBUG) {
           console.warn('[PAGO HMAC] aceptado por fallback skew',
             { match: sigHeader === expectLegacy ? 'legacy' : 'v2', path: req.path });
+        }
+        // Anti-replay en camino de fallback
+        const reqIdHdr = String(req.headers['x-request-id'] || req.headers['x_request_id'] || '');
+        if (reqIdHdr) {
+          _fallbackGc();
+          if (_fallbackSeen.has(reqIdHdr)) {
+            return res.status(409).json({ ok:false, error:'REPLAY' });
+          }
+          _fallbackSeen.set(reqIdHdr, Date.now() + (maxSkew * 1000));
         }
         return next();
       }
@@ -247,6 +280,17 @@ app.use(express.json({
 }));
 app.use(express.urlencoded({ extended: true }));
 
+// ─────────────────────────────────────
+// Middleware: exigir JSON puro en rutas críticas
+// ─────────────────────────────────────
+function requireJson(req, res, next) {
+  const ct = (req.headers['content-type'] || '').toLowerCase();
+  if (!ct.startsWith('application/json')) {
+    return res.status(415).json({ ok:false, error:'UNSUPPORTED_MEDIA_TYPE' });
+  }
+  return next();
+}
+
 // ───────────────────────────────────────────────────────────
 // BRIDGE: /pago/bridge  (WP/Fluent Forms → Backend firmado)
 // - Añade x-api-key + HMAC y reenvía a /crear-sesion-pago o
@@ -254,7 +298,7 @@ app.use(express.urlencoded({ extended: true }));
 // - Firma principal: ts.POST.<path>.sha256(body)  ✅
 // - Fallback automático: ts.sha256(body)          🛟
 // ───────────────────────────────────────────────────────────
-app.post('/pago/bridge', async (req, res) => {
+app.post('/pago/bridge', requireJson, async (req, res) => {
   const API_KEY = PAGO_API_KEY;
   const HSEC    = PAGO_HMAC_SECRET;
   const BASE    = String(process.env.PUBLIC_BASE_URL || 'https://laboroteca-production.up.railway.app').replace(/\/+$/,'');
@@ -344,7 +388,7 @@ app.post('/pago/bridge', async (req, res) => {
 // - Logs claros de ida y vuelta + timeout
 // Requiere: PUBLIC_BASE_URL=https://laboroteca-production.up.railway.app
 // ───────────────────────────────────────────────────────────
-app.post('/marketing/consent-bridge', async (req, res) => {
+app.post('/marketing/consent-bridge', requireJson, async (req, res) => {
   const API_KEY = String(process.env.MKT_API_KEY || '').trim();
   const HSEC    = String(process.env.MKT_CONSENT_SECRET || '').trim();
   const BASE    = String(process.env.PUBLIC_BASE_URL || 'https://laboroteca-production.up.railway.app').replace(/\/+$/,'');
@@ -527,6 +571,7 @@ app.get('/', (req, res) => {
 app.post(
   '/crear-sesion-pago',
   enforcePost,
+  requireJson,
   pagoLimiter,
   // Primero HMAC (si LAB_REQUIRE_HMAC=1), luego API key (si LAB_REQUIRE_HMAC=0)
   requireHmacPago,
@@ -638,6 +683,7 @@ app.post(
 app.post(
   '/crear-suscripcion-club',
   enforcePost,
+  requireJson,
   pagoLimiter,
   requireHmacPago,
   requireApiKeyPago,
@@ -761,7 +807,7 @@ app.post('/activar-membresia-club', accountLimiter, async (req, res) => {
 
 app.options('/cancelar-suscripcion-club', cors(corsOptions));
 
-app.post('/cancelar-suscripcion-club', cors(corsOptions), accountLimiter, async (req, res) => {
+app.post('/cancelar-suscripcion-club', cors(corsOptions), requireJson, accountLimiter, async (req, res) => {
   // Si vienen cabeceras HMAC desde WP, usamos el flujo nuevo (sin password)
   const ts = String(req.headers['x-lab-ts'] || '');
   const sig = String(req.headers['x-lab-sig'] || '');
@@ -884,7 +930,7 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), accountLimiter, async 
   }
 });
 
-app.post('/eliminar-cuenta', accountLimiter, async (req, res) => {
+app.post('/eliminar-cuenta', requireJson, accountLimiter, async (req, res) => {
   const { email, password, token } = req.body;
   const tokenEsperado = 'eliminarCuenta@2025!';
 
@@ -919,7 +965,7 @@ app.post('/eliminar-cuenta', accountLimiter, async (req, res) => {
   }
 });
 
-app.post('/crear-portal-cliente', accountLimiter, async (req, res) => {
+app.post('/crear-portal-cliente', requireJson, accountLimiter, async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'Falta el email' });
 
@@ -970,6 +1016,30 @@ process.on('unhandledRejection', (err) => {
       meta: { pid: process.pid, nodeEnv: process.env.NODE_ENV }
     }).catch(() => {});
   } catch (_) {}
+});
+
+// ─────────────────────────────────────
+// Manejador de errores central (último)
+// ─────────────────────────────────────
+app.use((err, req, res, _next) => {
+  const msg = err?.message || String(err);
+  const rid = req.headers['x-request-id'] || '-';
+  // Log sin datos sensibles; no volcamos headers ni body completos
+  console.error('🔥 ERROR', JSON.stringify({
+    path: req.path,
+    method: req.method,
+    rid,
+    msg
+  }));
+  try {
+    alertAdmin({
+      area: 'express_error',
+      email: '-',
+      err,
+      meta: { path: req.path, method: req.method, rid }
+    }).catch(() => {});
+  } catch (_) {}
+  res.status(err.status || 500).json({ ok:false, error:'INTERNAL_ERROR' });
 });
 
 

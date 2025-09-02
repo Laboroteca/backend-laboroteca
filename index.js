@@ -628,8 +628,25 @@ app.post(
   // Nombre/imagen “canon” si el catálogo lo conoce
   const nombreProductoCanon = productoResuelto?.nombre || nombreProducto;
   const imagenCanon = (imagenProducto || productoResuelto?.imagen || '').trim();
-  // Stripe line_items: si hay price_id usamos price, si no price_data con el importe
-  const usarPriceId = Boolean(productoResuelto?.price_id);
+  // Stripe line_items: usar price_id solo si existe y es VÁLIDO (activo y no recurrente).
+  const candidatePriceId = String(productoResuelto?.price_id || '').trim();
+  let usarPriceId = false;
+  // Importe de fallback (del formulario o del catálogo)
+  let amountCents = Number.isFinite(precio) ? Math.round(precio * 100)
+                    : (Number(productoResuelto?.precio_cents) || 0);
+  if (candidatePriceId.startsWith('price_')) {
+    try {
+      const pr = await stripe.prices.retrieve(candidatePriceId);
+      // Solo permitimos price_id activos y NO recurrentes para pagos únicos
+      usarPriceId = !!(pr && pr.id && pr.active && !pr.recurring);
+      if (!usarPriceId) {
+        console.warn('⚠️ price_id no válido para pago único:', candidatePriceId, { active: pr?.active, recurring: !!pr?.recurring });
+        if (typeof pr?.unit_amount === 'number') amountCents = pr.unit_amount; // respeta importe configurado si existe
+      }
+    } catch (e) {
+      console.warn('⚠️ price_id inexistente/inaccesible en Stripe. Fallback a price_data:', candidatePriceId, e?.message || e);
+    }
+  }
 
   const emailValido = await verificarEmailEnWordPress(email);
   if (!emailValido) {
@@ -643,20 +660,15 @@ app.post(
       customer_creation: 'always',
       customer_email: email,
       line_items: usarPriceId
-        ? [{
-            // ✅ precio del catálogo (evita confusiones entre libros)
-            price: productoResuelto.price_id,
-            quantity: 1
-          }]
+        ? [{ price: candidatePriceId, quantity: 1 }]
         : [{
-            // fallback: precio ad-hoc si no hay price_id
             price_data: {
               currency: 'eur',
               product_data: {
                 name: `${tipoProducto} "${nombreProductoCanon}"`,
                 images: imagenCanon ? [imagenCanon] : []
               },
-              unit_amount: Math.round(precio * 100)
+              unit_amount: amountCents
             },
             quantity: 1
           }],
@@ -674,8 +686,8 @@ app.post(
         // 🧾 metadatos “canon” para el resolver del backend
         nombreProducto: nombreProductoCanon,
         descripcionProducto: descripcionProducto || (productoResuelto?.descripcion || ''),
-        // 💳 ayuda al resolver por price_id en el backend
-        price_id: productoResuelto?.price_id || ''
+        // 💳 ayuda al resolver por price_id en el backend (solo si lo usamos)
+        price_id: usarPriceId ? candidatePriceId : 
       },
       success_url: `https://www.laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(nombreProductoCanon)}`,
       cancel_url: 'https://www.laboroteca.es/error'

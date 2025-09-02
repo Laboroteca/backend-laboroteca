@@ -19,7 +19,8 @@
  * - precio_cents:      number | null (informativo; el importe real viene de Stripe)
  * - descripcion_factura: string (plantilla segura para FacturaCity)
  * - aliases:           string[] (palabras/frases que ayudan a normalizar búsquedas)
- * - meta:              objeto libre (p. ej. { gcs_folder, sheet_id, sheet_range })
+      gcs_folder: 'facturas/libros/de-cara-a-la-jubilacion'
+      // mp_api_url: 'https://www.laboroteca.es/wp-json/laboroteca/v1/libro-membership'
  */
 
 const PRODUCTOS = {
@@ -62,7 +63,7 @@ const PRODUCTOS = {
     activar_membresia: true,
     membership_id: 11006,
     price_id: 'price_1S2sReEe6Cd77jenmOhFqFuX',
-    imagen: '',
+    imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/06/adelantar-la-jubilacion-IGNACIO-SOLSONA-scaled.webp',
     precio_cents: 3490, // informativo; el importe real se toma de Stripe
     descripcion_factura: 'Libro digital (acceso vitalicio): "Adelanta tu jubilación".',
     aliases: [
@@ -73,6 +74,7 @@ const PRODUCTOS = {
     ],
     meta: {
       gcs_folder: 'facturas/libros/adelanta-tu-jubilacion'
+      // mp_api_url: 'https://www.laboroteca.es/wp-json/laboroteca/v1/libro-membership'
     }
   },
 

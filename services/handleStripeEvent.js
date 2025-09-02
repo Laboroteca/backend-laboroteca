@@ -13,6 +13,8 @@ const { syncMemberpressLibro } = require('./syncMemberpressLibro');
 const { registrarBajaClub } = require('./registrarBajaClub');
 const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+// 📦 Catálogo centralizado (permitirá altas tocando solo utils/productos.js)
+const PRODUCTOS = require('../utils/productos');
 const escapeHtml = s => String(s ?? '')
   .replace(/&/g,'&amp;').replace(/</g,'&lt;')
   .replace(/>/g,'&gt;').replace(/"/g,'&quot;')
@@ -107,6 +109,7 @@ function normalizarProducto(str) {
 }
 
 
+// Fallback legacy (lo seguimos usando si el catálogo no trae memberpress_id)
 const MEMBERPRESS_IDS = {
   'el club laboroteca': 10663,
   'club laboroteca': 10663,
@@ -1144,10 +1147,20 @@ try {
 
 
     const productoSlug = isClub ? 'club laboroteca' : nombreNorm;
-
-    const memberpressId = MEMBERPRESS_IDS[productoSlug];
-
-    const descripcionProducto = m.descripcionProducto || rawNombreProducto || 'Producto Laboroteca';
+    // 🧭 Resolver desde catálogo; si no existe, usar fallback legacy
+    const catalogItem = PRODUCTOS[productoSlug] || null;
+    const memberpressId =
+      (catalogItem && Number(catalogItem.memberpress_id)) ||
+      MEMBERPRESS_IDS[productoSlug];
+    // Nombre/desc preferentemente del catálogo (si el formulario no los trae)
+    const descripcionProducto =
+      m.descripcionProducto ||
+      (catalogItem && catalogItem.descripcion) ||
+      rawNombreProducto ||
+      'Producto Laboroteca';
+    const nombreCatalogo =
+      (catalogItem && catalogItem.nombre) ||
+      rawNombreProducto;
 
     console.log('🧪 handleStripeEvent - Precio y descripción recibida desde metadata:');
     console.log('👉 session.metadata.nombreProducto:', session.metadata?.nombreProducto);
@@ -1169,7 +1182,7 @@ try {
       cp: m.cp || '',
       importe: parseFloat((amountTotal / 100).toFixed(2)),
       tipoProducto: m.tipoProducto || 'Otro',
-      nombreProducto: rawNombreProducto,
+      nombreProducto: nombreCatalogo,
       descripcionProducto,
       producto: productoNormalizado
     };
@@ -1263,9 +1276,19 @@ try {
           ...(subExpiresISO ? { expires_at: subExpiresISO } : {})
         });
         console.log('✅ CLUB activado inmediatamente');
-      } else if (memberpressId === 7994) {
+      } else if (memberpressId) {
+        // 🔁 Activación genérica de cualquier Membership de MemberPress
+        await syncMemberpressClub({
+          email,
+          accion: 'activar',
+          membership_id: memberpressId,
+          importe: datosCliente.importe
+        });
+        console.log('✅ MemberPress activado (id=%s) inmediatamente', memberpressId);
+      } else if (MEMBERPRESS_IDS[productoSlug] === 7994) {
+        // 🟡 Fallback legacy para el libro antiguo (compatibilidad)
         await syncMemberpressLibro({ email, accion: 'activar', importe: datosCliente.importe });
-        console.log('✅ LIBRO activado inmediatamente');
+        console.log('✅ LIBRO (legacy) activado inmediatamente');
       }
 } catch (e) {
   console.error('❌ Error activando membresía (se registrará igualmente la compra):', e?.message || e);
@@ -1273,7 +1296,7 @@ try {
     area: 'activacion_membresia',
     email,
     err: e,
-    meta: { evento: 'checkout.session.completed', producto: productoSlug, membershipId: memberpressId }
+    meta: { evento: 'checkout.session.completed', producto: productoSlug, membershipId: memberpressId || '(none)' }
   });
 }
 

@@ -4,34 +4,14 @@ const express = require('express');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const router = express.Router();
 
-const { normalizar } = require('../utils/normalizar');
+const { normalizar } = require('../utils/normalizar'); // (solo para logs en catch)
 const { emailRegistradoEnWordPress } = require('../utils/wordpress');
-const PRODUCTOS = require('../utils/productos');
+const { PRODUCTOS: CATALOGO, resolverProducto } = require('../utils/productos');
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
 router.post('/create-session', async (req, res) => {
-  // ❌ Bloquear intentos de lanzar entradas por esta ruta
-  if ((req.body?.tipoProducto || '').toLowerCase() === 'entrada') {
-    console.warn('🚫 [create-session] Entrada bloqueada en checkout.js');
-
-    // 🔔 Aviso admin (no bloquea respuesta)
-    try {
-      await alertAdmin({
-        area: 'checkout_entrada_bloqueada',
-        email: (req.body?.email_autorelleno || req.body?.email || '-'),
-        err: new Error('Intento de procesar entradas por ruta no permitida'),
-        meta: {
-          tipoProducto: req.body?.tipoProducto || null,
-          nombreProducto: req.body?.nombreProducto || null
-        }
-      });
-    } catch (_) { /* no-op */ }
-
-    return res.status(400).json({ error: 'Las entradas no se procesan por esta ruta.' });
-  }
-
   // Vars para meta en alertas del catch final (no afectan al flujo)
-  let email, tipoProducto, nombreProducto, esEntrada, isSuscripcion, totalAsistentes, importeFormulario;
+  let email, tipoProducto, nombreProducto, importeFormulario;
 
   try {
     const body = req.body;
@@ -53,13 +33,13 @@ router.post('/create-session', async (req, res) => {
     const imagenFormulario = (datos.imagenProducto || '').trim();
     importeFormulario = parseFloat((datos.importe || '').toString().replace(',', '.'));
 
-    isSuscripcion = tipoProducto.toLowerCase().includes('suscrip');
-    esEntrada = tipoProducto.toLowerCase() === 'entrada';
-    totalAsistentes = parseInt(datos.totalAsistentes) || 1;
-
-    const producto = esEntrada
-      ? PRODUCTOS['entrada evento']
-      : PRODUCTOS[normalizar(nombreProducto)];
+    // Resolver solo productos de pago ÚNICO (no entradas, no suscripciones)
+    const producto = resolverProducto({
+      tipoProducto,
+      nombreProducto,
+      descripcionProducto: descripcionFormulario,
+      price_id: datos.price_id
+    });
 
     console.log('📩 [create-session] Solicitud recibida:', {
       nombre, apellidos, email, dni, direccion,
@@ -74,10 +54,11 @@ router.post('/create-session', async (req, res) => {
       !nombre ||
       !nombreProducto ||
       !tipoProducto ||
-      !producto
+      !producto ||
+      producto.es_recurrente === true // solo pago único
     ) {
       console.warn('⚠️ [create-session] Faltan datos obligatorios o producto inválido.', {
-        nombre, email, nombreProducto, tipoProducto, producto
+        nombre, email, nombreProducto, tipoProducto, productoSlug: producto?.slug || null
       });
 
       // 🔔 Aviso admin (validación 400)
@@ -114,45 +95,33 @@ router.post('/create-session', async (req, res) => {
       return res.status(403).json({ error: 'El email no está registrado como usuario.' });
     }
 
-    const importeFinalCents = esEntrada
-      ? Math.round((importeFormulario || 0) * 100) * totalAsistentes
-      : Math.round((importeFormulario || PRODUCTOS[normalizar(nombreProducto)].precio_cents / 100) * 100);
+    const importeFinalCents = Number.isFinite(importeFormulario)
+      ? Math.round(importeFormulario * 100)
+      : (Number(producto?.precio_cents) || 0);
 
-    const line_items = isSuscripcion
-      ? [{
-          price: PRODUCTOS[normalizar(nombreProducto)].price_id,
-          quantity: 1
-        }]
-      : esEntrada
-        ? [{
-            price: PRODUCTOS[normalizar(nombreProducto)].price_id,
-            quantity: totalAsistentes
-          }]
-        : [{
-            price_data: {
-              currency: 'eur',
-              unit_amount: importeFinalCents,
-              product_data: {
-                name: PRODUCTOS[normalizar(nombreProducto)].nombre,
-                description: descripcionFormulario || PRODUCTOS[normalizar(nombreProducto)].descripcion,
-                images: imagenFormulario ? [imagenFormulario] : [PRODUCTOS[normalizar(nombreProducto)].imagen]
-              }
-            },
-            quantity: 1
-          }];
+    const line_items = [{
+      price_data: {
+        currency: 'eur',
+        unit_amount: importeFinalCents,
+        product_data: {
+          name: producto.nombre,
+          description: descripcionFormulario || producto.descripcion,
+          images: (imagenFormulario || producto.imagen) ? [ (imagenFormulario || producto.imagen) ] : []
+        }
+      },
+      quantity: 1
+    }];
 
     console.log('🧪 tipoProducto:', tipoProducto);
-    console.log('🧪 esEntrada:', esEntrada);
-    console.log('🧪 totalAsistentes:', totalAsistentes);
     console.log('🧪 importeFormulario:', importeFormulario);
-    console.log('🧪 producto:', PRODUCTOS[normalizar(nombreProducto)]);
+    console.log('🧪 producto:', producto?.slug, '→', producto?.nombre);
 
     const session = await stripe.checkout.sessions.create({
-      mode: isSuscripcion ? 'subscription' : 'payment',
+      mode: 'payment',
       payment_method_types: ['card'],
       customer_email: email,
       line_items,
-      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(PRODUCTOS[normalizar(nombreProducto)].nombre)}`,
+      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(producto.nombre)}`,
       cancel_url: 'https://laboroteca.es/error',
       metadata: {
         nombre,
@@ -164,11 +133,9 @@ router.post('/create-session', async (req, res) => {
         provincia,
         cp,
         tipoProducto,
-        nombreProducto: PRODUCTOS[normalizar(nombreProducto)].nombre,
-        descripcionProducto: (datos.descripcionProducto || PRODUCTOS[normalizar(nombreProducto)].descripcion || `${tipoProducto} "${PRODUCTOS[normalizar(nombreProducto)].nombre}"`).trim(),
-        importe: (importeFormulario || 0).toFixed(2),
-        totalAsistentes: totalAsistentes.toString(),
-        esPrimeraCompra: isSuscripcion ? 'true' : 'false'
+        nombreProducto: producto.nombre,
+        descripcionProducto: (datos.descripcionProducto || producto.descripcion || `${tipoProducto} "${producto.nombre}"`).trim(),
+        importe: ((importeFinalCents || 0) / 100).toFixed(2)
       }
     });
 
@@ -188,9 +155,6 @@ router.post('/create-session', async (req, res) => {
         meta: {
           tipoProducto: tipoProducto || raw.tipoProducto || null,
           nombreProducto: nombreProducto || raw.nombreProducto || null,
-          esEntrada: typeof esEntrada === 'boolean' ? esEntrada : ((raw.tipoProducto || '').toLowerCase() === 'entrada'),
-          isSuscripcion: typeof isSuscripcion === 'boolean' ? isSuscripcion : ((raw.tipoProducto || '').toLowerCase().includes('suscrip')),
-          totalAsistentes: totalAsistentes || raw.totalAsistentes || null,
           importeFormulario: importeFormulario || raw.importe || null,
           productoKey: nombreProducto ? normalizar(nombreProducto) : (raw.nombreProducto ? normalizar(raw.nombreProducto) : null),
           rawBodyType: typeof raw

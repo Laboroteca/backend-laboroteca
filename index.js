@@ -73,6 +73,8 @@ const { eliminarUsuarioWordPress } = require('./services/eliminarUsuarioWordPres
 const procesarCompra = require('./services/procesarCompra');
 const { activarMembresiaClub } = require('./services/activarMembresiaClub');
 const { syncMemberpressClub } = require('./services/syncMemberpressClub');
+// 🆕 Catálogo unificado (resolver + datos)
+const { resolverProducto, PRODUCTOS } = require('./utils/productos');
 const desactivarMembresiaClubForm = require('./routes/desactivarMembresiaClub');
 const desactivarMembresiaClub = require('./services/desactivarMembresiaClub');
 // ✔️ HMAC para baja voluntaria (WP → Backend)
@@ -554,8 +556,7 @@ const pagoLimiter = rateLimit({
   message: { error: 'Demasiados intentos. Inténtalo más tarde.' }
 });
 
-// ✅ Usar la función correcta desde utils
-const { normalizarProducto } = require('./utils/productos');
+// (nota) ya importamos desde arriba resolverProducto/PRODUCTOS
 
 async function verificarEmailEnWordPress(email) {
   console.log('🔓 Verificación desactivada. Email:', email);
@@ -618,6 +619,18 @@ app.post(
     return res.status(400).json({ error: 'Email inválido' });
   }
 
+  // 🧭 Resolver producto del catálogo (prioriza price_id si existe)
+  const productoResuelto = resolverProducto(
+    { tipoProducto, nombreProducto, descripcionProducto, price_id: datos.price_id },
+    [] // no hay lineItems aún
+  );
+
+  // Nombre/imagen “canon” si el catálogo lo conoce
+  const nombreProductoCanon = productoResuelto?.nombre || nombreProducto;
+  const imagenCanon = (imagenProducto || productoResuelto?.imagen || '').trim();
+  // Stripe line_items: si hay price_id usamos price, si no price_data con el importe
+  const usarPriceId = Boolean(productoResuelto?.price_id);
+
   const emailValido = await verificarEmailEnWordPress(email);
   if (!emailValido) {
     return res.status(403).json({ error: 'Este email no está registrado.' });
@@ -629,17 +642,24 @@ app.post(
       mode: 'payment',
       customer_creation: 'always',
       customer_email: email,
-      line_items: [{
-        price_data: {
-          currency: 'eur',
-          product_data: {
-            name: `${tipoProducto} "${nombreProducto}"`,
-            images: [imagenProducto]
-          },
-          unit_amount: Math.round(precio * 100)
-        },
-        quantity: 1
-      }],
+      line_items: usarPriceId
+        ? [{
+            // ✅ precio del catálogo (evita confusiones entre libros)
+            price: productoResuelto.price_id,
+            quantity: 1
+          }]
+        : [{
+            // fallback: precio ad-hoc si no hay price_id
+            price_data: {
+              currency: 'eur',
+              product_data: {
+                name: `${tipoProducto} "${nombreProductoCanon}"`,
+                images: imagenCanon ? [imagenCanon] : []
+              },
+              unit_amount: Math.round(precio * 100)
+            },
+            quantity: 1
+          }],
       metadata: {
         nombre,
         apellidos,
@@ -651,10 +671,13 @@ app.post(
         provincia,
         cp,
         tipoProducto,
-        nombreProducto,
-        descripcionProducto
+        // 🧾 metadatos “canon” para el resolver del backend
+        nombreProducto: nombreProductoCanon,
+        descripcionProducto: descripcionProducto || (productoResuelto?.descripcion || ''),
+        // 💳 ayuda al resolver por price_id en el backend
+        price_id: productoResuelto?.price_id || ''
       },
-      success_url: `https://www.laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(nombreProducto)}`,
+      success_url: `https://www.laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(nombreProductoCanon)}`,
       cancel_url: 'https://www.laboroteca.es/error'
     });
 
@@ -678,6 +701,7 @@ app.post(
     return res.status(500).json({ error: 'Error al crear el pago' });
     }
 });
+
 
 // Igual para suscripción: aplicar MW de cierre
 app.post(
@@ -728,23 +752,32 @@ app.post(
     return res.status(403).json({ error: 'Este email no está registrado.' });
   }
 
+  // 🧭 Para el Club, usa siempre el price_id del catálogo
+  const CLUB = PRODUCTOS['el-club-laboroteca'] || PRODUCTOS['el_club_laboroteca'] || PRODUCTOS['club laboroteca'];
+  const clubPriceId = CLUB?.price_id || null;
+
+
   try {
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
       mode: 'subscription',
       customer_email: email,
-      line_items: [{
-        price_data: {
-          currency: 'eur',
-          product_data: {
-            name: nombreProducto,
-            images: [imagenProducto]
-          },
-          unit_amount: Math.round(precio * 100),
-          recurring: { interval: 'month' }
-        },
-        quantity: 1
-      }],
+      line_items: clubPriceId
+        ? [{
+            // ✅ precio oficial del Club (evita desajustes de importe/renovación)
+            price: clubPriceId,
+            quantity: 1
+          }]
+        : [{
+            // fallback por si faltase price_id en env
+            price_data: {
+              currency: 'eur',
+              product_data: { name: nombreProducto, images: imagenProducto ? [imagenProducto] : [] },
+              unit_amount: Math.round(precio * 100),
+              recurring: { interval: 'month' }
+            },
+            quantity: 1
+          }],
       metadata: {
         nombre,
         apellidos,
@@ -756,10 +789,11 @@ app.post(
         provincia,
         cp,
         tipoProducto,
-        nombreProducto,
-        descripcionProducto
+        nombreProducto: CLUB?.nombre || nombreProducto,
+        descripcionProducto: descripcionProducto || CLUB?.descripcion || '',
+        price_id: clubPriceId || ''
       },
-      success_url: `https://www.laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(nombreProducto)}`,
+      success_url: `https://www.laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent((CLUB?.nombre || nombreProducto))}`,
       cancel_url: 'https://www.laboroteca.es/error'
     });
 

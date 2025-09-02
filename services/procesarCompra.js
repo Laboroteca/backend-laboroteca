@@ -7,7 +7,7 @@ const { subirFactura } = require('./gcs');
 const { guardarEnGoogleSheets } = require('./googleSheets');
 const { activarMembresiaClub } = require('./activarMembresiaClub');
 const { syncMemberpressClub } = require('./syncMemberpressClub');
-const { normalizarProducto, MEMBERPRESS_IDS } = require('../utils/productos');
+const { normalizarProducto, resolverProducto, MEMBERPRESS_IDS, PRODUCTOS } = require('../utils/productos');
 const { ensureOnce } = require('../utils/dedupe');
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
@@ -66,8 +66,20 @@ module.exports = async function procesarCompra(datos) {
   let nombreProducto = (datos.nombreProducto || 'Producto Laboroteca').trim();
   let descripcionProducto = datos.descripcionProducto || nombreProducto;
   let tipoProducto = datos.tipoProducto || 'Otro';
-  let importe = parseFloat((datos.importe || '29,90').toString().replace(',', '.'));
+  // Preferir Stripe (amount_total viene en céntimos)
+  const importeStripe =
+    typeof datos.amount_total === 'number' ? (datos.amount_total / 100) :
+    typeof datos.stripeAmountCents === 'number' ? (datos.stripeAmountCents / 100) :
+    null;
+  let importe = importeStripe ?? parseFloat((datos.importe || '29,90').toString().replace(',', '.'));
 
+
+  // 🧭 Resolver producto desde catálogo (metadata + fallback)
+  const productoResuelto = resolverProducto({
+    tipoProducto, nombreProducto, descripcionProducto, price_id: datos.price_id
+  }, datos.lineItems || []);
+  // Hoist para uso seguro en todo el flujo (incluido catch)
+  let productoSlug = productoResuelto?.slug || null;
   // 🔍 Buscar email por alias si no es válido
   if (!email.includes('@')) {
     const alias = (datos.alias || datos.userAlias || '').trim();
@@ -112,7 +124,7 @@ module.exports = async function procesarCompra(datos) {
 
 
     // 🛑 DEDUPLICACIÓN TEMPRANA (ATÓMICA) + logs
-    const claveNormalizada = normalizarProducto(nombreProducto);
+    const claveNormalizada = normalizarProducto(nombreProducto, tipoProducto);
 
     // Clave de idempotencia priorizando IDs "fuertes"
     const dedupeKey =
@@ -161,6 +173,8 @@ module.exports = async function procesarCompra(datos) {
     console.log('🧪 tipoProducto:', tipoProducto);
     console.log('🧪 nombreProducto:', nombreProducto);
     console.log('🔑 Clave normalizada para deduplicación:', claveNormalizada);
+
+    if (productoResuelto) console.log('📦 Producto resuelto:', productoResuelto.slug, `(${productoResuelto.tipo})`);
 
 
   const compraId = `compra-${Date.now()}`;
@@ -221,6 +235,13 @@ module.exports = async function procesarCompra(datos) {
       tipoProducto
     };
 
+    // 🧾 Descripción de factura prioriza la plantilla del catálogo
+    if (productoResuelto?.descripcion_factura) {
+      datosCliente.descripcionProducto = productoResuelto.descripcion_factura;
+    }
+    // completar slug con la clave normalizada (sin redeclarar)
+    productoSlug = productoSlug || claveNormalizada || null;
+
     if (datos.invoiceId) {
       datosCliente.invoiceId = datos.invoiceId;
     }
@@ -232,44 +253,70 @@ module.exports = async function procesarCompra(datos) {
     console.time(`🕒 Compra ${email}`);
     console.log('📦 [procesarCompra] Datos facturación finales:\n', JSON.stringify(datosCliente, null, 2));
 
-    const membership_id = MEMBERPRESS_IDS[claveNormalizada];
+    // 🔐 Activación de membresía según catálogo (mantiene compatibilidad)
+    const tipoEfectivo = (productoResuelto?.tipo || (tipoProducto || '')).toLowerCase();
+    const membership_id =
+      (productoResuelto?.membership_id) ||
+      (claveNormalizada ? MEMBERPRESS_IDS[claveNormalizada] : null);
+    // ✅ Solo activamos si lo declara el catálogo o existe mapping legacy explícito
+    const activarMembresia =
+      Boolean(productoResuelto?.activar_membresia) ||
+      (membership_id != null && (tipoEfectivo === 'club' || tipoEfectivo === 'libro'));
 
-if ((tipoProducto || '').toLowerCase() === 'club' || /club/i.test(nombreProducto || '')) {
-  // CLUB → llamada HMAC al mu-plugin
+if (activarMembresia && membership_id && (tipoEfectivo === 'club')) {
+  // CLUB → HMAC mu-plugin de Club
   try {
     console.log(`🔓 → [WP HMAC] Activando CLUB para ${email}`);
-    await postWPHmac(WP_PATH_CLUB, { email, accion: 'activar', importe });
+ await postWPHmac(WP_PATH_CLUB, {
+   email,
+   accion: 'activar',
+   importe,
+   membership_id,           // explícito
+   lifetime: true,          // sugerencia para el mu-plugin
+   expires_at: null,        // “Nunca”
+   duration_days: 0,        // por si el mu-plugin espera días
+   producto: productoSlug   // trazabilidad
+ });
     console.log('✅ CLUB activado en WP');
   } catch (err) {
-    console.error('❌ Error activando CLUB (WP HMAC):', err?.message || err);
+    console.error('❌ Error activando CLUB (WP HMAC):', err.message || err);
     try {
       await alertAdmin({
         area: 'club_activar_fallo',
         email,
         err,
-        meta: { importe, producto: claveNormalizada }
+        meta: { membership_id, importe, producto: productoSlug }
       });
     } catch (_) {}
   }
-} else if ((tipoProducto || '').toLowerCase() === 'libro') {
-  // LIBRO → llamada HMAC al mu-plugin
+} else if (activarMembresia && membership_id) {
+  // ✅ CUALQUIER producto de PAGO ÚNICO con acceso MemberPress
+  //    Se centraliza en el servicio genérico (nombre legacy, comportamiento genérico).
   try {
-    console.log(`📘 → [WP HMAC] Activando LIBRO para ${email}`);
-    await postWPHmac(WP_PATH_LIBRO, { email, accion: 'activar', importe });
-    console.log('✅ LIBRO activado en WP');
+    console.log(`📘 → [MP] Activando acceso pago único para ${email} (ID:${membership_id})`);
+    await syncMemberpressLibro({
+      email,
+      accion: 'activar',
+      membership_id,
+      importe,
+      // si en productos.js se define otro endpoint, úsalo aquí:
+      apiUrl: productoResuelto?.meta?.mp_api_url || undefined,
+      producto: productoSlug,
+      nombre_producto: nombreProducto
+    });
+    console.log('✅ Acceso pago único activado en MemberPress');
   } catch (err) {
-    console.error('❌ Error activando LIBRO (WP HMAC):', err?.message || err);
+    console.error('❌ Error activando acceso pago único (MP):', err.message || err);
     try {
       await alertAdmin({
-        area: 'libro_activar_fallo',
+        area: 'producto_unico_activar_fallo',
         email,
         err,
-        meta: { importe, producto: claveNormalizada }
+        meta: { membership_id, importe, producto: productoSlug }
       });
     } catch (_) {}
   }
 }
-
 
   // 📧 Email de confirmación al usuario (libro/club)
   try {
@@ -286,7 +333,7 @@ if ((tipoProducto || '').toLowerCase() === 'club' || /club/i.test(nombreProducto
       <p>Hola ${datosCliente.nombre || ''},</p>
       <p>Tu ${membership_id ? '<strong>membresía del <em>Club Laboroteca</em></strong>' : (tipoProducto.toLowerCase() === 'libro' ? '<strong>acceso al libro</strong>' : '<strong>compra</strong>')} ha sido <strong>activada correctamente</strong>.</p>
       <p><strong>Producto:</strong> ${escapeHtml(nombreProducto)}<br>
-        <strong>Descripción:</strong> ${escapeHtml(descripcionProducto)}<br>
+        <strong>Descripción:</strong> ${escapeHtml(datosCliente.descripcionProducto)}<br>
         <strong>Importe:</strong> ${importe.toFixed(2).replace('.', ',')} €<br>
         <strong>Fecha:</strong> ${fechaCompra}</p>
       <p>Puedes acceder desde tu área de cliente:</p>
@@ -300,7 +347,7 @@ if ((tipoProducto || '').toLowerCase() === 'club' || /club/i.test(nombreProducto
   Tu ${membership_id ? 'membresía del Club Laboroteca' : (tipoProducto.toLowerCase() === 'libro' ? 'acceso al libro' : 'compra')} ha sido activada correctamente.
 
   Producto: ${nombreProducto}
-  Descripción: ${descripcionProducto}
+  Descripción: ${datosCliente.descripcionProducto}
   Importe: ${importe.toFixed(2)} €
   Fecha: ${fechaCompra}
 
@@ -348,8 +395,9 @@ if (invoicingDisabled) {
   try {
     console.log('📝 → Registrando en Google Sheets (kill-switch activo)...');
     await guardarEnGoogleSheets({
-  ...datosCliente,
-  uid: String(datos.invoiceId || datos.sessionId || datos.pedidoId || '')
+      ...datosCliente,
+      uid: String(datos.invoiceId || datos.sessionId || datos.pedidoId || ''),
+      productoSlug
 });
 
   } catch (err) {
@@ -382,6 +430,7 @@ if (invoicingDisabled) {
         const datosSheets = { ...datosCliente };
         if (facturaId) datosSheets.invoiceId = String(facturaId);
         datosSheets.uid = String(facturaId || datos.invoiceId || '');
+        datosSheets.productoSlug = productoSlug;
         try {
           await guardarEnGoogleSheets(datosSheets);
         } catch (e) {
@@ -402,7 +451,7 @@ if (invoicingDisabled) {
     DNI: ${dni}
     Tipo: ${tipoProducto}
     Producto: ${nombreProducto}
-    Descripción: ${descripcionProducto}
+    Descripción: ${datosCliente.descripcionProducto}
     Importe: ${importe.toFixed(2)} €
     Dirección: ${direccion}, ${cp} ${ciudad} (${provincia})
     InvoiceId: ${datos.invoiceId || '-'}
@@ -414,7 +463,7 @@ if (invoicingDisabled) {
                   <li><strong>DNI:</strong> ${escapeHtml(dni)}</li>
                   <li><strong>Tipo:</strong> ${escapeHtml(tipoProducto)}</li>
                   <li><strong>Producto:</strong> ${escapeHtml(nombreProducto)}</li>
-                  <li><strong>Descripción:</strong> ${escapeHtml(descripcionProducto)}</li>
+                  <li><strong>Descripción:</strong> ${escapeHtml(datosCliente.descripcionProducto)}</li>
                   <li><strong>Importe:</strong> ${importe.toFixed(2)} €</li>
                   <li><strong>Dirección:</strong> ${escapeHtml(direccion)}, ${escapeHtml(cp)} ${escapeHtml(ciudad)} (${escapeHtml(provincia)})</li>
                   <li><strong>InvoiceId:</strong> ${datos.invoiceId || '-'}</li>
@@ -431,7 +480,8 @@ if (invoicingDisabled) {
   try {
     if (pdfBuffer) {
       const base = (facturaId || datos.invoiceId || Date.now());
-      const nombreArchivo = `facturas/${email}/${base}-${claveNormalizada}.pdf`;
+      const carpeta = (productoResuelto?.meta?.gcs_folder) || `facturas/${email}`;
+      const nombreArchivo = `${carpeta}/${base}-${(productoResuelto?.slug || claveNormalizada || 'producto')}.pdf`;
       console.log('☁️ → Subiendo a GCS:', nombreArchivo);
       await subirFactura(nombreArchivo, pdfBuffer, {
         email,
@@ -452,7 +502,8 @@ if (invoicingDisabled) {
           nombreArchivo: (() => {
             try {
               const base = (facturaId || datos.invoiceId || Date.now());
-              return `facturas/${email}/${base}-${claveNormalizada}.pdf`;
+              const carpeta = (productoResuelto?.meta?.gcs_folder) || `facturas/${email}`;
+              return `${carpeta}/${base}-${(productoResuelto?.slug || claveNormalizada || 'producto')}.pdf`;
             } catch { return null; }
           })(),
           facturaId: facturaId || null,
@@ -469,6 +520,7 @@ if (invoicingDisabled) {
     console.log('📧 → Enviando email con factura...');
     const datosSheets = { ...datosCliente };
     if (facturaId) datosSheets.invoiceId = String(facturaId);
+    datosSheets.productoSlug = productoSlug;
     const resultado = await enviarFacturaPorEmail(datosSheets, pdfBuffer);
       if (resultado === 'OK') {
         console.log('✅ Email enviado');
@@ -496,7 +548,8 @@ if (!pdfBuffer) {
   console.log('📝 → Registrando COMPRA en Google Sheets (sin PDF)...');
   await guardarEnGoogleSheets({
     ...datosCliente,
-    uid: String(datos.invoiceId || datos.sessionId || datos.pedidoId || '')
+    uid: String(datos.invoiceId || datos.sessionId || datos.pedidoId || ''),
+    productoSlug
   });
 }
 } catch (err) {
@@ -552,7 +605,8 @@ try {
     importe,
     fecha: new Date().toISOString(),
     origen: 'procesarCompra',
-    dedupeKey: dedupeKey || null
+    dedupeKey: dedupeKey || null,
+    productoSlug
   });
   console.log('✅ Venta registrada en Firestore (ventas)');
 } catch (eVenta) {
@@ -614,7 +668,7 @@ if (datos.invoiceId && pdfBuffer) {
     area: 'procesarCompra_error_global',
     email,
     err: error,
-    meta: { producto: claveNormalizada, dedupeKey: dedupeKey || null }
+    meta: { producto: productoSlug || claveNormalizada, dedupeKey: dedupeKey || null }
   });
 } catch (_) {}
 

@@ -6,7 +6,12 @@ const crypto = require('crypto');
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
 // ⚙️ Config por entorno (no hardcode)
-const DEFAULT_API_URL = (process.env.MP_SYNC_API_URL_LIBRO || 'https://www.laboroteca.es/wp-json/laboroteca/v1/libro-membership').trim();
+// Preferimos una URL genérica si existe, y mantenemos la legacy como fallback.
+const DEFAULT_API_URL = (
+  process.env.MP_SYNC_API_URL_PRODUCTO ||
+  process.env.MP_SYNC_API_URL_LIBRO ||
+  'https://www.laboroteca.es/wp-json/laboroteca/v1/libro-membership'
+).trim();
 const API_KEY         = (process.env.MP_SYNC_API_KEY || '').trim();
 const HMAC_SECRET     = (process.env.MP_SYNC_HMAC_SECRET || '').trim();
 const MP_SYNC_DEBUG   = String(process.env.MP_SYNC_DEBUG || '').trim() === '1';
@@ -27,19 +32,22 @@ function signRequest(apiUrl, bodyStr) {
 }
 
 /**
- * Sincroniza la membresía del LIBRO en MemberPress (activar o desactivar).
+ * Sincroniza la membresía en MemberPress (activar o desactivar) para
+ * productos de PAGO ÚNICO (no recurrentes).
  * Seguridad:
  *  - x-api-key (.env)
  *  - x-mp-ts (timestamp ms) + x-mp-sig (HMAC SHA256 de ts.POST.<path>.sha256(body))
  *
- * Reutilizable: puedes pasar apiUrl para otros endpoints si publicas más productos.
+ * Reutilizable: puedes pasar apiUrl para otros endpoints (producto genérico).
  *
  * @param {Object} params
  * @param {string} params.email                 Email del usuario
  * @param {'activar'|'desactivar'} params.accion
- * @param {number} [params.membership_id=7994]  ID MemberPress del producto
+ * @param {number} [params.membership_id=7994]  ID MemberPress del producto (obligatorio en catálogo)
  * @param {number} [params.importe=29.90]       Importe en euros
  * @param {string} [params.apiUrl]              (Opcional) URL del endpoint WP a usar
+ * @param {string} [params.producto]            (Opcional) slug/clave normalizada del producto (solo auditoría)
+ * @param {string} [params.nombre_producto]     (Opcional) nombre legible del producto (solo auditoría)
  * @returns {Promise<Object>}                   Respuesta JSON del endpoint WP
  */
 async function syncMemberpressLibro({
@@ -47,7 +55,9 @@ async function syncMemberpressLibro({
   accion,
   membership_id = 7994,
   importe = 29.90,
-  apiUrl
+  apiUrl,
+  producto,
+  nombre_producto
 }) {
   // —— Validaciones de entrada
   if (!email || typeof email !== 'string' || !email.includes('@')) {
@@ -76,7 +86,10 @@ async function syncMemberpressLibro({
     email,
     accion,
     membership_id,
-    importe: importeNum
+    importe: importeNum,
+    // Campos informativos (WP puede ignorarlos; útiles para trazabilidad)
+    ...(producto ? { producto } : {}),
+    ...(nombre_producto ? { nombre_producto } : {})
   };
   const bodyStr = JSON.stringify(payload);
 
@@ -162,6 +175,8 @@ async function syncMemberpressLibro({
           apiUrl: API_URL,
           ts,
           reqId,
+          producto: producto || null,
+          nombre_producto: nombre_producto || null,
           status: response?.status || null,
           responseTextSnippet: typeof text === 'string' ? text.slice(0, 500) : null,
           at: nowIso()
@@ -175,4 +190,9 @@ async function syncMemberpressLibro({
   }
 }
 
-module.exports = { syncMemberpressLibro };
+// Alias genérico para claridad en el resto del backend (mismo comportamiento)
+async function syncMemberpressProducto(params) {
+  return syncMemberpressLibro(params);
+}
+
+module.exports = { syncMemberpressLibro, syncMemberpressProducto };

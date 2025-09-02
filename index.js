@@ -686,8 +686,8 @@ app.post(
         // 🧾 metadatos “canon” para el resolver del backend
         nombreProducto: nombreProductoCanon,
         descripcionProducto: descripcionProducto || (productoResuelto?.descripcion || ''),
-        // 💳 ayuda al resolver por price_id en el backend (solo si lo usamos)
-        price_id: usarPriceId ? candidatePriceId : 
+        // 💳 ayuda al resolver por price_id en el backend
+        price_id: productoResuelto?.price_id || ''
       },
       success_url: `https://www.laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(nombreProductoCanon)}`,
       cancel_url: 'https://www.laboroteca.es/error'

@@ -234,31 +234,31 @@ module.exports = async function procesarCompra(datos) {
 
     const membership_id = MEMBERPRESS_IDS[claveNormalizada];
 
-if (membership_id) {
+if ((tipoProducto || '').toLowerCase() === 'club' || /club/i.test(nombreProducto || '')) {
   // CLUB → llamada HMAC al mu-plugin
   try {
     console.log(`🔓 → [WP HMAC] Activando CLUB para ${email}`);
     await postWPHmac(WP_PATH_CLUB, { email, accion: 'activar', importe });
     console.log('✅ CLUB activado en WP');
   } catch (err) {
-    console.error('❌ Error activando CLUB (WP HMAC):', err.message || err);
+    console.error('❌ Error activando CLUB (WP HMAC):', err?.message || err);
     try {
       await alertAdmin({
         area: 'club_activar_fallo',
         email,
         err,
-        meta: { membership_id, importe, producto: claveNormalizada }
+        meta: { importe, producto: claveNormalizada }
       });
     } catch (_) {}
   }
-} else if (tipoProducto.toLowerCase() === 'libro') {
+} else if ((tipoProducto || '').toLowerCase() === 'libro') {
   // LIBRO → llamada HMAC al mu-plugin
   try {
     console.log(`📘 → [WP HMAC] Activando LIBRO para ${email}`);
     await postWPHmac(WP_PATH_LIBRO, { email, accion: 'activar', importe });
     console.log('✅ LIBRO activado en WP');
   } catch (err) {
-    console.error('❌ Error activando LIBRO (WP HMAC):', err.message || err);
+    console.error('❌ Error activando LIBRO (WP HMAC):', err?.message || err);
     try {
       await alertAdmin({
         area: 'libro_activar_fallo',
@@ -269,6 +269,7 @@ if (membership_id) {
     } catch (_) {}
   }
 }
+
 
   // 📧 Email de confirmación al usuario (libro/club)
   try {

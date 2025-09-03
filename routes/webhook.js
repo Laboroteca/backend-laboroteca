@@ -18,13 +18,35 @@ router.post(
   '/',
   express.raw({ type: 'application/json' }),
   async (req, res) => {
+    // No toques req.body antes de verificar firma
     try {
-      // No toques req.body antes de verificar firma
-      console.log('🛎️ Stripe webhook recibido:');
-      console.log('headers:', req.headers);
-    } catch (logErr) {}
+      const hdr = req.headers || {};
+      console.log('🛎️ Stripe webhook recibido (headers sanitizados):', {
+        hasStripeSig: !!hdr['stripe-signature'],
+        contentType: hdr['content-type'] || null,
+        contentLength: hdr['content-length'] || null,
+        userAgent: hdr['user-agent'] || null
+      });
+    } catch (_) {}
+
+    if (!endpointSecret) {
+      console.error('❌ STRIPE_WEBHOOK_SECRET no definido');
+      try {
+        await alertAdmin({
+          area: 'stripe_webhook_secret_missing',
+          email: '-',
+          err: new Error('STRIPE_WEBHOOK_SECRET missing'),
+          meta: {}
+        });
+      } catch (_) {}
+      return res.status(500).send('Webhook misconfigured');
+    }
 
     const sig = req.headers['stripe-signature'];
+    if (!sig) {
+      console.error('❌ Falta stripe-signature en el webhook');
+      return res.status(400).send('Missing stripe-signature');
+    }
     let event;
     
     try {
@@ -55,6 +77,29 @@ return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
     try {
+      // 🔎 Enriquecer algunos eventos con datos expand (ayuda a pricing/imagen/line_items)
+      try {
+        if (event?.type === 'checkout.session.completed' && event?.data?.object?.id) {
+          const full = await stripe.checkout.sessions.retrieve(event.data.object.id, {
+            expand: ['line_items.data.price.product', 'customer']
+          });
+          // adjuntamos sin romper la forma del evento
+          event._session = full;
+        } else if (event?.type?.startsWith('invoice.') && event?.data?.object?.id) {
+          const inv = await stripe.invoices.retrieve(event.data.object.id, {
+            expand: ['customer', 'subscription']
+          });
+          event._invoice = inv;
+        } else if (event?.type?.startsWith('customer.subscription.') && event?.data?.object?.id) {
+          const sub = await stripe.subscriptions.retrieve(event.data.object.id, {
+            expand: ['customer', 'latest_invoice']
+          });
+          event._subscription = sub;
+        }
+      } catch (expErr) {
+        console.warn('⚠️ No se pudo expandir objeto Stripe:', expErr?.message || expErr);
+      }
+
       const eventId = event.id;
       const processedRef = firestore.collection('stripeWebhookProcesados').doc(eventId);
 
@@ -73,7 +118,7 @@ return res.status(400).send(`Webhook Error: ${err.message}`);
         return res.status(200).json({ received: true, duplicate: true });
       }
 
-      // 🧠 Delegar gestión al handler central
+      // 🧠 Delegar gestión al handler central (con posibles _session/_invoice/_subscription)
       const result = await handleStripeEvent(event);
       return res.status(200).json({ received: true, ...result });
 

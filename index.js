@@ -601,10 +601,9 @@ app.post(
   console.log('🧪 tipoProducto:', tipoProducto);
   console.log('🧪 nombreProducto:', nombreProducto);
 
-  if (!nombre || !email || !nombreProducto || !precio || isNaN(precio)) {
-    return res.status(400).json({ error: 'Faltan campos obligatorios o datos inválidos.' });
+  if (!nombre || !email || !nombreProducto) {
+    return res.status(400).json({ error: 'Faltan campos obligatorios.' });
   }
-
   if (!/^[^@]+@[^@]+\.[^@]+$/.test(email)) {
     console.warn('❌ Email inválido antes de Stripe:', email);
     return res.status(400).json({ error: 'Email inválido' });
@@ -618,19 +617,27 @@ app.post(
 
   // Nombre/imagen “canon” si el catálogo lo conoce
   const nombreProductoCanon = productoResuelto?.nombre || nombreProducto;
+  const imagenCanon = String(productoResuelto?.imagen || '').trim();
   // Stripe line_items: usar price_id solo si existe y es VÁLIDO (activo y no recurrente).
   const candidatePriceId = String(productoResuelto?.price_id || '').trim();
   let usarPriceId = false;
-  // Importe de fallback (del formulario o del catálogo)
-  let amountCents = Number.isFinite(precio) ? Math.round(precio * 100)
-                    : (Number(productoResuelto?.precio_cents) || 0);
+  // Importe: prioriza catálogo (precio_cents); si no, usa el del formulario
+  let amountCents = (typeof productoResuelto?.precio_cents === 'number' && Number.isFinite(productoResuelto.precio_cents))
+    ? productoResuelto.precio_cents
+    : (Number.isFinite(precio) ? Math.round(precio * 100) : 0);
   if (candidatePriceId.startsWith('price_')) {
     try {
-      const pr = await stripe.prices.retrieve(candidatePriceId);
+      const pr = await stripe.prices.retrieve(candidatePriceId, { expand: ['product'] });
       // Solo permitimos price_id activos y NO recurrentes para pagos únicos
       usarPriceId = !!(pr && pr.id && pr.active && !pr.recurring);
+      // Si el Product de Stripe NO tiene imágenes, forzamos price_data para poder pasar la nuestra
+      if (usarPriceId && (!pr.product || !Array.isArray(pr.product.images) || pr.product.images.length === 0)) {
+        usarPriceId = false;
+      }
       if (!usarPriceId) {
-        console.warn('⚠️ price_id no válido para pago único:', candidatePriceId, { active: pr?.active, recurring: !!pr?.recurring });
+        if (LAB_DEBUG) console.warn('⚠️ price_id no usado (no válido o sin imagen). Usaremos price_data.', {
+          active: pr?.active, recurring: !!pr?.recurring, hasImages: Array.isArray(pr?.product?.images) && pr.product.images.length>0
+        });
         if (typeof pr?.unit_amount === 'number') amountCents = pr.unit_amount; // respeta importe configurado si existe
       }
     } catch (e) {
@@ -655,7 +662,8 @@ app.post(
             price_data: {
               currency: 'eur',
               product_data: {
-                name: `${tipoProducto} "${nombreProductoCanon}"`
+                name: `${tipoProducto} "${nombreProductoCanon}"`,
+                images: imagenCanon ? [imagenCanon] : []
               },
               unit_amount: amountCents
             },
@@ -752,7 +760,7 @@ app.post(
   // 🧭 Para el Club, usa siempre el price_id del catálogo
   const CLUB = PRODUCTOS['el-club-laboroteca'] || PRODUCTOS['el_club_laboroteca'] || PRODUCTOS['club laboroteca'];
   const clubPriceId = CLUB?.price_id || null;
-
+  const clubImg = String(CLUB?.imagen || '').trim();
 
   try {
     const session = await stripe.checkout.sessions.create({
@@ -769,7 +777,7 @@ app.post(
             // fallback por si faltase price_id en env
             price_data: {
               currency: 'eur',
-              product_data: { name: nombreProducto },
+              product_data: { name: nombreProducto, images: clubImg ? [clubImg] : [] },
               unit_amount: Math.round(precio * 100),
               recurring: { interval: 'month' }
             },

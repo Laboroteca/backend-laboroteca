@@ -1152,6 +1152,7 @@ try {
     );
     const productoSlug = productoResuelto?.slug || normalizarProductoCat(rawNombreProducto, m.tipoProducto || '');
     const catalogItem   = productoSlug ? PRODUCTOS[productoSlug] : null;
+    const mpApiUrl      = productoResuelto?.meta?.mp_api_url || undefined; // posible override por producto
 
     // ⚠️ Si el checkout fue de suscripción no debería entrar aquí (lo gestionamos en invoice.paid)
     const isClub = (m.tipoProductoCanon || '').toLowerCase() === 'club' ||
@@ -1162,6 +1163,10 @@ try {
       (catalogItem && Number(catalogItem.membership_id ?? catalogItem.memberpress_id)) || // compat ambos nombres
       (productoSlug && MP_IDS[productoSlug]) ||
       null;
+
+    if (!memberpressId && catalogItem?.tipo === 'libro') {
+      console.warn('⚠️ memberpressId no definido para libro en catálogo:', { productoSlug, nombreCatalogo });
+    }
 
     // Nombre y descripción (preferimos catálogo); para factura usamos plantilla si existe
     const nombreCatalogo = (catalogItem?.nombre || rawNombreProducto || 'Producto Laboroteca');
@@ -1291,6 +1296,7 @@ try {
           accion: 'activar',
           membership_id: memberpressId,
           importe: datosCliente.importe,
+          apiUrl: mpApiUrl,                     // ← usa endpoint específico si el catálogo lo define
           producto: productoSlug,
           nombre_producto: datosCliente.nombreProducto
         });

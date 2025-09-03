@@ -7,6 +7,7 @@ const { subirFactura } = require('./gcs');
 const { guardarEnGoogleSheets } = require('./googleSheets');
 const { activarMembresiaClub } = require('./activarMembresiaClub');
 const { syncMemberpressClub } = require('./syncMemberpressClub');
+const { syncMemberpressLibro } = require('./syncMemberpressLibro');
 const { normalizarProducto, resolverProducto, MEMBERPRESS_IDS, PRODUCTOS } = require('../utils/productos');
 const { ensureOnce } = require('../utils/dedupe');
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
@@ -258,12 +259,12 @@ module.exports = async function procesarCompra(datos) {
     const membership_id =
       (productoResuelto?.membership_id) ||
       (claveNormalizada ? MEMBERPRESS_IDS[claveNormalizada] : null);
-    // ✅ Solo activamos si lo declara el catálogo o existe mapping legacy explícito
+    // ✅ Regla general: si hay mapping MemberPress, activamos.
+    //    ÚNICA caducidad mensual = CLUB (10663). Todo lo demás = pago único sin caducidad.
     const activarMembresia =
-      Boolean(productoResuelto?.activar_membresia) ||
-      (membership_id != null && (tipoEfectivo === 'club' || tipoEfectivo === 'libro'));
+      Boolean(productoResuelto?.activar_membresia) || (membership_id != null);
 
-if (activarMembresia && membership_id && (tipoEfectivo === 'club')) {
+if (activarMembresia && membership_id && (tipoEfectivo === 'club' || Number(membership_id) === 10663)) {
   // CLUB → HMAC mu-plugin de Club
   try {
     console.log(`🔓 → [WP HMAC] Activando CLUB para ${email}`);
@@ -290,7 +291,7 @@ if (activarMembresia && membership_id && (tipoEfectivo === 'club')) {
     } catch (_) {}
   }
 } else if (activarMembresia && membership_id) {
-  // ✅ CUALQUIER producto de PAGO ÚNICO con acceso MemberPress
+  // 📘 CUALQUIER producto que NO sea el Club → pago único (sin caducidad)
   //    Se centraliza en el servicio genérico (nombre legacy, comportamiento genérico).
   try {
     console.log(`📘 → [MP] Activando acceso pago único para ${email} (ID:${membership_id})`);

@@ -1276,19 +1276,27 @@ try {
           ...(subExpiresISO ? { expires_at: subExpiresISO } : {})
         });
         console.log('✅ CLUB activado inmediatamente');
-      } else if (memberpressId) {
-        // 🔁 Activación genérica de cualquier Membership de MemberPress
+      } else if (memberpressId === 10663) {
+        // 🟢 ÚNICO producto con caducidad mensual: CLUB
         await syncMemberpressClub({
           email,
           accion: 'activar',
-          membership_id: memberpressId,
-          importe: datosCliente.importe
+          membership_id: 10663,
+          importe: datosCliente.importe,
+          ...(subExpiresISO ? { expires_at: subExpiresISO } : {})
         });
-        console.log('✅ MemberPress activado (id=%s) inmediatamente', memberpressId);
-      } else if (MEMBERPRESS_IDS[productoSlug] === 7994) {
-        // 🟡 Fallback legacy para el libro antiguo (compatibilidad)
-        await syncMemberpressLibro({ email, accion: 'activar', importe: datosCliente.importe });
-        console.log('✅ LIBRO (legacy) activado inmediatamente');
+        console.log('✅ CLUB activado (con caducidad mensual)');
+      } else if (memberpressId) {
+        // 📘 Cualquier otro producto del catálogo → pago único (sin caducidad)
+        await syncMemberpressLibro({
+          email,
+          accion: 'activar',
+          membership_id: memberpressId,
+          importe: datosCliente.importe,
+          producto: productoSlug,
+          nombre_producto: datosCliente.nombreProducto
+        });
+        console.log('✅ Producto de pago único activado en MemberPress (id=%s)', memberpressId);
       }
 } catch (e) {
   console.error('❌ Error activando membresía (se registrará igualmente la compra):', e?.message || e);

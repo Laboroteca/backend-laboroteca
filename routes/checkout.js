@@ -130,39 +130,21 @@ router.post('/create-session', async (req, res) => {
       return res.status(403).json({ error: 'El email no está registrado como usuario.' });
     }
 
-    // 💶 Importe para pago único (catálogo MANDARÁ; el formulario queda de fallback)
+    // 💶 Importe para pago único (sin entradas): catálogo > formulario
     const precioCatalogoCents = Number.isFinite(Number(producto?.precio_cents)) ? Number(producto.precio_cents) : NaN;
-    const importeFinalCents = Number.isFinite(precioCatalogoCents)
-      ? precioCatalogoCents
-      : (Number.isFinite(importeFormulario) && importeFormulario > 0 ? Math.round(importeFormulario * 100) : 0);
-  
+    const importeFinalCents = Math.round(
+      Number.isFinite(importeFormulario) && importeFormulario > 0
+        ? importeFormulario * 100
+        : (Number.isFinite(precioCatalogoCents) ? precioCatalogoCents : 0)
+    );
     
     // 🖼️ Imagen (formulario → catálogo → fallback global)
     const imagenCanon = (imagenFormulario || (slug ? getImagenProducto(slug) : (producto?.imagen || DEFAULT_IMAGE))).trim();
 
-    // 💳 Línea de Stripe
-    // Intentamos usar price_id del catálogo solo si es ACTIVO, NO recurrente y el Product de Stripe ya tiene imagen.
+    // 💳 Línea de Stripe: prioriza price_id del catálogo (precio “oficial”)
     let line_items;
-    let usarPriceId = false;
-    const candidatePriceId = String(producto?.price_id || '').trim();
-    if (candidatePriceId.startsWith('price_')) {
-      try {
-        const pr = await stripe.prices.retrieve(candidatePriceId, { expand: ['product'] });
-        const noRecurring = !pr?.recurring;
-        const activo = !!pr?.active;
-        const hasImages = Array.isArray(pr?.product?.images) && pr.product.images.length > 0;
-        usarPriceId = !!(activo && noRecurring && hasImages);
-        if (!usarPriceId) {
-          console.warn('⚠️ price_id no usado (activo=%s, recurring=%s, hasImages=%s). Se fuerza price_data con imagen.',
-            activo, !!pr?.recurring, hasImages);
-        }
-      } catch (e) {
-        console.warn('⚠️ price_id inválido/inaccesible. Fallback a price_data:', candidatePriceId, e?.message || e);
-      }
-    }
-
-    if (usarPriceId) {
-      line_items = [{ price: candidatePriceId, quantity: 1 }];
+    if (producto?.price_id) {
+      line_items = [{ price: producto.price_id, quantity: 1 }];
     } else {
       line_items = [{
         price_data: {

@@ -29,8 +29,6 @@ const CLUB_ID = (
   (MEMBERPRESS_IDS && (MEMBERPRESS_IDS['el-club-laboroteca'] || MEMBERPRESS_IDS['el club laboroteca'])) ||
   10663
 );
-// Fallback seguro para libros (idéntico al de WP)
-const DEFAULT_LIBRO_ID = 7994;
 
 async function postWPHmac(path, payload) {
   if (!MP_API_KEY || !MP_HMAC_SECRET) {
@@ -267,14 +265,10 @@ module.exports = async function procesarCompra(datos) {
 
     // 🔐 Activación de membresía según catálogo (mantiene compatibilidad)
     const tipoEfectivo = (productoResuelto?.tipo || (tipoProducto || '')).toLowerCase();
-  let membership_id =
+  const membership_id =
       (productoResuelto?.membership_id != null
         ? Number(productoResuelto.membership_id)
-        : (claveNormalizada && MEMBERPRESS_IDS ? Number(MEMBERPRESS_IDS[claveNormalizada]) : null));
-  // ⚙️ Fallback robusto para LIBRO si el catálogo no trae mapping
-  if (esLibro && !Number.isFinite(membership_id)) {
-    membership_id = DEFAULT_LIBRO_ID;
-  }
+        : (claveNormalizada ? Number(MEMBERPRESS_IDS[claveNormalizada]) : null));
     const esClub  = (tipoEfectivo === 'club') || (Number(membership_id) === Number(CLUB_ID));
     const esLibro = (tipoEfectivo === 'libro');
     // ✅ Regla general: si hay mapping MemberPress, activamos.
@@ -308,59 +302,24 @@ if (activarMembresia && membership_id && esClub) {
       });
     } catch (_) {}
   }
-} else if (activarMembresia && membership_id && esLibro) {
-  // 📘 LIBRO → intentar primero HMAC al mu-plugin (más fiable); fallback al flujo legacy
-  try {
-    console.log(`📘 → [WP HMAC] Activando LIBRO para ${email} (ID:${membership_id})`);
-    await postWPHmac(WP_PATH_LIBRO, {
-      email,
-      accion: 'activar',
-      importe,
-      membership_id,
-      producto: productoSlug
-    });
-    console.log('✅ LIBRO activado en WP (HMAC)');
-  } catch (errH) {
-    console.warn('🟡 Fallback → syncMemberpressLibro (error HMAC libro):', errH?.message || errH);
-    try {
-      await syncMemberpressLibro({
-        email,
-        accion: 'activar',
-        membership_id,
-        importe,
-        apiUrl: productoResuelto?.meta?.mp_api_url || undefined,
-        producto: productoSlug,
-        nombre_producto: nombreProducto
-      });
-      console.log('✅ Acceso LIBRO activado via MemberPress (fallback)');
-    } catch (err) {
-      console.error('❌ Error activando LIBRO (fallback MP):', err?.message || err);
-      try {
-        await alertAdmin({
-          area: 'producto_libro_activar_fallo',
-          email,
-          err,
-          meta: { membership_id, importe, producto: productoSlug }
-        });
-      } catch (_) {}
-    }
-  }
 } else if (activarMembresia && membership_id) {
-  // Otros pagos únicos no-club/no-libro (si los hubiera)
+  // 📘 CUALQUIER producto que NO sea el Club → pago único (sin caducidad)
+  //    Se centraliza en el servicio genérico (nombre legacy, comportamiento genérico).
   try {
-    console.log(`📦 → [MP] Activando acceso pago único para ${email} (ID:${membership_id})`);
+    console.log(`📘 → [MP] Activando acceso pago único para ${email} (ID:${membership_id})`);
     await syncMemberpressLibro({
       email,
       accion: 'activar',
       membership_id,
       importe,
+      // si en productos.js se define otro endpoint, úsalo aquí:
       apiUrl: productoResuelto?.meta?.mp_api_url || undefined,
       producto: productoSlug,
       nombre_producto: nombreProducto
     });
     console.log('✅ Acceso pago único activado en MemberPress');
   } catch (err) {
-    console.error('❌ Error activando acceso pago único (MP):', err?.message || err);
+    console.error('❌ Error activando acceso pago único (MP):', err.message || err);
     try {
       await alertAdmin({
         area: 'producto_unico_activar_fallo',
@@ -371,6 +330,7 @@ if (activarMembresia && membership_id && esClub) {
     } catch (_) {}
   }
 }
+
   // 📧 Email de confirmación al usuario (libro/club)
   try {
     const asunto = esClub

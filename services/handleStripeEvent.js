@@ -13,8 +13,13 @@ const { syncMemberpressLibro } = require('./syncMemberpressLibro');
 const { registrarBajaClub } = require('./registrarBajaClub');
 const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
-// 📦 Catálogo centralizado (permitirá altas tocando solo utils/productos.js)
-const PRODUCTOS = require('../utils/productos');
+// 📦 Catálogo centralizado (única fuente de verdad)
+const {
+  PRODUCTOS,
+  normalizarProducto: normalizarProductoCat,
+  resolverProducto,
+  MEMBERPRESS_IDS: MP_IDS
+} = require('../utils/productos');
 const escapeHtml = s => String(s ?? '')
   .replace(/&/g,'&amp;').replace(/</g,'&lt;')
   .replace(/>/g,'&gt;').replace(/"/g,'&quot;')
@@ -95,6 +100,7 @@ function mapCancellationReason(subscription) {
 }
 
 
+// (legacy) solo se usa en paths antiguos; para checkout.session.completed usamos el catálogo
 function normalizarProducto(str) {
   return (str || '')
     .toLowerCase()
@@ -109,12 +115,9 @@ function normalizarProducto(str) {
 }
 
 
-// Fallback legacy (lo seguimos usando si el catálogo no trae memberpress_id)
-const MEMBERPRESS_IDS = {
-  'el club laboroteca': 10663,
-  'club laboroteca': 10663,
-  'de cara a la jubilacion': 7994
-};
+// ID del Club desde catálogo (fallback por seguridad)
+const CLUB_ID = MP_IDS['el-club-laboroteca'] || MP_IDS['club laboroteca'] || 10663;
+
 
 // 🔁 BLOQUE IMPAGO – Cancela TODO al primer intento fallido, email claro y sin generar factura
 async function handleStripeEvent(event) {
@@ -213,7 +216,7 @@ if (!isFirstBaja) {
       await syncMemberpressClub({
         email,
         accion: 'desactivar_inmediata',
-        membership_id: MEMBERPRESS_IDS['el club laboroteca']
+        membership_id: CLUB_ID
       });
 
       await firestore.collection('usuariosClub').doc(email).set({
@@ -691,7 +694,7 @@ if (emailSeguro.includes('@')) {
     await syncMemberpressClub({
       email: emailSeguro,
       accion: 'activar',
-      membership_id: MEMBERPRESS_IDS['el club laboroteca'],
+      membership_id: CLUB_ID,
       importe: (invoice.amount_paid || 999) / 100,
       ...(expiresAtISO ? { expires_at: expiresAtISO } : {})
     });
@@ -801,7 +804,7 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
         if (motivo === 'impago') {
           // ✅ Se mantiene tu comportamiento de baja inmediata (ya realizada)
           try {
-            await syncMemberpressClub({ email, accion: 'desactivar_inmediata', membership_id: MEMBERPRESS_IDS['el club laboroteca'] });
+            await syncMemberpressClub({ email, accion: 'desactivar_inmediata', membership_id: CLUB_ID });
             await firestore.collection('usuariosClub').doc(email).set({ activo: false, fechaBaja: new Date().toISOString() }, { merge: true });
             await registrarBajaClub({ email, motivo: 'impago' });
           // (Sin escritura en Sheets de bajas)
@@ -813,7 +816,7 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
          } else if (motivo === 'eliminacion_cuenta') {
            // 🔴 ELIMINACIÓN DE CUENTA → inmediata (única fila en Sheets)
           try {
-             await syncMemberpressClub({ email, accion: 'desactivar_inmediata', membership_id: MEMBERPRESS_IDS['el club laboroteca'] });
+             await syncMemberpressClub({ email, accion: 'desactivar_inmediata', membership_id: CLUB_ID });
              await firestore.collection('usuariosClub').doc(email).set({ activo: false, fechaBaja: new Date().toISOString() }, { merge: true });
              const nombreCompleto = await nombreCompletoPorEmail(email, nombre);
              await registrarBajaClub({ email, nombre: nombreCompleto, motivo: 'eliminacion_cuenta', verificacion: 'CORRECTO' });
@@ -834,7 +837,7 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
             // No enviar email adicional: el flujo de eliminación ya avisa por su canal propio
           } else if (eraFinDeCiclo || origenBaja === 'formulario_usuario') {
             // 🟢 VOLUNTARIA ejecutada ahora (fin de ciclo)
-          await syncMemberpressClub({ email, accion: 'desactivar_inmediata', membership_id: MEMBERPRESS_IDS['el club laboroteca'] });
+          await syncMemberpressClub({ email, accion: 'desactivar_inmediata', membership_id: CLUB_ID });
           await firestore.collection('usuariosClub').doc(email).set({ activo: false, fechaBaja: new Date().toISOString() }, { merge: true });
 
           // Firestore baja: ejecutada + correcto
@@ -875,7 +878,7 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
         } else {
           // 🟠 MANUAL INMEDIATA (dashboard u otros) → inmediata
             try {
-            await syncMemberpressClub({ email, accion: 'desactivar_inmediata', membership_id: MEMBERPRESS_IDS['el club laboroteca'] });
+            await syncMemberpressClub({ email, accion: 'desactivar_inmediata', membership_id: CLUB_ID });
             await firestore.collection('usuariosClub').doc(email).set({ activo: false, fechaBaja: new Date().toISOString() }, { merge: true });
             const nombreCompleto = await nombreCompletoPorEmail(email, nombre);
             await registrarBajaClub({
@@ -1136,40 +1139,44 @@ try {
     const name = (session.customer_details?.name || `${m.nombre || ''} ${m.apellidos || ''}`).trim();
     const amountTotal = session.amount_total || 0;
 
+    // 🧭 Resolver producto del catálogo para PAGO ÚNICO
     const rawNombreProducto = m.nombreProducto || '';
-    // Detecta Club sin depender del precio
-    const nombreNorm = normalizarProducto(rawNombreProducto);
-    const isClub =
-      session.mode === 'subscription' ||                          // suscripciones van a invoice.paid
-      (m.tipoProducto && m.tipoProducto.toLowerCase() === 'club') ||
-      nombreNorm === 'el club laboroteca' || 
-      nombreNorm === 'club laboroteca';
+    const productoResuelto = resolverProducto(
+      {
+        tipoProducto: m.tipoProductoCanon || m.tipoProducto || '',
+        nombreProducto: rawNombreProducto,
+        descripcionProducto: m.descripcionProducto || '',
+        price_id: m.price_id || ''
+      },
+      [] // no necesitamos lineItems aquí
+    );
+    const productoSlug = productoResuelto?.slug || normalizarProductoCat(rawNombreProducto, m.tipoProducto || '');
+    const catalogItem   = productoSlug ? PRODUCTOS[productoSlug] : null;
 
+    // ⚠️ Si el checkout fue de suscripción no debería entrar aquí (lo gestionamos en invoice.paid)
+    const isClub = (m.tipoProductoCanon || '').toLowerCase() === 'club' ||
+                   (catalogItem?.tipo === 'club');
 
-    const productoSlug = isClub ? 'club laboroteca' : nombreNorm;
-    // 🧭 Resolver desde catálogo; si no existe, usar fallback legacy
-    const catalogItem = PRODUCTOS[productoSlug] || null;
+    // IDs MemberPress priorizando el catálogo
     const memberpressId =
-      (catalogItem && Number(catalogItem.memberpress_id)) ||
-      MEMBERPRESS_IDS[productoSlug];
-    // Nombre/desc preferentemente del catálogo (si el formulario no los trae)
-    const descripcionProducto =
-      m.descripcionProducto ||
-      (catalogItem && catalogItem.descripcion) ||
-      rawNombreProducto ||
-      'Producto Laboroteca';
-    const nombreCatalogo =
-      (catalogItem && catalogItem.nombre) ||
-      rawNombreProducto;
+      (catalogItem && Number(catalogItem.membership_id ?? catalogItem.memberpress_id)) || // compat ambos nombres
+      (productoSlug && MP_IDS[productoSlug]) ||
+      null;
 
-    console.log('🧪 handleStripeEvent - Precio y descripción recibida desde metadata:');
+    // Nombre y descripción (preferimos catálogo); para factura usamos plantilla si existe
+    const nombreCatalogo = (catalogItem?.nombre || rawNombreProducto || 'Producto Laboroteca');
+    const descripcionProductoFactura =
+      (catalogItem?.descripcion_factura) ||
+      (m.descripcionProducto || catalogItem?.descripcion || rawNombreProducto || 'Producto Laboroteca');
+
+    console.log('🧪 handleStripeEvent - Pago único (catalog resolver)');
     console.log('👉 session.metadata.nombreProducto:', session.metadata?.nombreProducto);
     console.log('👉 session.metadata.descripcionProducto:', session.metadata?.descripcionProducto);
     console.log('👉 tipoProducto:', session.metadata?.tipoProducto);
     console.log('👉 totalAsistentes:', session.metadata?.totalAsistentes);
 
     
-    const productoNormalizado = normalizarProducto(rawNombreProducto); // <- mejor base para normalizar clave
+    const productoNormalizado = productoSlug || normalizarProductoCat(rawNombreProducto, m.tipoProducto || '');
 
     const datosCliente = {
       nombre: m.nombre || name,
@@ -1183,7 +1190,8 @@ try {
       importe: parseFloat((amountTotal / 100).toFixed(2)),
       tipoProducto: m.tipoProducto || 'Otro',
       nombreProducto: nombreCatalogo,
-      descripcionProducto,
+      // Para FacturaCity priorizamos plantilla segura si el catálogo la provee
+      descripcionProducto: descripcionProductoFactura,
       producto: productoNormalizado
     };
 
@@ -1191,7 +1199,7 @@ try {
     if (pi) datosCliente.invoiceIdStripe = String(pi); // ← NO toques invoiceId
 
 
-    const tipoLower = ((m.tipoProducto || m.tipo || '').toLowerCase().trim());
+    const tipoLower = ((m.tipoProductoCanon || m.tipoProducto || m.tipo || '').toLowerCase().trim());
     const totalAsistRaw =
       m.totalAsistentes ??
       m.total_asistentes ??
@@ -1252,7 +1260,7 @@ try {
 
         // 🔓 Activación inmediata (no bloqueada por Sheets/Email/GCS/FacturaCity)
     try {
-      if (memberpressId === 10663) {
+      if (memberpressId === CLUB_ID) { // Club (por seguridad, no debería entrar aquí)
         await activarMembresiaClub(email, {
           activationRef: String(pi || sessionId),
           paymentIntentId: pi ? String(pi) : null,
@@ -1276,17 +1284,7 @@ try {
           ...(subExpiresISO ? { expires_at: subExpiresISO } : {})
         });
         console.log('✅ CLUB activado inmediatamente');
-      } else if (memberpressId === 10663) {
-        // 🟢 ÚNICO producto con caducidad mensual: CLUB
-        await syncMemberpressClub({
-          email,
-          accion: 'activar',
-          membership_id: 10663,
-          importe: datosCliente.importe,
-          ...(subExpiresISO ? { expires_at: subExpiresISO } : {})
-        });
-        console.log('✅ CLUB activado (con caducidad mensual)');
-      } else if (memberpressId) {
+        } else if (memberpressId) {
         // 📘 Cualquier otro producto del catálogo → pago único (sin caducidad)
         await syncMemberpressLibro({
           email,
@@ -1524,7 +1522,8 @@ try {
   // 📧 Email de apoyo SOLO si la factura FALLÓ (aplica al LIBRO)
 // - No para entradas (tienen su correo propio)
 // - No para el club (se gestiona en invoice.paid)
-if (!esEntrada && memberpressId === 7994 && falloFactura) {
+// Enviar solo para productos tipo "libro" (no entradas, no club)
+if (!esEntrada && catalogItem?.tipo === 'libro' && falloFactura) {
   try {
     const ahoraISO = new Date().toISOString();
     const productoLabel = datosCliente.nombreProducto || datosCliente.producto || 'Libro Laboroteca';
@@ -1555,7 +1554,8 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
     console.error('❌ Error enviando email de apoyo (libro):', e?.message || e);
   }
 } else {
-  console.log(`ℹ️ Email de apoyo NO enviado (esEntrada=${esEntrada}, esLibro=${memberpressId === 7994}, falloFactura=${falloFactura}, seEnvioFactura=${seEnvioFactura})`);
+  console.log(`ℹ️ Email de apoyo NO enviado (esEntrada=${esEntrada}, tipo=${catalogItem?.tipo || '-'}, falloFactura=${falloFactura}, seEnvioFactura=${seEnvioFactura})`);
+
 }
 
 // 🎫 Procesar ENTRADAS en background + dedupe por sesión

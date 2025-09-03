@@ -14,6 +14,8 @@ const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
 const crypto = require('crypto');
 const fetch = require('node-fetch');
+// util pequeño para rutas GCS sin PII
+const hash12 = e => crypto.createHash('sha256').update(String(e || '').toLowerCase()).digest('hex').slice(0,12);
 
 // === WP HMAC config ===
 const WP_BASE = process.env.WP_BASE_URL || 'https://www.laboroteca.es';
@@ -21,6 +23,12 @@ const MP_API_KEY = process.env.MP_SYNC_API_KEY || process.env.MEMBERPRESS_KEY; /
 const MP_HMAC_SECRET = process.env.MP_SYNC_HMAC_SECRET;
 const WP_PATH_LIBRO = '/wp-json/laboroteca/v1/libro-membership';
 const WP_PATH_CLUB  = '/wp-json/laboroteca/v1/club-membership';
+// Club ID desde el catálogo (con fallbacks legacy)
+const CLUB_ID = (
+  (PRODUCTOS && PRODUCTOS['el-club-laboroteca'] && PRODUCTOS['el-club-laboroteca'].membership_id) ||
+  (MEMBERPRESS_IDS && (MEMBERPRESS_IDS['el-club-laboroteca'] || MEMBERPRESS_IDS['el club laboroteca'])) ||
+  10663
+);
 
 async function postWPHmac(path, payload) {
   if (!MP_API_KEY || !MP_HMAC_SECRET) {
@@ -37,6 +45,7 @@ async function postWPHmac(path, payload) {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
+      'accept': 'application/json',
       'x-api-key': MP_API_KEY,
       'x-mp-ts': ts,
       'x-mp-sig': sig
@@ -256,15 +265,18 @@ module.exports = async function procesarCompra(datos) {
 
     // 🔐 Activación de membresía según catálogo (mantiene compatibilidad)
     const tipoEfectivo = (productoResuelto?.tipo || (tipoProducto || '')).toLowerCase();
-    const membership_id =
-      (productoResuelto?.membership_id) ||
-      (claveNormalizada ? MEMBERPRESS_IDS[claveNormalizada] : null);
+  const membership_id =
+      (productoResuelto?.membership_id != null
+        ? Number(productoResuelto.membership_id)
+        : (claveNormalizada ? Number(MEMBERPRESS_IDS[claveNormalizada]) : null));
+    const esClub  = (tipoEfectivo === 'club') || (Number(membership_id) === Number(CLUB_ID));
+    const esLibro = (tipoEfectivo === 'libro');
     // ✅ Regla general: si hay mapping MemberPress, activamos.
     //    ÚNICA caducidad mensual = CLUB (10663). Todo lo demás = pago único sin caducidad.
     const activarMembresia =
       Boolean(productoResuelto?.activar_membresia) || (membership_id != null);
 
-if (activarMembresia && membership_id && (tipoEfectivo === 'club' || Number(membership_id) === 10663)) {
+if (activarMembresia && membership_id && esClub) {
   // CLUB → HMAC mu-plugin de Club
   try {
     console.log(`🔓 → [WP HMAC] Activando CLUB para ${email}`);
@@ -321,18 +333,17 @@ if (activarMembresia && membership_id && (tipoEfectivo === 'club' || Number(memb
 
   // 📧 Email de confirmación al usuario (libro/club)
   try {
-    const asunto =
-      membership_id
-        ? '✅ Tu acceso al Club Laboroteca ya está activo'
-        : (tipoProducto.toLowerCase() === 'libro'
-            ? '📘 Acceso activado: tu libro en Laboroteca'
-            : `✅ Compra confirmada: ${nombreProducto}`);
+    const asunto = esClub
+      ? '✅ Tu acceso al Club Laboroteca ya está activo'
+      : (esLibro
+          ? '📘 Acceso activado: tu libro en Laboroteca'
+          : `✅ Compra confirmada: ${nombreProducto}`);
 
     const fechaCompra = new Date().toISOString();
 
     const htmlConf = `
       <p>Hola ${datosCliente.nombre || ''},</p>
-      <p>Tu ${membership_id ? '<strong>membresía del <em>Club Laboroteca</em></strong>' : (tipoProducto.toLowerCase() === 'libro' ? '<strong>acceso al libro</strong>' : '<strong>compra</strong>')} ha sido <strong>activada correctamente</strong>.</p>
+      <p>Tu ${esClub ? '<strong>membresía del <em>Club Laboroteca</em></strong>' : (esLibro ? '<strong>acceso al libro</strong>' : '<strong>compra</strong>')} ha sido <strong>activada correctamente</strong>.</p>
       <p><strong>Producto:</strong> ${escapeHtml(nombreProducto)}<br>
         <strong>Descripción:</strong> ${escapeHtml(datosCliente.descripcionProducto)}<br>
         <strong>Importe:</strong> ${importe.toFixed(2).replace('.', ',')} €<br>
@@ -345,7 +356,7 @@ if (activarMembresia && membership_id && (tipoEfectivo === 'club' || Number(memb
     const textConf =
   `Hola ${datosCliente.nombre || ''},
 
-  Tu ${membership_id ? 'membresía del Club Laboroteca' : (tipoProducto.toLowerCase() === 'libro' ? 'acceso al libro' : 'compra')} ha sido activada correctamente.
+  Tu ${esClub ? 'membresía del Club Laboroteca' : (esLibro ? 'acceso al libro' : 'compra')} ha sido activada correctamente.
 
   Producto: ${nombreProducto}
   Descripción: ${datosCliente.descripcionProducto}
@@ -481,7 +492,7 @@ if (invoicingDisabled) {
   try {
     if (pdfBuffer) {
       const base = (facturaId || datos.invoiceId || Date.now());
-      const carpeta = (productoResuelto?.meta?.gcs_folder) || `facturas/${email}`;
+      const carpeta = (productoResuelto?.meta?.gcs_folder) || `facturas/${hash12(email)}`;
       const nombreArchivo = `${carpeta}/${base}-${(productoResuelto?.slug || claveNormalizada || 'producto')}.pdf`;
       console.log('☁️ → Subiendo a GCS:', nombreArchivo);
       await subirFactura(nombreArchivo, pdfBuffer, {
@@ -503,7 +514,7 @@ if (invoicingDisabled) {
           nombreArchivo: (() => {
             try {
               const base = (facturaId || datos.invoiceId || Date.now());
-              const carpeta = (productoResuelto?.meta?.gcs_folder) || `facturas/${email}`;
+              const carpeta = (productoResuelto?.meta?.gcs_folder) || `facturas/${hash12(email)}`;
               return `${carpeta}/${base}-${(productoResuelto?.slug || claveNormalizada || 'producto')}.pdf`;
             } catch { return null; }
           })(),

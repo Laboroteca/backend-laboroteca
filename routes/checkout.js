@@ -4,14 +4,42 @@ const express = require('express');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const router = express.Router();
 
-const { normalizar } = require('../utils/normalizar'); // (solo para logs en catch)
+const { normalizar } = require('../utils/normalizar');
 const { emailRegistradoEnWordPress } = require('../utils/wordpress');
-const { PRODUCTOS: CATALOGO, resolverProducto } = require('../utils/productos');
+// ⬇️ Importa el catálogo y utilidades correctas (antes se importaba mal)
+const {
+  PRODUCTOS,
+  normalizarProducto: normalizarProductoCat,
+  resolverProducto,
+  getImagenProducto,
+  DEFAULT_IMAGE
+} = require('../utils/productos');
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
 router.post('/create-session', async (req, res) => {
+  // ❌ Bloquear intentos de lanzar entradas por esta ruta
+  if ((req.body?.tipoProducto || '').toLowerCase() === 'entrada') {
+    console.warn('🚫 [create-session] Entrada bloqueada en checkout.js');
+
+    // 🔔 Aviso admin (no bloquea respuesta)
+    try {
+      await alertAdmin({
+        area: 'checkout_entrada_bloqueada',
+        email: (req.body?.email_autorelleno || req.body?.email || '-'),
+        err: new Error('Intento de procesar entradas por ruta no permitida'),
+        meta: {
+          tipoProducto: req.body?.tipoProducto || null,
+          nombreProducto: req.body?.nombreProducto || null
+        }
+      });
+    } catch (_) { /* no-op */ }
+
+    return res.status(400).json({ error: 'Las entradas no se procesan por esta ruta.' });
+  }
+
   // Vars para meta en alertas del catch final (no afectan al flujo)
-  let email, tipoProducto, nombreProducto, importeFormulario;
+  let email, tipoProducto, nombreProducto, esEntrada, isSuscripcion, totalAsistentes, importeFormulario;
+
 
   try {
     const body = req.body;
@@ -33,13 +61,21 @@ router.post('/create-session', async (req, res) => {
     const imagenFormulario = (datos.imagenProducto || '').trim();
     importeFormulario = parseFloat((datos.importe || '').toString().replace(',', '.'));
 
-    // Resolver solo productos de pago ÚNICO (no entradas, no suscripciones)
-    const producto = resolverProducto({
-      tipoProducto,
-      nombreProducto,
-      descripcionProducto: descripcionFormulario,
-      price_id: datos.price_id
-    });
+    // 🔒 Este endpoint es SOLO para pago único
+    isSuscripcion = tipoProducto.toLowerCase().includes('suscrip') || tipoProducto.toLowerCase().includes('club');
+    esEntrada = tipoProducto.toLowerCase() === 'entrada';
+    totalAsistentes = parseInt(datos.totalAsistentes) || 1;
+
+    // ⛔ Redirige suscripciones al endpoint específico
+    if (isSuscripcion) {
+      return res.status(400).json({ error: 'Las suscripciones no se crean aquí. Usa /crear-suscripcion-club.' });
+    }
+
+    // 🧭 Resuelve el producto del catálogo (pago único)
+    const productoResuelto =
+      resolverProducto({ tipoProducto, nombreProducto, descripcionProducto: datos.descripcionProducto, price_id: datos.price_id }, []);
+    const slug = productoResuelto?.slug || normalizarProductoCat(nombreProducto, tipoProducto);
+    const producto = slug ? PRODUCTOS[slug] : null;
 
     console.log('📩 [create-session] Solicitud recibida:', {
       nombre, apellidos, email, dni, direccion,
@@ -54,11 +90,10 @@ router.post('/create-session', async (req, res) => {
       !nombre ||
       !nombreProducto ||
       !tipoProducto ||
-      !producto ||
-      producto.es_recurrente === true // solo pago único
+      !producto
     ) {
       console.warn('⚠️ [create-session] Faltan datos obligatorios o producto inválido.', {
-        nombre, email, nombreProducto, tipoProducto, productoSlug: producto?.slug || null
+        nombre, email, nombreProducto, tipoProducto, producto
       });
 
       // 🔔 Aviso admin (validación 400)
@@ -95,33 +130,47 @@ router.post('/create-session', async (req, res) => {
       return res.status(403).json({ error: 'El email no está registrado como usuario.' });
     }
 
-    const importeFinalCents = Number.isFinite(importeFormulario)
-      ? Math.round(importeFormulario * 100)
-      : (Number(producto?.precio_cents) || 0);
+    // 💶 Importe para pago único (sin entradas): catálogo > formulario
+    const precioCatalogoCents = Number.isFinite(Number(producto?.precio_cents)) ? Number(producto.precio_cents) : NaN;
+    const importeFinalCents = Math.round(
+      Number.isFinite(importeFormulario) && importeFormulario > 0
+        ? importeFormulario * 100
+        : (Number.isFinite(precioCatalogoCents) ? precioCatalogoCents : 0)
+    );
+    
+    // 🖼️ Imagen (formulario → catálogo → fallback global)
+    const imagenCanon = (imagenFormulario || (slug ? getImagenProducto(slug) : (producto?.imagen || DEFAULT_IMAGE))).trim();
 
-    const line_items = [{
-      price_data: {
-        currency: 'eur',
-        unit_amount: importeFinalCents,
-        product_data: {
-          name: producto.nombre,
-          description: descripcionFormulario || producto.descripcion,
-          images: (imagenFormulario || producto.imagen) ? [ (imagenFormulario || producto.imagen) ] : []
-        }
-      },
-      quantity: 1
-    }];
-
+    // 💳 Línea de Stripe: prioriza price_id del catálogo (precio “oficial”)
+    let line_items;
+    if (producto?.price_id) {
+      line_items = [{ price: producto.price_id, quantity: 1 }];
+    } else {
+      line_items = [{
+        price_data: {
+          currency: 'eur',
+          unit_amount: importeFinalCents,
+          product_data: {
+            name: producto?.nombre || nombreProducto,
+            description: (descripcionFormulario || producto?.descripcion || '').trim(),
+            images: imagenCanon ? [imagenCanon] : []
+          }
+        },
+        quantity: 1
+      }];
+    }
     console.log('🧪 tipoProducto:', tipoProducto);
+    console.log('🧪 esEntrada:', esEntrada);
+    console.log('🧪 totalAsistentes:', totalAsistentes);
     console.log('🧪 importeFormulario:', importeFormulario);
-    console.log('🧪 producto:', producto?.slug, '→', producto?.nombre);
+    console.log('🧪 producto:', producto);
 
     const session = await stripe.checkout.sessions.create({
-      mode: 'payment',
+      mode: 'payment', // 🔒 solo pago único en este endpoint
       payment_method_types: ['card'],
       customer_email: email,
       line_items,
-      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(producto.nombre)}`,
+      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(producto?.nombre || nombreProducto)}`,
       cancel_url: 'https://laboroteca.es/error',
       metadata: {
         nombre,
@@ -132,10 +181,19 @@ router.post('/create-session', async (req, res) => {
         ciudad,
         provincia,
         cp,
-        tipoProducto,
-        nombreProducto: producto.nombre,
-        descripcionProducto: (datos.descripcionProducto || producto.descripcion || `${tipoProducto} "${producto.nombre}"`).trim(),
-        importe: ((importeFinalCents || 0) / 100).toFixed(2)
+        tipoProducto,                             // p.ej. 'libro'
+        // 🧾 Metadatos canónicos para el webhook
+        nombreProducto: (producto?.nombre || nombreProducto),
+        descripcionProducto: (datos.descripcionProducto || producto?.descripcion || `${tipoProducto} "${producto?.nombre || nombreProducto}"`).trim(),
+        // 🔗 Ayudas de resolución
+        price_id: producto?.price_id || '',
+        slug: slug || '',
+        memberpressId: String(producto?.membership_id || ''),
+        tipoProductoCanon: producto?.tipo || tipoProducto || '',
+        // Auditoría/compat
+        importe: (Number.isFinite(importeFinalCents) ? (importeFinalCents / 100) : 0).toFixed(2),
+        tipoProductoOriginal: tipoProducto,
+        nombreProductoOriginal: nombreProducto
       }
     });
 
@@ -155,6 +213,9 @@ router.post('/create-session', async (req, res) => {
         meta: {
           tipoProducto: tipoProducto || raw.tipoProducto || null,
           nombreProducto: nombreProducto || raw.nombreProducto || null,
+          esEntrada: typeof esEntrada === 'boolean' ? esEntrada : ((raw.tipoProducto || '').toLowerCase() === 'entrada'),
+          isSuscripcion: typeof isSuscripcion === 'boolean' ? isSuscripcion : ((raw.tipoProducto || '').toLowerCase().includes('suscrip')),
+          totalAsistentes: totalAsistentes || raw.totalAsistentes || null,
           importeFormulario: importeFormulario || raw.importe || null,
           productoKey: nombreProducto ? normalizar(nombreProducto) : (raw.nombreProducto ? normalizar(raw.nombreProducto) : null),
           rawBodyType: typeof raw

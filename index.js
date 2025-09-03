@@ -596,15 +596,6 @@ app.post(
   const nombreProducto = datos.nombreProducto || '';
   const descripcionProducto = datos.descripcionProducto || '';
   const precio = parseFloat((datos.importe || '29.90').toString().replace(',', '.'));
-  let imagenProducto = datos.imagenProducto?.trim();
-  if (!imagenProducto) {
-    imagenProducto = 'https://www.laboroteca.es/wp-content/uploads/2025/06/DE-CARA-A-LA-JUBILACION-PDF-IGNACIO-SOLSONA-ABOGADO-scaled.webp'; // o lo que quieras como fallback para libros/cursos
-  }
-
-  // Si no hay imagen, no se pone
-  if (!imagenProducto) {
-    imagenProducto = '';
-  }
 
 
   console.log('🧪 tipoProducto:', tipoProducto);
@@ -627,7 +618,6 @@ app.post(
 
   // Nombre/imagen “canon” si el catálogo lo conoce
   const nombreProductoCanon = productoResuelto?.nombre || nombreProducto;
-  const imagenCanon = (imagenProducto || productoResuelto?.imagen || '').trim();
   // Stripe line_items: usar price_id solo si existe y es VÁLIDO (activo y no recurrente).
   const candidatePriceId = String(productoResuelto?.price_id || '').trim();
   let usarPriceId = false;
@@ -665,8 +655,7 @@ app.post(
             price_data: {
               currency: 'eur',
               product_data: {
-                name: `${tipoProducto} "${nombreProductoCanon}"`,
-                images: imagenCanon ? [imagenCanon] : []
+                name: `${tipoProducto} "${nombreProductoCanon}"`
               },
               unit_amount: amountCents
             },
@@ -741,10 +730,6 @@ app.post(
   const nombreProducto = datos.nombreProducto || '';
   const descripcionProducto = datos.descripcionProducto || '';
   const precio = parseFloat((datos.importe || '9.99').toString().replace(',', '.'));
-  let imagenProducto = datos.imagenProducto?.trim() || '';
-  if (!imagenProducto) {
-    imagenProducto = 'https://www.laboroteca.es/wp-content/uploads/2025/07/Club-laboroteca-precio-suscripcion-mensual-2.webp';
-  }
 
 
   console.log('🧪 tipoProducto:', tipoProducto);
@@ -784,7 +769,7 @@ app.post(
             // fallback por si faltase price_id en env
             price_data: {
               currency: 'eur',
-              product_data: { name: nombreProducto, images: imagenProducto ? [imagenProducto] : [] },
+              product_data: { name: nombreProducto },
               unit_amount: Math.round(precio * 100),
               recurring: { interval: 'month' }
             },

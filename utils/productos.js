@@ -150,6 +150,9 @@ const INDEX_BY_ALIAS = (() => {
 // Normalización y resolución
 // ───────────────────────────────────────────────────────────────────────────────
 
+// Fallback de imagen por defecto para productos sin portada definida
+const DEFAULT_IMAGE = 'https://www.laboroteca.es/wp-content/uploads/2025/04/NUEVO-LOGO-LABOROTECA-2.webp';
+
 /**
  * Normaliza texto básico (quitar tildes suaves opcional, minúsculas y trim).
  * Aquí mantenemos simple: toLowerCase + trim.
@@ -220,6 +223,15 @@ function resolverProducto(meta = {}, lineItems = []) {
   return null; // sin match inequívoco
 }
 
+/**
+ * Devuelve la URL de imagen del producto, o el fallback si no está definida.
+ */
+function getImagenProducto(slug) {
+  const p = PRODUCTOS[slug];
+  if (!p) return DEFAULT_IMAGE;
+  return p.imagen || DEFAULT_IMAGE;
+}
+
 // ───────────────────────────────────────────────────────────────────────────────
 // IDs internos de MemberPress por clave normalizada (compatibilidad)
 // ───────────────────────────────────────────────────────────────────────────────
@@ -236,5 +248,7 @@ module.exports = {
   PRODUCTOS,
   normalizarProducto,
   resolverProducto,
-  MEMBERPRESS_IDS
+  MEMBERPRESS_IDS,
+  getImagenProducto,
+  DEFAULT_IMAGE
 };

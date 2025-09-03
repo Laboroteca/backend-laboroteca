@@ -66,14 +66,20 @@ async function syncMemberpressLibro({
   if (!['activar', 'desactivar'].includes(accion)) {
     throw new Error("❌ Acción inválida: debe ser 'activar' o 'desactivar'");
   }
-  if (!Number.isInteger(membership_id)) {
+  const membershipIdNum = Number(membership_id);
+  if (!Number.isInteger(membershipIdNum) || membershipIdNum <= 0) {
     throw new Error('❌ membership_id debe ser un número entero');
   }
 
   // —— Config segura obligatoria
-  const API_URL = (apiUrl || DEFAULT_API_URL).trim();
+  const API_URL = (apiUrl || DEFAULT_API_URL).trim().replace(/\/+$/, ''); // normaliza trailing slash
   if (!API_URL || !API_KEY || !HMAC_SECRET) {
-    throw new Error('❌ Config MP Sync incompleta: MP_SYNC_API_URL_LIBRO / MP_SYNC_API_KEY / MP_SYNC_HMAC_SECRET');
+    const missing = [
+      !API_URL && 'MP_SYNC_API_URL_PRODUCTO/MP_SYNC_API_URL_LIBRO',
+      !API_KEY && 'MP_SYNC_API_KEY',
+      !HMAC_SECRET && 'MP_SYNC_HMAC_SECRET'
+    ].filter(Boolean).join(', ');
+    throw new Error(`❌ Config MP Sync incompleta (${missing})`);
   }
 
   // —— Normalización de importe
@@ -85,7 +91,7 @@ async function syncMemberpressLibro({
   const payload = {
     email,
     accion,
-    membership_id,
+    membership_id: membershipIdNum,
     importe: importeNum,
     // Campos informativos (WP puede ignorarlos; útiles para trazabilidad)
     ...(producto ? { producto } : {}),
@@ -170,7 +176,7 @@ async function syncMemberpressLibro({
         err,
         meta: {
           accion,
-          membership_id,
+          membership_id: membershipIdNum,
           importe: importeNum,
           apiUrl: API_URL,
           ts,

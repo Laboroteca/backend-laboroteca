@@ -73,8 +73,8 @@ const { eliminarUsuarioWordPress } = require('./services/eliminarUsuarioWordPres
 const procesarCompra = require('./services/procesarCompra');
 const { activarMembresiaClub } = require('./services/activarMembresiaClub');
 const { syncMemberpressClub } = require('./services/syncMemberpressClub');
-// 🆕 Catálogo unificado (resolver + datos)
-const { resolverProducto, PRODUCTOS } = require('./utils/productos');
+// 🆕 Catálogo unificado (resolver + datos + imagen)
+const { resolverProducto, PRODUCTOS, getImagenProducto } = require('./utils/productos');
 const desactivarMembresiaClubForm = require('./routes/desactivarMembresiaClub');
 const desactivarMembresiaClub = require('./services/desactivarMembresiaClub');
 // ✔️ HMAC para baja voluntaria (WP → Backend)
@@ -612,14 +612,19 @@ app.post(
 
   // 🧭 Resolver producto del catálogo (prioriza price_id si existe)
   const productoResuelto = resolverProducto(
-    { tipoProducto, nombreProducto, descripcionProducto, price_id: datos.price_id },
+    { tipoProducto, nombreProducto, descripcionProducto, price_id: datos.price_id, priceId: datos.priceId },
     [] // no hay lineItems aún
   );
 
-  // Nombre/imagen “canon” si el catálogo lo conoce
-  const nombreProductoCanon = productoResuelto?.nombre || nombreProducto;
-  // Stripe line_items: usar price_id solo si existe y es VÁLIDO (activo y no recurrente).
-  const candidatePriceId = String(productoResuelto?.price_id || '').trim();
+  // Nombre/descripcion/imagen “canon” si el catálogo lo conoce (derivado SIEMPRE del catálogo)
+  const nombreProductoCanon = (productoResuelto?.nombre || nombreProducto || '').toString().trim();
+  const descripcionCanon    = (productoResuelto?.descripcion || descripcionProducto || '').toString().trim();
+  // Imagen: primero catálogo, si no → helper con fallback global
+  const slugCanon           = productoResuelto?.slug || null;
+  const imagenCanon         = slugCanon ? getImagenProducto(slugCanon)
+                                        : (productoResuelto?.imagen || null);
+  // Stripe line_items: usar price (price_id) del catálogo si existe y es VÁLIDO (activo y no recurrente).
+  const candidatePriceId = String((productoResuelto?.price_id || productoResuelto?.priceId || '')).trim();
   let usarPriceId = false;
   // Importe de fallback (del formulario o del catálogo)
   let amountCents = Number.isFinite(precio) ? Math.round(precio * 100)
@@ -650,14 +655,22 @@ app.post(
       customer_creation: 'always',
       customer_email: email,
       line_items: usarPriceId
-        ? [{ price: candidatePriceId, quantity: 1 }]
+        ? [{
+            // ✅ Usa el Price de catálogo (importe/imagen ya los tiene el producto Stripe)
+            price: candidatePriceId,
+            quantity: 1
+          }]
         : [{
+            // ✅ Fallback totalmente alimentado por utils/productos.js
             price_data: {
               currency: 'eur',
+              unit_amount: amountCents,
               product_data: {
-                name: `${tipoProducto} "${nombreProductoCanon}"`
-              },
-              unit_amount: amountCents
+                name: nombreProductoCanon || 'Producto Laboroteca',
+                description: descripcionCanon || undefined,
+                // MUY IMPORTANTE: nutrimos la imagen desde el catálogo
+                images: (imagenCanon ? [imagenCanon] : [])
+              }
             },
             quantity: 1
           }],
@@ -674,9 +687,11 @@ app.post(
         tipoProducto,
         // 🧾 metadatos “canon” para el resolver del backend
         nombreProducto: nombreProductoCanon,
-        descripcionProducto: descripcionProducto || (productoResuelto?.descripcion || ''),
+        descripcionProducto: descripcionCanon,
         // 💳 ayuda al resolver por price_id en el backend
-        price_id: productoResuelto?.price_id || ''
+        price_id: productoResuelto?.price_id || productoResuelto?.priceId || '',
+        // 🔗 pista de catálogo (no rompe nada si falta)
+        slug: slugCanon || ''
       },
       success_url: `https://www.laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(nombreProductoCanon)}`,
       cancel_url: 'https://www.laboroteca.es/error'

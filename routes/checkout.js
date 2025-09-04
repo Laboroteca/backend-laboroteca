@@ -71,9 +71,13 @@ router.post('/create-session', async (req, res) => {
       return res.status(400).json({ error: 'Las suscripciones no se crean aquí. Usa /crear-suscripcion-club.' });
     }
 
-    // 🧭 Resuelve el producto del catálogo (pago único)
+    
+    // 🧭 Resolver producto del catálogo (acepta price_id o priceId)
     const productoResuelto =
-      resolverProducto({ tipoProducto, nombreProducto, descripcionProducto: datos.descripcionProducto, price_id: datos.price_id }, []);
+      resolverProducto(
+        { tipoProducto, nombreProducto, descripcionProducto: datos.descripcionProducto, price_id: datos.price_id, priceId: datos.priceId },
+        []
+      );
     const slug = productoResuelto?.slug || normalizarProductoCat(nombreProducto, tipoProducto);
     const producto = slug ? PRODUCTOS[slug] : null;
 
@@ -137,28 +141,54 @@ router.post('/create-session', async (req, res) => {
         ? importeFormulario * 100
         : (Number.isFinite(precioCatalogoCents) ? precioCatalogoCents : 0)
     );
+    // Si no hay price_id válido y el importe no existe, no seguimos
+    const candidatePriceId = String(producto?.price_id || producto?.priceId || '').trim();
+    if (!candidatePriceId && (!Number.isFinite(importeFinalCents) || importeFinalCents <= 0)) {
+      return res.status(400).json({ error: 'Importe inválido y sin price_id de catálogo.' });
+    }
     
-    // 🖼️ Imagen (formulario → catálogo → fallback global)
-    const imagenCanon = (imagenFormulario || (slug ? getImagenProducto(slug) : (producto?.imagen || DEFAULT_IMAGE))).trim();
+    // 🖼️ Imagen (catálogo → formulario → fallback global) — fuente única de verdad = catálogo
+    const imagenCanon = ((slug ? getImagenProducto(slug) : (producto?.imagen || '')) || imagenFormulario || DEFAULT_IMAGE).trim();
+
+    // 📛 Nombre/Descripción canónicos desde catálogo (siempre que haya match)
+    const nombreCanon = (producto?.nombre || nombreProducto || '').toString().trim();
+    const descripcionCanon = (producto?.descripcion || descripcionFormulario || '').toString().trim();
 
     // 💳 Línea de Stripe: prioriza price_id del catálogo (precio “oficial”)
     let line_items;
-    if (producto?.price_id) {
-      line_items = [{ price: producto.price_id, quantity: 1 }];
+    let usarPriceId = false;
+    if (candidatePriceId) {
+      try {
+        const pr = await stripe.prices.retrieve(candidatePriceId);
+        usarPriceId = !!(pr && pr.id && pr.active && !pr.recurring);
+        // Si el price está activo pero trae unit_amount, lo respetamos como importe de referencia
+        if (!usarPriceId && typeof pr?.unit_amount === 'number') {
+          // solo actualiza si no nos vino importe fiable
+          if (!Number.isFinite(importeFinalCents) || importeFinalCents <= 0) {
+            // nota: no reasignamos importeFinalCents porque es const; usamos variable local al crear price_data
+          }
+        }
+      } catch (e) {
+        console.warn('⚠️ price_id no recuperable en Stripe:', candidatePriceId, e?.message || e);
+      }
+    }
+    if (usarPriceId) {
+      line_items = [{ price: candidatePriceId, quantity: 1 }];
     } else {
       line_items = [{
         price_data: {
           currency: 'eur',
           unit_amount: importeFinalCents,
           product_data: {
-            name: producto?.nombre || nombreProducto,
-            description: (descripcionFormulario || producto?.descripcion || '').trim(),
+            name: nombreCanon || 'Producto Laboroteca',
+            description: descripcionCanon || undefined,
             images: imagenCanon ? [imagenCanon] : []
           }
         },
         quantity: 1
       }];
     }
+
     console.log('🧪 tipoProducto:', tipoProducto);
     console.log('🧪 esEntrada:', esEntrada);
     console.log('🧪 totalAsistentes:', totalAsistentes);
@@ -183,10 +213,10 @@ router.post('/create-session', async (req, res) => {
         cp,
         tipoProducto,                             // p.ej. 'libro'
         // 🧾 Metadatos canónicos para el webhook
-        nombreProducto: (producto?.nombre || nombreProducto),
-        descripcionProducto: (datos.descripcionProducto || producto?.descripcion || `${tipoProducto} "${producto?.nombre || nombreProducto}"`).trim(),
+        nombreProducto: (nombreCanon || nombreProducto),
+        descripcionProducto: (descripcionCanon || `${tipoProducto} "${nombreCanon || nombreProducto}"`).trim(),
         // 🔗 Ayudas de resolución
-        price_id: producto?.price_id || '',
+        price_id: (producto?.price_id || producto?.priceId || '') || '',
         slug: slug || '',
         memberpressId: String(producto?.membership_id || ''),
         tipoProductoCanon: producto?.tipo || tipoProducto || '',

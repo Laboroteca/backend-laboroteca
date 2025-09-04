@@ -13,12 +13,16 @@
  * - tipo:              'libro' | 'curso' | 'guia' | 'club' | 'entrada' | 'otro'
  * - es_recurrente:     boolean (los de este archivo, salvo club, serán false)
  * - activar_membresia: boolean (si tras pagar hay que activar algo en MemberPress)
- * - membership_id:     number | null (ID de MemberPress si aplica)
- * - price_id:          string | null (Price ID de Stripe para validación/fallback)
+ * - memberpressId:     number | null (ID de MemberPress si aplica)   ← canónico
+ * - membership_id:     number | null (compatibilidad legacy)
+ * - priceId:           string | null (Price de Stripe)               ← canónico
+ * - price_id:          string | null (compatibilidad legacy)
  * - imagen:            url de portada/imagen del producto
- * - precio_cents:      number | null (informativo; el importe real viene de Stripe)
+ * - precio:            number | null (euros, p.ej. 29.90)            ← canónico
+ * - precio_cents:      number | null (centimos, compatibilidad)
  * - descripcion_factura: string (plantilla segura para FacturaCity)
  * - aliases:           string[] (palabras/frases que ayudan a normalizar búsquedas)
+ * - caducidadDias:     number | null (por defecto vitalicio si no se define)
       gcs_folder: 'facturas/libros/de-cara-a-la-jubilacion'
       // mp_api_url: 'https://www.laboroteca.es/wp-json/laboroteca/v1/libro-membership'
  */
@@ -34,16 +38,22 @@ const PRODUCTOS = {
     tipo: 'libro',
     es_recurrente: false,
     activar_membresia: true,
-    membership_id: 7994, // ⚠️ Mantiene tu ID actual
+    // Canónicos
+    memberpressId: 7994,
+    priceId: 'price_1RMG0mEe6Cd77jenTpudZVan',
+    precio: 29.90,
+    // Compat legacy
+    membership_id: 7994,
     price_id: 'price_1RMG0mEe6Cd77jenTpudZVan',
     imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/06/DE-CARA-A-LA-JUBILACION-IGNACIO-SOLSONA-ABOGADO-scaled.png',
-    precio_cents: 2990, // informativo
+    precio_cents: 2990, // informativo/compat
     descripcion_factura: 'Libro digital (acceso vitalicio): "De cara a la jubilación".',
     aliases: [
       'de cara a la jubilacion',
       'libro jubilacion',
       'libro digital de cara a la jubilación'
     ],
+    caducidadDias: null, // vitalicio por defecto
     meta: {
       // Opcionales para registrar/archivar si quieres diferenciarlos
       gcs_folder: 'facturas/libros/de-cara-a-la-jubilacion'
@@ -61,10 +71,15 @@ const PRODUCTOS = {
     tipo: 'libro',
     es_recurrente: false,
     activar_membresia: true,
+    // Canónicos
+    memberpressId: 11006,
+    priceId: 'price_1S2sReEe6Cd77jenmOhFqFuX',
+    precio: 34.90,
+    // Compat legacy
     membership_id: 11006,
     price_id: 'price_1S2sReEe6Cd77jenmOhFqFuX',
     imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/06/adelantar-la-jubilacion-IGNACIO-SOLSONA-scaled.webp',
-    precio_cents: 3490, // informativo; el importe real se toma de Stripe
+    precio_cents: 3490, // informativo/compat
     descripcion_factura: 'Libro digital (acceso vitalicio): "Adelanta tu jubilación".',
     aliases: [
       'adelanta tu jubilacion',
@@ -72,6 +87,7 @@ const PRODUCTOS = {
       'libro adelanta tu jubilación. edición digital. membresía vitalicia',
       'adelanta tu jubilación. libro digital con acceso vitalicio'
     ],
+    caducidadDias: null, // vitalicio por defecto
     meta: {
       gcs_folder: 'facturas/libros/adelanta-tu-jubilacion'
       // mp_api_url: 'https://www.laboroteca.es/wp-json/laboroteca/v1/libro-membership'
@@ -88,10 +104,15 @@ const PRODUCTOS = {
     tipo: 'club',
     es_recurrente: true,
     activar_membresia: true,
-    membership_id: 10663, // ⚠️ Mantiene tu ID actual
+    // Canónicos
+    memberpressId: 10663,
+    priceId: 'price_1RmY1YEe6Cd77jenSc0mZxBi',
+    // Compat legacy
+    membership_id: 10663,
     price_id: 'price_1RmY1YEe6Cd77jenSc0mZxBi',
     imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/07/Club-laboroteca-precio-suscripcion-mensual-2.webp',
     precio_cents: null,
+    precio: null, // suscripción → no aplica aquí
     descripcion_factura: 'Suscripción mensual: El Club Laboroteca.',
     aliases: ['el club laboroteca', 'club laboroteca', 'club'],
     meta: {}
@@ -107,10 +128,15 @@ const PRODUCTOS = {
     tipo: 'entrada',
     es_recurrente: false,
     activar_membresia: false,
+    // Canónicos
+    memberpressId: null,
+    priceId: null,
+    // Compat legacy
     membership_id: null,
     price_id: null, // se resuelve por flujo de "entradas"
     imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/08/logo-entradas-laboroteca-scaled.webp',
     precio_cents: null,
+    precio: null,
     descripcion_factura: 'Entrada para evento presencial Laboroteca.',
     aliases: ['entrada', 'ticket', 'evento', 'entrada evento'],
     meta: {}
@@ -121,9 +147,10 @@ const PRODUCTOS = {
 // Índices auxiliares para resolución rápida
 // ───────────────────────────────────────────────────────────────────────────────
 
-/** Mapa price_id → slug (solo productos con price_id definido) */
+/** Mapa price → slug (acepta price_id o priceId) */
 const INDEX_BY_PRICE = Object.values(PRODUCTOS).reduce((acc, p) => {
-  if (p.price_id) acc[p.price_id] = p.slug;
+  if (p.price_id) acc[p.price_id] = p.slug;       // legacy
+  if (p.priceId)  acc[p.priceId]  = p.slug;       // canónico
   return acc;
 }, {});
 
@@ -203,14 +230,14 @@ function normalizarProducto(nombreProducto = '', tipoProducto = '') {
  * @returns {object|null} Producto del catálogo o null
  */
 function resolverProducto(meta = {}, lineItems = []) {
-  const metaPrice = _norm(meta.price_id);
+  const metaPrice = _norm(meta.price_id || meta.priceId);
   if (metaPrice && INDEX_BY_PRICE[metaPrice]) {
     return PRODUCTOS[INDEX_BY_PRICE[metaPrice]];
   }
 
   // Intento por line items (si Stripe nos los pasó)
   const liPrice = _norm(
-    (lineItems[0] && (lineItems[0].price?.id || lineItems[0].price_id)) || ''
+    (lineItems[0] && (lineItems[0].price?.id || lineItems[0].price_id || lineItems[0].priceId)) || ''
   );
   if (liPrice && INDEX_BY_PRICE[liPrice]) {
     return PRODUCTOS[INDEX_BY_PRICE[liPrice]];
@@ -232,6 +259,44 @@ function getImagenProducto(slug) {
   return p.imagen || DEFAULT_IMAGE;
 }
 
+// ——————————————————————————————————————————————
+// Helpers canónicos (no rompedores)
+// ——————————————————————————————————————————————
+function getProducto(slug) {
+  const p = PRODUCTOS[slug];
+  if (!p) return null;
+  // Normalización de compatibilidad: devolvemos claves canónicas siempre
+  return {
+    ...p,
+    memberpressId: p.memberpressId ?? p.membership_id ?? null,
+    priceId: p.priceId ?? p.price_id ?? null,
+    precio: typeof p.precio === 'number'
+      ? p.precio
+      : (Number.isFinite(p.precio_cents) ? p.precio_cents / 100 : null),
+    precio_cents: Number.isFinite(p.precio_cents)
+      ? p.precio_cents
+      : (typeof p.precio === 'number' ? Math.round(p.precio * 100) : null)
+  };
+}
+
+function getMemberpressId(slug) {
+  const p = PRODUCTOS[slug];
+  return p ? (p.memberpressId ?? p.membership_id ?? null) : null;
+}
+
+function getPriceInfo(slug) {
+  const p = PRODUCTOS[slug];
+  if (!p) return { priceId: null, amount_cents: null, amount_eur: null };
+  const priceId = p.priceId ?? p.price_id ?? null;
+  const amount_cents = Number.isFinite(p.precio_cents)
+    ? p.precio_cents
+    : (typeof p.precio === 'number' ? Math.round(p.precio * 100) : null);
+  const amount_eur = typeof p.precio === 'number'
+    ? p.precio
+    : (Number.isFinite(p.precio_cents) ? p.precio_cents / 100 : null);
+  return { priceId, amount_cents, amount_eur };
+}
+
 // ───────────────────────────────────────────────────────────────────────────────
 // IDs internos de MemberPress por clave normalizada (compatibilidad)
 // ───────────────────────────────────────────────────────────────────────────────
@@ -250,5 +315,9 @@ module.exports = {
   resolverProducto,
   MEMBERPRESS_IDS,
   getImagenProducto,
-  DEFAULT_IMAGE
+  DEFAULT_IMAGE,
+  // nuevos helpers canónicos
+  getProducto,
+  getMemberpressId,
+  getPriceInfo
 };

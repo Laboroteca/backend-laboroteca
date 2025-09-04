@@ -74,7 +74,13 @@ const procesarCompra = require('./services/procesarCompra');
 const { activarMembresiaClub } = require('./services/activarMembresiaClub');
 const { syncMemberpressClub } = require('./services/syncMemberpressClub');
 // 🆕 Catálogo unificado (resolver + datos + imagen)
-const { resolverProducto, PRODUCTOS, getImagenProducto } = require('./utils/productos');
+const {
+  PRODUCTOS,
+  resolverProducto,
+  normalizarProducto: normalizarProductoCat,
+  getImagenProducto,
+  DEFAULT_IMAGE
+} = require('./utils/productos');
 const desactivarMembresiaClubForm = require('./routes/desactivarMembresiaClub');
 const desactivarMembresiaClub = require('./services/desactivarMembresiaClub');
 // ✔️ HMAC para baja voluntaria (WP → Backend)
@@ -566,6 +572,143 @@ async function verificarEmailEnWordPress(email) {
 app.get('/', (req, res) => {
   res.send('✔️ API de Laboroteca activa');
 });
+
+// ───────────────────────────────────────────────────────────
+// PAGO ÚNICO: /crear-sesion-pago  (solo productos NO entradas, NO club)
+// Se alimenta 100% del catálogo utils/productos.js
+// ───────────────────────────────────────────────────────────
+app.post(
+  '/crear-sesion-pago',
+  enforcePost,
+  requireJson,
+  pagoLimiter,
+  requireHmacPago,
+  requireApiKeyPago,
+  async (req, res) => {
+    const datos = req.body || {};
+    console.log('📥 [/crear-sesion-pago] IN:\n', JSON.stringify(datos, null, 2));
+
+    const email = (typeof datos.email_autorelleno === 'string' && datos.email_autorelleno.includes('@'))
+      ? datos.email_autorelleno.trim().toLowerCase()
+      : (typeof datos.email === 'string' && datos.email.includes('@') ? datos.email.trim().toLowerCase() : '');
+
+    const nombre     = (datos.nombre || datos.Nombre || '').trim();
+    const apellidos  = (datos.apellidos || datos.Apellidos || '').trim();
+    const dni        = (datos.dni || '').trim();
+    const direccion  = (datos.direccion || '').trim();
+    const ciudad     = (datos.ciudad || '').trim();
+    const provincia  = (datos.provincia || '').trim();
+    const cp         = (datos.cp || '').trim();
+    const tipoProdIn = (datos.tipoProducto || '').trim();
+    const nombreProd = (datos.nombreProducto || '').trim();
+    const descForm   = (datos.descripcionProducto || '').trim();
+    const precioForm = parseFloat((datos.importe || '').toString().replace(',', '.'));
+
+    if (!nombre || !email || !nombreProd) {
+      return res.status(400).json({ error: 'Faltan campos obligatorios.' });
+    }
+    if (!/^[^@]+@[^@]+\.[^@]+$/.test(email)) {
+      return res.status(400).json({ error: 'Email inválido' });
+    }
+    // Bloqueamos flujos que no tocan este endpoint
+    if (tipoProdIn.toLowerCase().includes('suscrip') || tipoProdIn.toLowerCase().includes('club')) {
+      return res.status(400).json({ error: 'Las suscripciones no se crean aquí.' });
+    }
+    if (tipoProdIn.toLowerCase() === 'entrada') {
+      return res.status(400).json({ error: 'Las entradas no se procesan por esta ruta.' });
+    }
+
+    // Resolver producto desde catálogo (price_id > alias > nombre/tipo)
+    const prodResuelto = resolverProducto(
+      { tipoProducto: tipoProdIn, nombreProducto: nombreProd, descripcionProducto: descForm, price_id: datos.price_id, priceId: datos.priceId },
+      []
+    );
+    const slug    = prodResuelto?.slug || normalizarProductoCat(nombreProd, tipoProdIn);
+    const prod    = slug ? PRODUCTOS[slug] : null;
+    if (!prod) {
+      console.warn('⚠️ Catálogo: producto no reconocido', { tipoProdIn, nombreProd });
+      return res.status(400).json({ error: 'Producto no válido (no está en catálogo).' });
+    }
+
+    const nombreCanon = prod.nombre || nombreProd;
+    const descCanon   = (descForm || prod.descripcion || `${tipoProdIn} "${nombreCanon}"`).trim();
+    const imagenCanon = (getImagenProducto(slug) || DEFAULT_IMAGE).trim();
+
+    // Precio: si hay price_id válido → usarlo; si no, catálogo > formulario
+    const precioCatCents = Number.isFinite(Number(prod.precio_cents)) ? Number(prod.precio_cents) : NaN;
+    let amountCents = Number.isFinite(precioCatCents)
+      ? precioCatCents
+      : (Number.isFinite(precioForm) ? Math.round(precioForm * 100) : 0);
+
+    const candidatePriceId = String(prod.price_id || '').trim();
+    let usarPriceId = false;
+    if (candidatePriceId.startsWith('price_')) {
+      try {
+        const pr = await stripe.prices.retrieve(candidatePriceId);
+        usarPriceId = !!(pr && pr.id && pr.active && !pr.recurring);
+        if (!usarPriceId && typeof pr?.unit_amount === 'number') {
+          amountCents = pr.unit_amount;
+        }
+      } catch (e) {
+        console.warn('⚠️ price_id inaccesible; fallback a price_data:', candidatePriceId, e?.message || e);
+      }
+    }
+
+    try {
+      const session = await stripe.checkout.sessions.create({
+        mode: 'payment',
+        payment_method_types: ['card'],
+        customer_creation: 'always',
+        customer_email: email,
+        line_items: usarPriceId
+          ? [{ price: candidatePriceId, quantity: 1 }]
+          : [{
+              price_data: {
+                currency: 'eur',
+                unit_amount: amountCents,
+                product_data: {
+                  name: nombreCanon,
+                  description: descCanon,
+                  images: imagenCanon ? [imagenCanon] : []
+                }
+              },
+              quantity: 1
+            }],
+        metadata: {
+          // Datos cliente (para facturación y procesado)
+          nombre, apellidos, email, email_autorelleno: email,
+          dni, direccion, ciudad, provincia, cp,
+          // Canónicos de catálogo para el webhook/procesado
+          tipoProducto: prod.tipo || tipoProdIn,
+          nombreProducto: nombreCanon,
+          descripcionProducto: descCanon,
+          price_id: prod.price_id || '',
+          slug: slug || '',
+          memberpressId: String(prod.membership_id || ''),
+          tipoProductoCanon: prod.tipo || '',
+          importe: (Number.isFinite(amountCents) ? (amountCents / 100) : 0).toFixed(2),
+          tipoProductoOriginal: tipoProdIn,
+          nombreProductoOriginal: nombreProd
+        },
+        success_url: `https://www.laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(nombreCanon)}`,
+        cancel_url: 'https://www.laboroteca.es/error'
+      });
+      console.log('✅ [/crear-sesion-pago] Sesión creada:', session.id);
+      return res.json({ url: session.url });
+    } catch (error) {
+      console.error('❌ Stripe createSession (pago único):', error?.message || error);
+      try {
+        await alertAdmin({
+          area: 'stripe_crear_sesion_pago_error',
+          email: email || '-',
+          err: error,
+          meta: { slug, candidatePriceId, amountCents, tipoProdIn, nombreProd }
+        });
+      } catch (_) {}
+      return res.status(500).json({ error: 'Error al crear el pago' });
+    }
+  }
+);
 
 
 // REEMPLAZO con MW:

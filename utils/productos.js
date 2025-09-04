@@ -45,7 +45,7 @@ const PRODUCTOS = {
     // Compat legacy
     membership_id: 7994,
     price_id: 'price_1RMG0mEe6Cd77jenTpudZVan',
-    imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/06/DE-CARA-A-LA-JUBILACION-IGNACIO-SOLSONA-ABOGADO-scaled.png',
+    imagen: '',
     precio_cents: 2990, // informativo/compat
     descripcion_factura: 'Libro digital (acceso vitalicio): "De cara a la jubilación".',
     aliases: [

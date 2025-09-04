@@ -94,6 +94,47 @@ const PRODUCTOS = {
     }
   },
 
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // ✅ Nuevo: Libro "Conoce y defiende tus derechos laborales" (pago único)
+  //     * URL WP: /register/libro-conoce-y-protege-tus-derechos-laborales/
+  //     * Nota: el slug sigue la URL ("protege") para coherencia con WP.
+  // ─────────────────────────────────────────────────────────────────────────────
+  'libro-conoce-y-protege-tus-derechos-laborales': {
+    slug: 'libro-conoce-y-protege-tus-derechos-laborales',
+    nombre: 'Libro digital. Conoce y defiende tus derechos laborales',
+    descripcion: 'Conoce y defiende tus derechos laborales. Edición digital con acceso vitalicio.',
+   tipo: 'libro',
+    es_recurrente: false,
+    activar_membresia: true,
+    // Canónicos
+    memberpressId: 11418,
+    priceId: 'price_1S3jNSEe6Cd77jenZ52iQd7D',
+    precio: 29.95,
+    // Compat legacy
+    membership_id: 11418,
+    price_id: 'price_1S3jNSEe6Cd77jenZ52iQd7D',
+    imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/04/CONSULTAS-IGNACIO-SOLSONA-scaled.webp',
+    precio_cents: 2995, // informativo/compat
+    descripcion_factura: 'Libro digital (acceso vitalicio): "Conoce y defiende tus derechos laborales".',
+    aliases: [
+      'conoce y defiende tus derechos laborales',
+      'conocer y defender tus derechos laborales',
+      'conoce y protege tus derechos laborales',
+      'libro conoce y defiende tus derechos laborales',
+      'libro conoce y protege tus derechos laborales',
+      'tus derechos laborales',
+      'manual de defensa del trabajador'
+    ],
+    caducidadDias: null, // vitalicio por defecto
+    meta: {
+      gcs_folder: 'facturas/libros/conoce-y-defiende-tus-derechos-laborales',
+      url: 'https://www.laboroteca.es/register/libro-conoce-y-protege-tus-derechos-laborales/',
+      stripeProductId: 'prod_SzipTefoA7CzRu'
+    }
+  },
+
+
   // ─────────────────────────────────────────────────────────────────────────────
   // ♻️ Recurrente (Club) – se mantiene para compatibilidad (no es pago único)
   // ─────────────────────────────────────────────────────────────────────────────
@@ -222,6 +263,9 @@ function normalizarProducto(nombreProducto = '', tipoProducto = '') {
   if (nombre.includes('entrada')) return 'entrada-evento';
   if (nombre.includes('de cara a la jubilacion')) return 'de-cara-a-la-jubilacion';
   if (nombre.includes('adelanta tu jubilacion')) return 'adelanta-tu-jubilacion';
+  if (nombre.includes('conoce y defiende tus derechos laborales')) return 'libro-conoce-y-protege-tus-derechos-laborales';
+  if (nombre.includes('conoce y protege tus derechos laborales')) return 'libro-conoce-y-protege-tus-derechos-laborales';
+  if (nombre.includes('tus derechos laborales')) return 'libro-conoce-y-protege-tus-derechos-laborales';
   if (nombre.includes('el club laboroteca')) return 'el-club-laboroteca';
 
   return null;
@@ -310,7 +354,8 @@ function getPriceInfo(slug) {
 const MEMBERPRESS_IDS = {
   'el-club-laboroteca': 10663,
   'de-cara-a-la-jubilacion': 7994,
-  'adelanta-tu-jubilacion': 11006
+  'adelanta-tu-jubilacion': 11006,
+  'libro-conoce-y-protege-tus-derechos-laborales': 11418
 };
 
 // ───────────────────────────────────────────────────────────────────────────────

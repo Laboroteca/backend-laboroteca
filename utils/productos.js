@@ -149,8 +149,8 @@ const PRODUCTOS = {
 
 /** Mapa price → slug (acepta price_id o priceId) */
 const INDEX_BY_PRICE = Object.values(PRODUCTOS).reduce((acc, p) => {
-  if (p.price_id) acc[p.price_id] = p.slug;       // legacy
-  if (p.priceId)  acc[p.priceId]  = p.slug;       // canónico
+  if (p.price_id) acc[String(p.price_id).toLowerCase()] = p.slug;
+  if (p.priceId)  acc[String(p.priceId).toLowerCase()] = p.slug; // canónico
   return acc;
 }, {});
 
@@ -159,16 +159,16 @@ const INDEX_BY_ALIAS = (() => {
   const map = {};
   for (const p of Object.values(PRODUCTOS)) {
     (p.aliases || []).forEach(a => {
-      const k = (a || '').toString().trim().toLowerCase();
+      const k = normalizeKey(a);
       if (k) map[k] = p.slug;
     });
     // También indexamos nombre y descripción como alias
     [p.nombre, p.descripcion].forEach(txt => {
-      const k = (txt || '').toString().trim().toLowerCase();
+      const k = normalizeKey(txt);
       if (k) map[k] = p.slug;
     });
     // El propio slug también vale
-    map[p.slug] = p.slug;
+    map[normalizeKey(p.slug)] = p.slug;
   }
   return map;
 })();
@@ -180,13 +180,22 @@ const INDEX_BY_ALIAS = (() => {
 // Fallback de imagen por defecto para productos sin portada definida
 const DEFAULT_IMAGE = 'https://www.laboroteca.es/wp-content/uploads/2025/04/NUEVO-LOGO-LABOROTECA-2.webp';
 
+// 🔧 Normalizador robusto: minúsculas, sin tildes, sin puntuación y espacios colapsados
+function normalizeKey(s = '') {
+  return String(s || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')      // quita acentos
+    .replace(/[\.\,\;\:\!\?\«\»"“”'’\(\)\[\]\{\}]/g, ' ') // quita puntuación común
+    .replace(/\s+/g, ' ')                                  // colapsa espacios
+    .trim();
+}
+
+
 /**
  * Normaliza texto básico (quitar tildes suaves opcional, minúsculas y trim).
  * Aquí mantenemos simple: toLowerCase + trim.
  */
-function _norm(s = '') {
-  return (s || '').toString().trim().toLowerCase();
-}
+function _norm(s = '') { return normalizeKey(s); }
 
 /**
  * Normaliza un nombre/tipo de producto a un slug conocido del catálogo.
@@ -230,15 +239,13 @@ function normalizarProducto(nombreProducto = '', tipoProducto = '') {
  * @returns {object|null} Producto del catálogo o null
  */
 function resolverProducto(meta = {}, lineItems = []) {
-  const metaPrice = _norm(meta.price_id || meta.priceId);
+  const metaPrice = (meta.price_id || meta.priceId || '').toString().trim().toLowerCase();
   if (metaPrice && INDEX_BY_PRICE[metaPrice]) {
     return PRODUCTOS[INDEX_BY_PRICE[metaPrice]];
   }
 
   // Intento por line items (si Stripe nos los pasó)
-  const liPrice = _norm(
-    (lineItems[0] && (lineItems[0].price?.id || lineItems[0].price_id || lineItems[0].priceId)) || ''
-  );
+  const liPrice = ((lineItems[0] && (lineItems[0].price?.id || lineItems[0].price_id)) || '').toLowerCase();
   if (liPrice && INDEX_BY_PRICE[liPrice]) {
     return PRODUCTOS[INDEX_BY_PRICE[liPrice]];
   }

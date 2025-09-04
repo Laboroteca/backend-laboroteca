@@ -30,8 +30,9 @@ const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 const {
   resolverProducto,
   normalizarProducto,
-  getMemberpressId
-} = require('../../utils/productos');
+  getMemberpressId,
+  PRODUCTOS
+  } = require('../../utils/productos');
 
 // Google Sheets (IDs/pestañas)
 const SHEET_ID_REGALOS   = '1MjxXebR3oQIyu0bYeRWo83xj1sBFnDcx53HvRRBiGE'; // Libros GRATIS
@@ -214,6 +215,16 @@ module.exports = async function canjearCodigoRegalo({
     }
   }
 
+  // Resolver producto a partir de slug/alias → para nombre público y MP ID
+  let prodResolved = PRODUCTOS[libroNorm] || resolverProducto({
+    tipoProducto: 'libro',
+    nombreProducto: libroNorm,
+    descripcionProducto: libroNorm
+  });
+  const libroDisplay =
+    (prodResolved && prodResolved.nombre) ||
+    libroNorm.replace(/^libro[-_]/i, '').replace(/[-_]+/g, ' ').trim();
+
   /* 2) Bloqueo (idempotencia real) */
   await withRetries(reqId, 'canjeRef.create', async () => {
     try {
@@ -221,7 +232,8 @@ module.exports = async function canjearCodigoRegalo({
         nombre,
         apellidos,
         email: emailNorm,
-        libro: libroNorm,
+        libro: libroDisplay,          // nombre legible
+        libro_slug: prodResolved?.slug || libroNorm, // guardamos también el slug
         motivo: esRegalo ? 'REGALO' : 'ENTRADA',
         fecha: tsHuman,
         activado: false
@@ -251,7 +263,7 @@ module.exports = async function canjearCodigoRegalo({
         spreadsheetId: SHEET_ID_REGALOS,
         range: `'${SHEET_NAME_REGALOS}'!A2:G`,
         valueInputOption: 'USER_ENTERED',
-        requestBody: { values: [[ nombre, apellidos, emailNorm, tsHuman, libroNorm, esRegalo ? 'REGALO' : 'ENTRADA', codigoNorm ]] }
+        requestBody: { values: [[ nombre, apellidos, emailNorm, tsHuman, libroDisplay, esRegalo ? 'REGALO' : 'ENTRADA', codigoNorm ]] }
       });
     } catch (e) {
       W(reqId, 'Registro en "Libros GRATIS" falló', { msg: e?.message });
@@ -275,12 +287,13 @@ module.exports = async function canjearCodigoRegalo({
       membershipId = Number(membershipIdOverride) || null;
     } else {
       // 2) Catálogo: intenta resolución completa por alias/nombre
-      const prod = resolverProducto({
+      const prod = prodResolved || resolverProducto({
         tipoProducto: 'libro',
         nombreProducto: libroNorm,
         descripcionProducto: libroNorm
       });
       if (prod) {
+        prodResolved = prod;
         slugResuelto = prod.slug;
         membershipId = Number(prod.memberpressId ?? prod.membership_id) || null;
       }
@@ -293,7 +306,7 @@ module.exports = async function canjearCodigoRegalo({
         }
       }
       // 4) Último fallback: reglas legacy (backcompat)
-      if (!membershipId) {
+      if (!membershipId) { // legacy
         const t = libroNorm.toLowerCase();
         if (t.includes('de cara a la jubilación')) membershipId = 7994;
         else if (t.includes('adelanta tu jubilación')) membershipId = 11006;
@@ -319,13 +332,13 @@ module.exports = async function canjearCodigoRegalo({
 
   /* 5) Auxiliares (no bloqueantes) */
   (async () => {
-    try { await registrarCanjeEnSheet({ nombre, apellidos, email: emailNorm, codigo: codigoNorm, libro: libroNorm }); }
+    try { await registrarCanjeEnSheet({ nombre, apellidos, email: emailNorm, codigo: codigoNorm, libro: libroDisplay }); }
     catch (e) { W(reqId, 'Registro auxiliar en hoja falló', { msg: e?.message });
       try {
         await alertAdmin({
           area: 'regalos.canje.sheets_aux_error',
           err: e,
-          meta: { reqId, email: emailNorm, codigo: codigoNorm, libro: libroNorm }
+          meta: { reqId, email: emailNorm, codigo: codigoNorm, libro: libroDisplay }
         });
       } catch (_) {}
     }
@@ -349,7 +362,7 @@ module.exports = async function canjearCodigoRegalo({
   /* 6) Email (no bloquea) */
   (async () => {
     try {
-      const r = await enviarEmailCanjeLibro({ toEmail: emailNorm, nombre, apellidos, libroElegido: libroNorm });
+      const r = await enviarEmailCanjeLibro({ toEmail: emailNorm, nombre, apellidos, libroElegido: libroDisplay });
       if (!r?.ok) W(reqId, 'Email de confirmación falló', { detalle: r?.error || '(sin detalle)' });
     } catch (e) { W(reqId, 'Excepción enviando email', { msg: e?.message }); }
   })();

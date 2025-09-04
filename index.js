@@ -774,9 +774,11 @@ app.post(
                     : (Number(productoResuelto?.precio_cents) || 0);
   if (candidatePriceId.startsWith('price_')) {
     try {
-      const pr = await stripe.prices.retrieve(candidatePriceId);
-      // Solo permitimos price_id activos y NO recurrentes para pagos únicos
-      usarPriceId = !!(pr && pr.id && pr.active && !pr.recurring);
+      // expandimos product para saber si ya tiene imagen en Stripe
+      const pr = await stripe.prices.retrieve(candidatePriceId, { expand: ['product'] });
+      const productHasImage = Array.isArray(pr?.product?.images) && pr.product.images.length > 0;
+      // Solo usamos price si está activo, no recurrente **y** tiene imagen propia
+      usarPriceId = !!(pr && pr.id && pr.active && !pr.recurring && productHasImage);
       if (!usarPriceId) {
         console.warn('⚠️ price_id no válido para pago único:', candidatePriceId, { active: pr?.active, recurring: !!pr?.recurring });
         if (typeof pr?.unit_amount === 'number') amountCents = pr.unit_amount; // respeta importe configurado si existe

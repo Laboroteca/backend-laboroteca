@@ -33,8 +33,8 @@ const PRODUCTOS = {
   // ─────────────────────────────────────────────────────────────────────────────
   'de-cara-a-la-jubilacion': {
     slug: 'de-cara-a-la-jubilacion',
-    nombre: 'Libro digital con acceso vitalicio. De cara a la jubilación',
-    descripcion: 'Libro digital con acceso vitalicio. De cara a la jubilación',
+    nombre: 'Libro digital. De cara a la jubilación.',
+    descripcion: 'De cara a la jubilación. Libro digital con acceso vitalicio.',
     tipo: 'libro',
     es_recurrente: false,
     activar_membresia: true,
@@ -66,7 +66,7 @@ const PRODUCTOS = {
   // ─────────────────────────────────────────────────────────────────────────────
   'adelanta-tu-jubilacion': {
     slug: 'adelanta-tu-jubilacion',
-    nombre: 'Adelanta tu jubilación',
+    nombre: 'Libro digital. Adelanta tu jubilación',
     descripcion: 'Libro digital con acceso vitalicio. Adelanta tu jubilación',
     tipo: 'libro',
     es_recurrente: false,

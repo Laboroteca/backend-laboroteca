@@ -1,12 +1,14 @@
 // regalos/services/enviarEmailCanjeLibro.js
 /**
  * Envía email de confirmación del canje (PRE-/REG-) usando SMTP2GO API.
- * No añade dependencias. Node 18+ (fetch nativo).
+ * Sin dependencias externas. Node 18+ (fetch nativo).
  *
- * Variables de entorno admitidas (prueba en este orden):
+ * Variables de entorno admitidas (por orden):
  *   API KEY:   SMTP2GO_API_KEY | SMTP2GO_KEY | SMTP_API_KEY | SMTP2GO_TOKEN
  *   SENDER:    SMTP2GO_SENDER  | SMTP_SENDER | EMAIL_SENDER | SMTP_FROM | FROM_EMAIL
  */
+
+'use strict';
 
 const SMTP2GO_ENDPOINT = 'https://api.smtp2go.com/v3/email/send';
 const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
@@ -32,15 +34,16 @@ También puede presentar una reclamación ante la autoridad de control competent
 Más información: https://www.laboroteca.es/politica-de-privacidad/
 `.trim();
 
-
 function construirHTML({ nombreMostrar, libroElegido }) {
   const miCuentaURL = 'https://www.laboroteca.es/mi-cuenta/';
   const clubURL = 'https://www.laboroteca.es/club-laboroteca/';
   return `
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.5;color:#111;">
-      <h2 style="margin:0 0 12px;">¡Enhorabuena${nombreMostrar ? ', ' + nombreMostrar : ''}!</h2>
+      <p style="margin:0 0 12px;font-size:16px;font-weight:600;">
+        ¡Enhorabuena${nombreMostrar ? ', ' + nombreMostrar : ''}!
+      </p>
       <p style="margin:0 0 12px;">
-        Tu código ha sido canjeado por el libro <strong>${libroElegido}</strong>.
+        Tu código ha sido canjeado <strong>${libroElegido ? `(${libroElegido})` : ''}</strong>.
       </p>
       <p style="margin:0 0 16px;">
         Siempre tendrás acceso a la versión más actualizada desde
@@ -59,7 +62,7 @@ function construirHTML({ nombreMostrar, libroElegido }) {
       </div>
 
       <p style="margin:16px 0 0;">Atte.,</p>
-      <p style="margin:4px 0 0;"><strong>Ignacio Solsona</strong>. Abogado</p>
+      <p style="margin:4px 0 0;"><strong>Ignacio Solsona</strong><br/>Abogado</p>
     </div>
   `;
 }
@@ -70,17 +73,42 @@ function construirTextoPlano({ nombreMostrar, libroElegido }) {
   return [
     `¡Enhorabuena${nombreMostrar ? ', ' + nombreMostrar : ''}!`,
     ``,
-    `Tu código ha sido canjeado por el libro: ${libroElegido}.`,
+    `Tu código ha sido canjeado${libroElegido ? ` (${libroElegido})` : ''}.`,
     `Acceso siempre actualizado: ${miCuentaURL}`,
     ``,
     `Recuerda: puedes suscribirte al Club Laboroteca (vídeos, podcast, artículos, novedades, sentencias y modelos).`,
     `Más información: ${clubURL}`,
     ``,
-    `Atte. Ignacio Solsona. Abogado`,
+    `Atte.`,
+    `Ignacio Solsona`,
+    `Abogado`
   ].join('\n');
 }
 
-async function enviarEmailCanjeLibro({ toEmail, nombre = '', apellidos = '', libroElegido, sessionId = '' }) {
+/**
+ * Envía el email de canje.
+ *
+ * @param {Object} params
+ * @param {string} params.toEmail           - Email del destinatario (obligatorio)
+ * @param {string} [params.nombre]          - Nombre (factura, fallback)
+ * @param {string} [params.apellidos]       - Apellidos (factura, fallback)
+ * @param {string} [params.libroElegido]    - Nombre del libro (opcional: para mostrar entre paréntesis)
+ * @param {string} [params.sessionId]       - ID de sesión/log
+ * @param {string} [params.wpUsername]      - user_login de WP (preferente para saludo)
+ * @param {string} [params.userAlias]       - alias de usuario (preferente para saludo)
+ * @param {string} [params.displayName]     - display_name de WP (preferente para saludo)
+ * @returns {Promise<{ok:boolean,id?:string,error?:string}>}
+ */
+async function enviarEmailCanjeLibro({
+  toEmail,
+  nombre = '',
+  apellidos = '',
+  libroElegido,
+  sessionId = '',
+  wpUsername = '',
+  userAlias = '',
+  displayName = ''
+}) {
   const apiKey = process.env.SMTP2GO_API_KEY
               || process.env.SMTP2GO_KEY
               || process.env.SMTP_API_KEY
@@ -104,12 +132,20 @@ async function enviarEmailCanjeLibro({ toEmail, nombre = '', apellidos = '', lib
     } catch (_) {}
     return { ok: false, error: 'SMTP2GO_API_KEY missing' };
   }
-  if (!toEmail || !libroElegido) {
-    return { ok: false, error: 'Parámetros insuficientes (toEmail/libroElegido)' };
+  if (!toEmail) {
+    return { ok: false, error: 'Parámetros insuficientes (toEmail)' };
   }
 
-  const nombreMostrar = [nombre, apellidos].filter(Boolean).join(' ').trim();
-  const subject = `✅ Código canjeado: ${libroElegido}`;
+  // Nombre a mostrar en el saludo (prioriza WP)
+  const pick = v => (String(v || '').trim());
+  const nombreMostrar =
+    pick(userAlias) ||
+    pick(wpUsername) ||
+    pick(displayName) ||
+    pick([nombre, apellidos].filter(Boolean).join(' ')) ||
+    (toEmail ? String(toEmail).split('@')[0] : '');
+
+  const subject = `✅ Código canjeado${libroElegido ? `: ${libroElegido}` : ''}`;
 
   // Cuerpos + pie RGPD (HTML y texto)
   const html_body = construirHTML({ nombreMostrar, libroElegido }) + '\n' + PIE_HTML;
@@ -145,7 +181,7 @@ async function enviarEmailCanjeLibro({ toEmail, nombre = '', apellidos = '', lib
           err: new Error(`SMTP2GO status ${res.status}`),
           meta: {
             toEmail,
-            libro: libroElegido,
+            libro: libroElegido || null,
             subject,
             status: res.status,
             succeeded: data?.data?.succeeded ?? null
@@ -164,7 +200,7 @@ async function enviarEmailCanjeLibro({ toEmail, nombre = '', apellidos = '', lib
       await alertAdmin({
         area: 'regalos.email.smtp_exception',
         err,
-        meta: { toEmail, libro: libroElegido, subject }
+        meta: { toEmail, libro: libroElegido || null, subject }
       });
     } catch (_) {}
     return { ok: false, error: String(err?.message || err) };

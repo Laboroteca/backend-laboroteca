@@ -26,6 +26,12 @@ const { activarMembresiaEnMemberPress } = require('./memberpress');
 const { enviarEmailCanjeLibro } = require('./enviarEmailCanjeLibro');
 const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 
+// ✅ Catálogo unificado: resolvemos libros y su MemberPress ID desde aquí
+const {
+  resolverProducto,
+  normalizarProducto,
+  getMemberpressId
+} = require('../../utils/productos');
 
 // Google Sheets (IDs/pestañas)
 const SHEET_ID_REGALOS   = '1MjxXebR3oQIyu0bYeRWo83xj1sBFnDcx53HvRRBiGE'; // Libros GRATIS
@@ -262,20 +268,43 @@ module.exports = async function canjearCodigoRegalo({
   /* 4) Activación MemberPress */
   try {
     let membershipId = null;
+    let slugResuelto = null;
+
+    // 1) Si viene override explícito, gana
     if (membershipIdOverride) {
       membershipId = Number(membershipIdOverride) || null;
     } else {
-      const t = libroNorm.toLowerCase();
-      if (t.includes('de cara a la jubilación')) membershipId = 7994;
-      else if (t.includes('adelanta tu jubilación')) membershipId = 11006;
-      else if (t.includes('jubilación anticipada') || t.includes('jubilación parcial')) membershipId = 11006;
+      // 2) Catálogo: intenta resolución completa por alias/nombre
+      const prod = resolverProducto({
+        tipoProducto: 'libro',
+        nombreProducto: libroNorm,
+        descripcionProducto: libroNorm
+      });
+      if (prod) {
+        slugResuelto = prod.slug;
+        membershipId = Number(prod.memberpressId ?? prod.membership_id) || null;
+      }
+      // 3) Segundo intento: normalizador directo → slug → memberpressId
+      if (!membershipId) {
+        const slugGuess = normalizarProducto(libroNorm, 'libro');
+        if (slugGuess) {
+          slugResuelto = slugGuess;
+          membershipId = Number(getMemberpressId(slugGuess)) || null;
+        }
+      }
+      // 4) Último fallback: reglas legacy (backcompat)
+      if (!membershipId) {
+        const t = libroNorm.toLowerCase();
+        if (t.includes('de cara a la jubilación')) membershipId = 7994;
+        else if (t.includes('adelanta tu jubilación')) membershipId = 11006;
+      }
     }
 
     if (!membershipId) throw new Error(`No se reconoce el libro para activar membresía: ${libroNorm}`);
 
     await activarMembresiaEnMemberPress(emailNorm, membershipId);
-    await canjeRef.update({ activado: true, membershipId });
-    L(reqId, 'MemberPress activado', { membershipId });
+    await canjeRef.update({ activado: true, membershipId, slug: slugResuelto || null });
+    L(reqId, 'MemberPress activado', { membershipId, slug: slugResuelto || undefined });
   } catch (err) {
     // No tiramos el canje: queda bloqueado y podremos activar manualmente
     E(reqId, 'Activación MP falló (canje bloqueado)', err);

@@ -542,10 +542,9 @@ const marketingLimiter = rateLimit({
 app.use('/api', registrarConsentimiento);
 console.log('📌 Ruta de consentimientos montada en /api/registrar-consentimiento');
 
-// NUEVO: rutas de riesgo (/risk/login-ok, /risk/download, /risk/status)
-app.use('/risk', riskLimiter);   // aplica RL solo a /risk/*
-app.use(riskEvents);             // el router ya publica rutas absolutas /risk/…
-console.log('📌 Rutas de riesgo montadas: /risk/login-ok, /risk/download, /risk/status');
+// NUEVO: rutas de riesgo (montadas bajo /risk)
+app.use('/risk', riskLimiter, riskEvents); // RL + router (endpoints: /risk/login-ok, /risk/close-all, /risk/ping)
+console.log('📌 Rutas de riesgo montadas en /risk (login-ok, close-all, ping)');
 
 // 📩 Newsletter / Marketing (consent + unsubscribe)
 app.use('/marketing', marketingLimiter, marketingConsent);

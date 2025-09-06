@@ -1,152 +1,109 @@
 /**
- * File: routes/risk-events.js
- * Purpose: Endpoints de señales de riesgo (WP ↔ Node)
- *
- * Routes:
- *   POST /risk/login-ok   — Evento de login correcto (requiere HMAC WP→Node)
- *   POST /risk/download   — Evento de descarga (requiere HMAC WP→Node)
- *   GET  /risk/status     — Diagnóstico de riesgo actual (solo lectura; sin HMAC)
- *
- * Env esperadas:
- *   RISK_HMAC_SECRET   → secreto compartido para HMAC (debe = LAB_RISK_HMAC_SECRET en WP)
- *   LAB_DEBUG          → si '1', imprime logs detallados
+ * Archivo: risk/risk-events.js
+ * Rutas:
+ *   POST /risk/login-ok    ← WP informa "login correcto" (requiere HMAC)
+ *   POST /risk/close-all   ← Node ordena a WP cerrar todas las sesiones (requiere HMAC interna hacia WP)
+ *   GET  /risk/ping        ← prueba rápida (sin HMAC)
  */
 
 const express = require('express');
+const crypto  = require('crypto');
+const fetch   = require('node-fetch');
+
 const router = express.Router();
 
-const crypto = require('crypto');
-const LAB_DEBUG = (process.env.LAB_DEBUG === '1' || process.env.DEBUG === '1');
-const SKEW_SECS = Number(process.env.RISK_TS_SKEW_SECS || 300); // 5 min por defecto
-
-// Utilidades de negocio (debes tener estos helpers)
-const {
-  recordLoginOK,
-  recordDownload,
-  computeAndEnforce
-} = require('../utils/riskSignals');
-
-// ───────────────────────── helpers ─────────────────────────
-function ipFrom(req) {
-  return String(req.headers['x-forwarded-for'] || req.ip || '')
-    .toString()
-    .split(',')[0]
-    .trim();
-}
-
-function safeTSE(a, b) {
-  const ba = Buffer.from(String(a) || '', 'utf8');
-  const bb = Buffer.from(String(b) || '', 'utf8');
-  if (ba.length !== bb.length) return false;
-  try { return crypto.timingSafeEqual(ba, bb); } catch { return false; }
-}
-
-// ───────────── middleware HMAC (WP -> Node) ─────────────
+// ───────────────────────────────────────────────────────────
+// Middleware HMAC (WP -> Node). Evita 500 y da errores claros.
+// Firma esperada: HMAC_SHA256( secret, `${userId}.${ts}` )
+// Headers: X-Risk-Ts, X-Risk-Sig
+// ───────────────────────────────────────────────────────────
 function requireRiskHmac(req, res, next) {
+  const debug  = (process.env.LAB_DEBUG === '1' || process.env.DEBUG === '1');
   const secret = process.env.RISK_HMAC_SECRET || '';
-  if (!secret) {
-    if (LAB_DEBUG) console.warn('[RISK HMAC] ❌ FALTA RISK_HMAC_SECRET en servidor');
-    return res.status(500).json({ ok: false, error: 'server_missing_hmac_secret' });
+
+  if (!secret) return res.status(500).json({ ok:false, error:'server_missing_hmac_secret' });
+
+  const ts   = String(req.header('X-Risk-Ts')  || '');
+  const sig  = String(req.header('X-Risk-Sig') || '');
+  const uid  = String((req.body && req.body.userId) || req.query.userId || '');
+
+  if (!ts || !sig || !uid) return res.status(401).json({ ok:false, error:'bad_hmac_params' });
+
+  // Tolerancia de reloj ±5 min
+  const skewOk = Math.abs(Math.floor(Date.now()/1000) - Number(ts)) <= 300;
+  if (!skewOk) return res.status(403).json({ ok:false, error:'stale_ts' });
+
+  // Calcula la firma y comprueba longitud antes de timingSafeEqual
+  const calc = crypto.createHmac('sha256', secret).update(`${uid}.${ts}`).digest('hex');
+  if (sig.length !== calc.length) {
+    if (debug) console.warn('[RISK HMAC] length mismatch', { got: sig.length, exp: calc.length });
+    return res.status(403).json({ ok:false, error:'bad_hmac_len' });
   }
 
-  const ts  = String(req.header('X-Risk-Ts') || '');
-  const sig = String(req.header('X-Risk-Sig') || '');
-  const uid = String((req.body && req.body.userId) || req.query.userId || '');
-  const ua  = String(req.headers['user-agent'] || '').slice(0, 120);
-  const ip  = ipFrom(req);
+  const ok = crypto.timingSafeEqual(Buffer.from(calc, 'utf8'), Buffer.from(sig, 'utf8'));
+  if (!ok) return res.status(403).json({ ok:false, error:'bad_hmac' });
 
-  if (LAB_DEBUG) {
-    console.log('[RISK HMAC IN]', {
-      path: req.path, uid, ts, ip, ua, sig10: sig.slice(0, 10)
-    });
-  }
-
-  if (!ts || !sig || !uid) {
-    if (LAB_DEBUG) console.warn('[RISK HMAC] ❌ Parámetros faltantes', { hasTs: !!ts, hasSig: !!sig, hasUid: !!uid });
-    return res.status(401).json({ ok: false, error: 'bad_hmac_params' });
-  }
-
-  const calc = crypto.createHmac('sha256', secret).update(uid + '.' + ts).digest('hex');
-
-  if (!safeTSE(calc, sig)) {
-    if (LAB_DEBUG) console.warn('[RISK HMAC] ❌ Mismatch', { expect10: calc.slice(0, 10), got10: sig.slice(0, 10) });
-    return res.status(403).json({ ok: false, error: 'bad_hmac' });
-  }
-
-  const skew = Math.abs((Date.now() / 1000) - Number(ts));
-  if (skew > SKEW_SECS) {
-    if (LAB_DEBUG) console.warn('[RISK HMAC] ❌ stale_ts', { skew_sec: Math.round(skew), limit: SKEW_SECS });
-    return res.status(403).json({ ok: false, error: 'stale_ts' });
-  }
-
-  // Marca visible para depurar desde cliente (recuerda exponerla en CORS: exposedHeaders)
-  res.setHeader('X-HMAC-Checked', '1');
-  if (LAB_DEBUG) console.log('[RISK HMAC] ✅ OK', { path: req.path, uid });
+  // marca para CORS/debug
+  res.set('X-HMAC-Checked', '1');
+  if (debug) console.log('[RISK HMAC OK]', { uid, ts });
 
   next();
 }
 
-// ───────────────────────── routes ─────────────────────────
-
-// Evento de login correcto (WP → Node, con HMAC)
-router.post('/risk/login-ok', requireRiskHmac, async (req, res) => {
+// ───────────────────────────────────────────────────────────
+// POST /risk/login-ok
+// Guarda/actualiza señales y, si procede, dispara cierre remoto.
+// Aquí solo devolvemos ok: true para tu prueba; integra tu lógica.
+// ───────────────────────────────────────────────────────────
+router.post('/login-ok', requireRiskHmac, async (req, res) => {
   try {
-    const { userId, email, ua, geo } = req.body || {};
-    const payload = {
-      userId: String(userId || ''),
-      email: (email || '').toLowerCase(),
-      ip: ipFrom(req),
-      ua: ua || req.headers['user-agent'] || '',
-      geo: geo || {}
-    };
+    const { userId, email } = req.body || {};
+    const debug = (process.env.LAB_DEBUG === '1' || process.env.DEBUG === '1');
 
-    const r = await recordLoginOK(payload);
-    // Compute & enforce puede cerrar sesiones si toca (opcionalmente lo llamas aquí o via cron)
-    try { await computeAndEnforce({ userId: payload.userId }); } catch (e) { if (LAB_DEBUG) console.warn('[risk] computeAndEnforce warn:', e?.message || e); }
+    if (debug) console.log('🟢 /risk/login-ok', { userId, email });
 
-    return res.json({ ok: true, ...r });
+    // TODO: aquí tu lógica de señales/riesgo…
+    // await saveRiskSignal(userId, req);
+
+    return res.json({ ok: true, userId, email });
   } catch (e) {
-    if (LAB_DEBUG) console.error('[/risk/login-ok] error:', e?.message || e);
-    return res.status(500).json({ ok: false, error: e?.message || 'internal_error' });
+    console.error('❌ /risk/login-ok error:', e?.message || e);
+    return res.status(500).json({ ok:false, error:'internal' });
   }
 });
 
-// Evento de descarga (WP → Node, con HMAC)
-router.post('/risk/download', requireRiskHmac, async (req, res) => {
+// ───────────────────────────────────────────────────────────
+// POST /risk/close-all  (Node → WP)
+// Requiere: WP_RISK_ENDPOINT y WP_RISK_SECRET en el entorno de Node
+// ───────────────────────────────────────────────────────────
+router.post('/close-all', async (req, res) => {
   try {
-    const { userId, email, ua } = req.body || {};
-    const payload = {
-      userId: String(userId || ''),
-      email: (email || '').toLowerCase(),
-      ip: ipFrom(req),
-      ua: ua || req.headers['user-agent'] || ''
-    };
+    const userId = Number(req.body?.userId || req.query?.userId || 0);
+    if (!userId) return res.status(400).json({ ok:false, error:'missing_userId' });
 
-    const r = await recordDownload(payload);
-    // Puedes evaluar riesgo aquí también si quieres respuesta inmediata
-    try { await computeAndEnforce({ userId: payload.userId }); } catch (e) { if (LAB_DEBUG) console.warn('[risk] computeAndEnforce warn:', e?.message || e); }
+    const endpoint = String(process.env.WP_RISK_ENDPOINT || '').trim();
+    const secret   = String(process.env.WP_RISK_SECRET   || '').trim();
+    if (!endpoint || !secret) return res.status(500).json({ ok:false, error:'wp_risk_not_configured' });
 
-    return res.json({ ok: true, ...r });
+    const ts  = Math.floor(Date.now()/1000);
+    const sig = crypto.createHmac('sha256', secret).update(`${userId}.${ts}`).digest('hex');
+
+    const r = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'content-type':'application/json' },
+      body: JSON.stringify({ userId, ts, sig })
+    });
+    const text = await r.text();
+    let data; try { data = JSON.parse(text); } catch { data = { _raw:text }; }
+
+    return res.status(r.status).json({ ok: r.ok, wp: data });
   } catch (e) {
-    if (LAB_DEBUG) console.error('[/risk/download] error:', e?.message || e);
-    return res.status(500).json({ ok: false, error: e?.message || 'internal_error' });
+    console.error('❌ /risk/close-all error:', e?.message || e);
+    return res.status(500).json({ ok:false, error:'internal' });
   }
 });
 
-// Diagnóstico de riesgo (solo lectura; útil para soporte / pruebas)
-router.get('/risk/status', async (req, res) => {
-  try {
-    const userId = String(req.query.userId || '').trim();
-    if (!userId) return res.status(400).json({ ok: false, error: 'userId_required' });
-
-    const r = await computeAndEnforce({ userId, dryRun: true }); // no aplicar medidas, solo calcular
-    // Para que el cliente pueda distinguir que no hubo HMAC en esta ruta:
-    res.setHeader('X-HMAC-Checked', '0');
-    return res.json({ ok: true, ...r });
-  } catch (e) {
-    if (LAB_DEBUG) console.error('[/risk/status] error:', e?.message || e);
-    return res.status(500).json({ ok: false, error: e?.message || 'internal_error' });
-  }
-});
+// Ping
+router.get('/ping', (_req, res) => res.json({ ok:true, pong:true }));
 
 module.exports = router;

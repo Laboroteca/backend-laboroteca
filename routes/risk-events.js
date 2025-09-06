@@ -10,7 +10,8 @@
  *   WP_RISK_ENDPOINT, WP_RISK_SECRET
  *   WP_RISK_REQUIRE_RESET (opcional, para forzar cambio de contraseña)
  *   RISK_AUTO_ENFORCE=1   (aplica acciones automáticamente si risk.level === 'high')
- *   RISK_IPS_24H=8, RISK_UAS_24H=6, RISK_LOGINS_15M=10, RISK_GEO_KMH_MAX=500
+ *   RISK_IPS_24H, RISK_UAS_24H, RISK_LOGINS_15M, RISK_GEO_KMH_MAX (umbralización en utils/riskDecider)
+ *   PUBLIC_SITE_URL (opcional, para link de “Olvidé mi contraseña” al usuario)
  */
 
 'use strict';
@@ -26,6 +27,7 @@ const router = express.Router();
 const LAB_DEBUG         = (process.env.LAB_DEBUG === '1' || process.env.DEBUG === '1');
 const RISK_HMAC_SECRET  = String(process.env.RISK_HMAC_SECRET || '').trim();
 const RISK_AUTO_ENFORCE = (process.env.RISK_AUTO_ENFORCE === '1');
+const PUBLIC_SITE_URL   = (process.env.PUBLIC_SITE_URL || 'https://www.laboroteca.es').replace(/\/+$/,'');
 
 /* ──────────────────────────────────────────────────────────
  * Utils
@@ -38,7 +40,7 @@ function requireJson(req, res, next) {
   next();
 }
 
-/** HMAC WP → Node: HMAC_SHA256(secret, `${userId}.${ts}`) */
+/** HMAC WP → Node: HMAC_SHA256(secret, `${userId}.${ts}`)  (headers: X-Risk-Ts, X-Risk-Sig) */
 function requireRiskHmac(req, res, next) {
   if (!RISK_HMAC_SECRET) {
     return res.status(500).json({ ok:false, error:'server_missing_hmac_secret' });
@@ -70,7 +72,9 @@ function requireRiskHmac(req, res, next) {
 
 /**
  * Enforce robusto en WP (cierre + reset) con reintentos y backoff.
- * Considera éxito solo con 2xx; 423/401/etc. se reintentan hasta agotar.
+ * Considera éxito si:
+ *  - status 2xx  (r.ok === true)
+ *  - status 423  (tratamos como “ya aplicado / bloqueado”)
  */
 async function enforceRiskActions({ userId, email }) {
   const maxRetries = 3;
@@ -80,8 +84,11 @@ async function enforceRiskActions({ userId, email }) {
     let last = { ok:false, status:0, data:{ error:'no_call' } };
     for (let i = 0; i <= maxRetries; i++) {
       last = await fn();
-      const ok2xx = last && last.ok === true;        // utils/riskActions devuelve ok = r.ok (2xx)
-      if (ok2xx) return { ok:true, status:last.status, data:last.data, tries:i+1 };
+      const ok2xx = last && last.ok === true;
+      const ok423 = Number(last?.status) === 423; // p.ej. WP responde 423 cuando ya está forzado/bloqueado
+      if (ok2xx || ok423) {
+        return { ok:true, status:last.status, data:last.data, tries:i+1 };
+      }
       const delay = Math.floor(Math.pow(2, i) * baseDelayMs);
       if (LAB_DEBUG) console.warn(`[risk enforce] ${label} intento ${i+1} falló status=${last?.status}. Reintentando en ${delay}ms…`);
       await new Promise(r => setTimeout(r, delay));
@@ -92,7 +99,6 @@ async function enforceRiskActions({ userId, email }) {
   const closeRes = await retry(() => closeAllSessions(userId, email), 'closeAllSessions');
   const resetRes = await retry(() => requirePasswordReset(userId, email), 'requirePasswordReset');
 
-  // log claro
   const summary = {
     closeAll: { ok: closeRes.ok, status: closeRes.status, tries: closeRes.tries, error: closeRes.data?.error || null },
     requireReset: { ok: resetRes.ok, status: resetRes.status, tries: resetRes.tries, error: resetRes.data?.error || null }
@@ -105,7 +111,7 @@ async function enforceRiskActions({ userId, email }) {
   return summary;
 }
 
-/** Email al admin en español (asunto claro + métricas) */
+/** Email al admin en español (asunto claro + métricas + acciones) */
 async function notifyAdminES({ userId, email, risk }) {
   const entorno = process.env.NODE_ENV || 'unknown';
   const subject = `🚨 Riesgo ALTO: posible compartición de credenciales · userId=${userId}`;
@@ -127,8 +133,8 @@ Muestras:
 - UAs: ${risk.samples.uas.map(x => `${x.ua.slice(0,80)}…(${x.n})`).join(', ')}
 
 Acciones aplicadas automáticamente:
-- Cierre de sesiones: sí
-- Forzar cambio de contraseña: sí
+- Cierre de sesiones (WordPress)
+- Forzar cambio de contraseña
 
 Entorno: ${entorno}`;
 
@@ -148,15 +154,14 @@ Entorno: ${entorno}`;
 <p><strong>UAs:</strong> ${risk.samples.uas.map(x => `${x.ua.slice(0,120)}…(${x.n})`).join(', ')}</p>
 <h3>Acciones aplicadas</h3>
 <ul>
-  <li>Cerrar todas las sesiones en WP: <strong>sí</strong></li>
-  <li>Forzar cambio de contraseña: <strong>sí</strong></li>
+  <li>Cerrar todas las sesiones en WP</li>
+  <li>Forzar cambio de contraseña</li>
 </ul>
 <p style="color:#888">Entorno: ${entorno}</p>`;
 
-  // Pasa subject/text/html a tu proxy (ajústalo si antes ignoraba estos campos).
   await alertAdmin({
     area: 'risk_high',
-    email: email || '-',
+    email: email || '-',         // se usa solo como referencia; el proxy decide destinatarios
     subject,
     text: textoPlano,
     html,
@@ -165,6 +170,38 @@ Entorno: ${entorno}`;
   });
 
   if (LAB_DEBUG) console.log('[ALERT SENT ES]', subject);
+}
+
+/** Email al usuario (español) para que cambie la contraseña */
+async function notifyUserES({ email }) {
+  if (!email || !email.includes('@')) return;
+  const resetUrl = `${PUBLIC_SITE_URL}/wp-login.php?action=lostpassword`;
+  const subject  = 'Seguridad de tu cuenta: es necesario cambiar la contraseña';
+  const textoPlano =
+`Hemos detectado actividad inusual en tu cuenta (accesos desde varios dispositivos o ubicaciones).
+Por seguridad, hemos cerrado todas las sesiones activas y debes cambiar tu contraseña para volver a acceder.
+
+Cambia tu contraseña aquí:
+${resetUrl}
+
+Si no has sido tú, por favor responde a este email.`;
+  const html =
+`<p>Hemos detectado <strong>actividad inusual</strong> en tu cuenta (accesos desde varios dispositivos o ubicaciones).</p>
+<p>Por seguridad, hemos cerrado todas las sesiones activas y <strong>debes cambiar tu contraseña</strong> para volver a acceder.</p>
+<p><a href="${resetUrl}" target="_blank" rel="noopener noreferrer">Cambiar mi contraseña</a></p>
+<p>Si no has sido tú, responde a este email.</p>`;
+
+  // Usamos el mismo proxy; si admite “to” úsalo; si no, muchos setups envían a `email`.
+  await alertAdmin({
+    area: 'risk_user_notice',
+    email,            // destinatario principal
+    subject,
+    text: textoPlano,
+    html,
+    err: new Error('risk_user_notice'),
+    meta: { resetUrl }
+  });
+  if (LAB_DEBUG) console.log('[USER NOTICE ES] →', email);
 }
 
 /* ──────────────────────────────────────────────────────────
@@ -200,8 +237,9 @@ router.post('/risk/login-ok', requireJson, requireRiskHmac, async (req, res) => 
         return null;
       });
 
-      // Aviso al admin en ES (con métricas y acciones)
+      // Avisos en ES
       try { await notifyAdminES({ userId, email, risk }); } catch (_) {}
+      try { await notifyUserES({ email }); } catch (_) {}
     }
 
     return res.json({ ok:true, userId, email, risk, enforce: enforceSummary });
@@ -220,13 +258,8 @@ router.post('/risk/close-all', requireJson, async (req, res) => {
     const email  = String(req.body?.email || '');
     if (!userId) return res.status(400).json({ ok:false, error:'missing_userId' });
 
-    // Forzamos cierre con los mismos reintentos que en auto-enforce
-    const summary = await (async () => {
-      const s = await enforceRiskActions({ userId, email });
-      return s;
-    })();
-
-    // Si realmente quieres solo el “close” aquí y no reset, puedes llamar a closeAllSessions directamente.
+    // Aplicamos el mismo flujo de enforce (close + reset)
+    const summary = await enforceRiskActions({ userId, email });
     const ok = !!(summary && summary.closeAll && summary.closeAll.ok);
     const status = ok ? 200 : 502;
     return res.status(status).json({ ok, enforce: summary });

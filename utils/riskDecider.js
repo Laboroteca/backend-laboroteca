@@ -1,20 +1,25 @@
 /**
  * Archivo: utils/riskDecider.js
  * Función: registrar eventos de login y decidir riesgo según umbrales.
- *  - Mantiene memoria 24h por usuario (en Map)
+ *  - Memoria 24h por usuario (en Map)
  *  - Umbrales por ENV (con defaults):
- *      RISK_IPS_24H=8
+ *      RISK_IPS_24H=5
  *      RISK_UAS_24H=6
  *      RISK_LOGINS_15M=10
- *      RISK_GEO_KMH_MAX=500
+ *  - Geovelocidad DESACTIVADA por defecto.
+ *      Actívala con: RISK_CHECK_GEO_KMH=1 y RISK_GEO_KMH_MAX>0
  */
 
 'use strict';
 
-const MAX_IPS_24     = Number(process.env.RISK_IPS_24H      || 8);
-const MAX_UA_24      = Number(process.env.RISK_UAS_24H      || 6);
-const MAX_LOGINS_15  = Number(process.env.RISK_LOGINS_15M   || 10);
-const MAX_GEO_KMH    = Number(process.env.RISK_GEO_KMH_MAX  || 500);
+const MAX_IPS_24     = Number(process.env.RISK_IPS_24H     || 5);
+const MAX_UA_24      = Number(process.env.RISK_UAS_24H     || 6);
+const MAX_LOGINS_15  = Number(process.env.RISK_LOGINS_15M  || 10);
+
+// Geovelocidad (off por defecto)
+const CHECK_GEO      = String(process.env.RISK_CHECK_GEO_KMH || '0') === '1';
+const MAX_GEO_KMH    = Number(process.env.RISK_GEO_KMH_MAX   || 0);
+
 const LAB_DEBUG      = (process.env.LAB_DEBUG === '1' || process.env.DEBUG === '1');
 
 const mem = new Map(); // mem[userId] = [{ t, ip, ua, lat, lon, country }]
@@ -60,10 +65,9 @@ function recordLogin(userId, ctx = {}) {
   const uaSet = new Set(trimmed.map(e => e.ua).filter(Boolean));
   const last15 = trimmed.filter(e => e.t >= (now - 15*60*1000)).length;
 
-  // geovelocidad si hay coordenadas consecutivas
+  // geovelocidad (OPCIONAL, desactivada por defecto)
   let geoKmh = 0;
-  if (lat !== undefined && lon !== undefined) {
-    // busca el evento previo con geodatos
+  if (CHECK_GEO && MAX_GEO_KMH > 0 && Number.isFinite(lat) && Number.isFinite(lon)) {
     for (let i = trimmed.length - 2; i >= 0; i--) {
       const prev = trimmed[i];
       if (Number.isFinite(prev.lat) && Number.isFinite(prev.lon)) {
@@ -80,13 +84,18 @@ function recordLogin(userId, ctx = {}) {
   if (ipSet.size > MAX_IPS_24)    reasons.push(`ips24=${ipSet.size}>${MAX_IPS_24}`);
   if (uaSet.size > MAX_UA_24)     reasons.push(`uas24=${uaSet.size}>${MAX_UA_24}`);
   if (last15 > MAX_LOGINS_15)     reasons.push(`logins15=${last15}>${MAX_LOGINS_15}`);
-  if (geoKmh > MAX_GEO_KMH)       reasons.push(`geo_kmh=${geoKmh.toFixed(0)}>${MAX_GEO_KMH}`);
+  if (CHECK_GEO && MAX_GEO_KMH > 0 && geoKmh > MAX_GEO_KMH) {
+    reasons.push(`geo_kmh=${geoKmh.toFixed(0)}>${MAX_GEO_KMH}`);
+  }
 
   // muestrario para alertas
-  const ipCounts = Object.entries(trimmed.reduce((acc, e)=>{ if(e.ip) acc[e.ip]=(acc[e.ip]||0)+1; return acc; }, {}))
-    .sort((a,b)=>b[1]-a[1]).slice(0,5);
-  const uaCounts = Object.entries(trimmed.reduce((acc, e)=>{ if(e.ua) acc[e.ua]=(acc[e.ua]||0)+1; return acc; }, {}))
-    .sort((a,b)=>b[1]-a[1]).slice(0,4);
+  const ipCounts = Object.entries(
+    trimmed.reduce((acc, e)=>{ if(e.ip) acc[e.ip]=(acc[e.ip]||0)+1; return acc; }, {})
+  ).sort((a,b)=>b[1]-a[1]).slice(0,5);
+
+  const uaCounts = Object.entries(
+    trimmed.reduce((acc, e)=>{ if(e.ua) acc[e.ua]=(acc[e.ua]||0)+1; return acc; }, {})
+  ).sort((a,b)=>b[1]-a[1]).slice(0,4);
 
   const result = {
     level: reasons.length ? 'high' : 'normal',
@@ -95,7 +104,7 @@ function recordLogin(userId, ctx = {}) {
       ip24: ipSet.size,
       ua24: uaSet.size,
       logins15: last15,
-      geoKmh: Number(geoKmh.toFixed(1))
+      geoKmh: Number(geoKmh.toFixed(1)) // seguirá en métricas aunque no se evalúe, para depurar
     },
     samples: {
       ips: ipCounts.map(([k,v])=>({ ip:k, n:v })),

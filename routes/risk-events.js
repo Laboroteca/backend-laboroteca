@@ -10,14 +10,13 @@
  *   WP_RISK_ENDPOINT, WP_RISK_SECRET
  *   WP_RISK_REQUIRE_RESET (opcional, para forzar cambio de contraseña)
  *   RISK_AUTO_ENFORCE=1   (aplica acciones automáticamente si risk.level === 'high')
- *   RISK_IPS_24H, RISK_UAS_24H, RISK_LOGINS_15M, RISK_GEO_KMH_MAX (umbrales en utils/riskDecider)
+ *   RISK_IPS_24H, RISK_UAS_24H, RISK_LOGINS_15M (umbrales en utils/riskDecider)
  *
- *   === Email (SMTP2GO / Nodemailer) ===
- *   SMTP_HOST=smtp.smtp2go.com
- *   SMTP_PORT=2525            (o 587 / 465)
- *   SMTP_USER=xxxxxxxx
- *   SMTP_PASS=xxxxxxxx
- *   SMTP_FROM="Laboroteca <laboroteca@laboroteca.es>"
+ *   === Email (SMTP2GO API HTTP) ===
+ *   SMTP2GO_API_KEY=xxxxxxxxxxxxxxxx
+ *   SMTP2GO_API_URL=https://api.smtp2go.com/v3/email/send
+ *   SMTP2GO_FROM_EMAIL=laboroteca@laboroteca.es
+ *   SMTP2GO_FROM_NAME=Laboroteca
  *   ADMIN_EMAIL=laboroteca@gmail.com
  *
  *   PUBLIC_SITE_URL=https://www.laboroteca.es
@@ -28,7 +27,7 @@
 
 const express = require('express');
 const crypto  = require('crypto');
-const nodemailer = require('nodemailer');
+const fetch   = require('node-fetch');
 
 const { recordLogin } = require('../utils/riskDecider');
 const { closeAllSessions, requirePasswordReset } = require('../utils/riskActions');
@@ -42,34 +41,52 @@ const RISK_AUTO_ENFORCE = (process.env.RISK_AUTO_ENFORCE === '1');
 const PUBLIC_SITE_URL = (process.env.PUBLIC_SITE_URL || 'https://www.laboroteca.es').replace(/\/+$/,'');
 const USER_RESET_URL  = (process.env.USER_RESET_URL  || `${PUBLIC_SITE_URL}/recuperar-contrasena`).replace(/\/+$/,'');
 
-const SMTP_HOST  = process.env.SMTP_HOST || 'smtp.smtp2go.com';
-const SMTP_PORT  = Number(process.env.SMTP_PORT || 2525);
-const SMTP_USER  = process.env.SMTP_USER || '';
-const SMTP_PASS  = process.env.SMTP_PASS || '';
-const SMTP_FROM  = process.env.SMTP_FROM || 'Laboroteca <laboroteca@laboroteca.es>';
-const ADMIN_EMAIL= process.env.ADMIN_EMAIL || 'laboroteca@gmail.com';
+const SMTP2GO_API_KEY    = String(process.env.SMTP2GO_API_KEY || '').trim();
+const SMTP2GO_API_URL    = String(process.env.SMTP2GO_API_URL || 'https://api.smtp2go.com/v3/email/send').trim();
+const SMTP2GO_FROM_EMAIL = String(process.env.SMTP2GO_FROM_EMAIL || 'laboroteca@laboroteca.es').trim();
+const SMTP2GO_FROM_NAME  = String(process.env.SMTP2GO_FROM_NAME  || 'Laboroteca').trim();
+const ADMIN_EMAIL        = process.env.ADMIN_EMAIL || 'laboroteca@gmail.com';
 
 /* ──────────────────────────────────────────────────────────
- * Mailer (Nodemailer con SMTP2GO)
+ * Mailer (SMTP2GO API HTTP)
  * ──────────────────────────────────────────────────────── */
-const mailer = (() => {
-  if (!SMTP_HOST || !SMTP_PORT || !SMTP_USER || !SMTP_PASS) {
-    console.warn('[mailer] ⚠️ SMTP no configurado: faltan variables de entorno');
-    return null;
-  }
-  const secure = SMTP_PORT === 465; // TLS implícito solo si 465
-  const transport = nodemailer.createTransport({
-    host: SMTP_HOST,
-    port: SMTP_PORT,
-    secure,
-    auth: { user: SMTP_USER, pass: SMTP_PASS },
-  });
-  return transport;
-})();
-
 async function sendMail({ to, subject, text, html }) {
-  if (!mailer) throw new Error('smtp_not_configured');
-  return mailer.sendMail({ from: SMTP_FROM, to, subject, text, html });
+  if (!SMTP2GO_API_KEY || !SMTP2GO_API_URL) {
+    throw new Error('smtp_not_configured');
+  }
+
+  const payload = {
+    api_key: SMTP2GO_API_KEY,
+    to: Array.isArray(to) ? to : [to],
+    sender: `${SMTP2GO_FROM_NAME} <${SMTP2GO_FROM_EMAIL}>`,
+    subject: subject || '',
+    // SMTP2GO v3 admite text_body y/o html_body:
+    ...(text ? { text_body: text } : {}),
+    ...(html ? { html_body: html } : {}),
+  };
+
+  const { default: AbortController } = require('abort-controller');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+
+  try {
+    const r = await fetch(SMTP2GO_API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json' },
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
+
+    const data = await r.json().catch(() => ({}));
+
+    if (r.ok && data?.data?.succeeded === 1) {
+      return { ok:true };
+    }
+    const errMsg = data?.data?.error || data?.error || JSON.stringify(data);
+    throw new Error(`smtp_send_failed: ${errMsg}`);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /* ──────────────────────────────────────────────────────────

@@ -40,6 +40,9 @@ console.log('🔒 LAB_ELIM_HMAC_SECRET presente:', !!process.env.LAB_ELIM_HMAC_S
 console.log('🧷 LAB_REQUIRE_HMAC activo:', REQUIRE_HMAC);
 console.log('🔑 PAGO_API_KEY presente:', !!PAGO_API_KEY);
 console.log('🔒 PAGO_HMAC_SECRET presente:', !!PAGO_HMAC_SECRET);
+console.log('🔒 RISK_HMAC_SECRET presente:', !!process.env.RISK_HMAC_SECRET);
+console.log('🔒 WP_RISK_ENDPOINT presente:', !!process.env.WP_RISK_ENDPOINT);
+console.log('🔒 WP_RISK_SECRET presente:', !!process.env.WP_RISK_SECRET);
 
 // Log seguro de MemberPress (sin exponer la clave)
 console.log('🛠 MemberPress config:');
@@ -73,6 +76,8 @@ const { eliminarUsuarioWordPress } = require('./services/eliminarUsuarioWordPres
 const procesarCompra = require('./services/procesarCompra');
 const { activarMembresiaClub } = require('./services/activarMembresiaClub');
 const { syncMemberpressClub } = require('./services/syncMemberpressClub');
+// ▶️ Rutas de señales de riesgo (WP ↔ Node con HMAC)
+const riskEvents = require('./routes/risk-events');
 // 🆕 Catálogo unificado (resolver + datos + imagen)
 const {
   PRODUCTOS,
@@ -125,6 +130,14 @@ const globalLimiter = rateLimit({
   legacyHeaders: false
 });
 app.use(globalLimiter);
+
+// 🔒 Rate limit específico para /risk (WP ↔ Node)
+const riskLimiter = rateLimit({
+  windowMs: Number(process.env.RISK_RL_WINDOW_MS || 60 * 1000), // 1 min
+  max: Number(process.env.RISK_RL_MAX || 60),                   // 60 req/min
+  standardHeaders: true,
+  legacyHeaders: false
+});
 
 // ── MW de cierre para pagos (POST + API KEY + HMAC opcional según flag global) ─────────────
 function enforcePost(req,res,next){
@@ -258,12 +271,15 @@ const corsOptions = {
     'x-lb-ts','x-lb-sig',
     // HMAC Baja Club (WP → Backend)
     'x-lab-ts','x-lab-sig','x-request-id',
+    // HMAC Riesgo (WP → Backend)
+    'x-risk-ts','x-risk-sig',
     // Cron key para /marketing/cron-send
     'x-cron-key',
     // auditoría opcional del bridge
     'x-bridge'
   ],
-  credentials: false // pon true solo si usas cookies/sesión
+  credentials: false, // pon true solo si usas cookies/sesión
+  exposedHeaders: ['X-HMAC-Checked'] // 👈 permite leer esta cabecera en el cliente
 };
 
 app.use(cors(corsOptions));
@@ -525,6 +541,11 @@ const marketingLimiter = rateLimit({
 // NUEVO: ruta para registrar consentimiento (vía /api/…)
 app.use('/api', registrarConsentimiento);
 console.log('📌 Ruta de consentimientos montada en /api/registrar-consentimiento');
+
+// NUEVO: rutas de riesgo (/risk/login-ok, /risk/download, /risk/status)
+app.use('/risk', riskLimiter);   // aplica RL solo a /risk/*
+app.use(riskEvents);             // el router ya publica rutas absolutas /risk/…
+console.log('📌 Rutas de riesgo montadas: /risk/login-ok, /risk/download, /risk/status');
 
 // 📩 Newsletter / Marketing (consent + unsubscribe)
 app.use('/marketing', marketingLimiter, marketingConsent);

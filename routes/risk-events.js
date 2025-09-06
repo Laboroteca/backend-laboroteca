@@ -219,26 +219,27 @@ Entorno: ${entorno}`;
   }
 }
 
-/** Email al usuario infractor (ES) */
+/** Email al usuario (ES) — copia corregida */
 async function emailUserES({ email }) {
   if (!email || !email.includes('@')) return;
   const resetUrl = USER_RESET_URL;
 
-  const subject = 'Seguridad de tu cuenta — es necesario cambiar la contraseña';
+  const subject = 'Seguridad de tu cuenta — actividad inusual detectada';
   const text =
-`Hemos detectado actividad inusual en tu cuenta (accesos desde demasiadas direcciones IP).
-Por seguridad, hemos cerrado todas las sesiones activas y debes cambiar tu contraseña para volver a acceder.
+`Hemos detectado actividad inusual en tu cuenta (accesos desde varias direcciones IP).
+Por seguridad, hemos cerrado todas las sesiones activas. Te recomendamos cambiar tu contraseña.
 
-Cambia tu contraseña aquí:
+Puedes cambiarla aquí:
 ${resetUrl}
 
-Si no has sido tú, responde a este email.`;
+Si no has sido tú, puedes contactarnos a través del buzón de incidencias:
+https://www.laboroteca.es/incidencias/`;
 
   const html =
-`<p>Hemos detectado <strong>actividad inusual</strong> en tu cuenta (accesos desde demasiadas direcciones IP).</p>
-<p>Por seguridad, hemos cerrado todas las sesiones activas y <strong>debes cambiar tu contraseña</strong> para volver a acceder.</p>
+`<p>Hemos detectado <strong>actividad inusual</strong> en tu cuenta (accesos desde varias direcciones IP).</p>
+<p>Por seguridad, hemos cerrado todas las sesiones activas. <strong>Te recomendamos cambiar tu contraseña.</strong></p>
 <p><a href="${resetUrl}" target="_blank" rel="noopener noreferrer">Cambiar mi contraseña</a></p>
-<p>Si no has sido tú, responde a este email.</p>`;
+<p>Si no has sido tú, puedes contactarnos a través del <a href="https://www.laboroteca.es/incidencias/" target="_blank" rel="noopener noreferrer">buzón de incidencias</a>.</p>`;
 
   try {
     await sendMail({ to: email, subject, text, html });
@@ -247,6 +248,7 @@ Si no has sido tú, responde a este email.`;
     console.warn('[mail → usuario] ERROR:', e?.message || e);
   }
 }
+
 
 /* ──────────────────────────────────────────────────────────
  * POST /login-ok

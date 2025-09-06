@@ -3,7 +3,7 @@
  * Función:
  * - closeAllSessions(userId, email?)
  * - requirePasswordReset(userId, email?)
- * - sendUserNotice(email) → email directo al usuario infractor (SMTP2GO API HTTP)
+ * - sendUserNotice(email) → email directo al usuario (SMTP2GO API HTTP)
  */
 'use strict';
 
@@ -15,10 +15,10 @@ const WP_RISK_REQUIRE_RESET  = String(process.env.WP_RISK_REQUIRE_RESET || '').t
 const WP_RISK_SECRET         = String(process.env.WP_RISK_SECRET || '').trim();
 const LAB_DEBUG              = (process.env.LAB_DEBUG === '1' || process.env.DEBUG === '1');
 
-const SMTP2GO_API_KEY   = String(process.env.SMTP2GO_API_KEY || '').trim();
-const SMTP2GO_API_URL   = String(process.env.SMTP2GO_API_URL || 'https://api.smtp2go.com/v3/email/send').trim();
-const SMTP2GO_FROM_EMAIL= String(process.env.SMTP2GO_FROM_EMAIL || 'laboroteca@laboroteca.es').trim();
-const SMTP2GO_FROM_NAME = String(process.env.SMTP2GO_FROM_NAME  || 'Laboroteca').trim();
+const SMTP2GO_API_KEY    = String(process.env.SMTP2GO_API_KEY || '').trim();
+const SMTP2GO_API_URL    = String(process.env.SMTP2GO_API_URL || 'https://api.smtp2go.com/v3/email/send').trim();
+const SMTP2GO_FROM_EMAIL = String(process.env.SMTP2GO_FROM_EMAIL || 'laboroteca@laboroteca.es').trim();
+const SMTP2GO_FROM_NAME  = String(process.env.SMTP2GO_FROM_NAME  || 'Laboroteca').trim();
 
 const USER_RESET_URL = (process.env.USER_RESET_URL || 'https://www.laboroteca.es/recuperar-contrasena').replace(/\/+$/,'');
 
@@ -83,7 +83,9 @@ async function requirePasswordReset(userId, email) {
 }
 
 /**
- * Envía email al usuario infractor para que cambie la contraseña (SMTP2GO API HTTP)
+ * Envía email informativo al usuario (SMTP2GO API HTTP)
+ * — Mensaje actualizado: ya no afirma que sea obligatorio cambiar la contraseña.
+ * — Incluye enlace al buzón de incidencias.
  */
 async function sendUserNotice(email) {
   if (!email || !email.includes('@')) return { ok:false, error:'invalid_email' };
@@ -93,19 +95,20 @@ async function sendUserNotice(email) {
     return { ok:false, error:'smtp_not_configured' };
   }
 
-  const subject = 'Seguridad de tu cuenta — es necesario cambiar la contraseña';
-  const text = `Hemos detectado actividad inusual en tu cuenta (accesos desde demasiadas direcciones IP).
-Por seguridad, hemos cerrado todas las sesiones activas y debes cambiar tu contraseña para volver a acceder.
+  const subject = 'Seguridad de tu cuenta — actividad inusual detectada';
+  const text = `Hemos detectado actividad inusual en tu cuenta (accesos desde varias direcciones IP).
+Por seguridad, hemos cerrado todas las sesiones activas. Te recomendamos cambiar tu contraseña.
 
-Cambia tu contraseña aquí: ${USER_RESET_URL}
+Puedes cambiarla aquí: ${USER_RESET_URL}
 
-Si no has sido tú, responde a este email.`;
+Si no has sido tú, puedes contactarnos a través del buzón de incidencias:
+https://www.laboroteca.es/incidencias/`;
 
   const html = `
-<p>Hemos detectado <strong>actividad inusual</strong> en tu cuenta (accesos desde demasiadas direcciones IP).</p>
-<p>Por seguridad, hemos cerrado todas las sesiones activas y <strong>debes cambiar tu contraseña</strong> para volver a acceder.</p>
+<p>Hemos detectado <strong>actividad inusual</strong> en tu cuenta (accesos desde varias direcciones IP).</p>
+<p>Por seguridad, hemos cerrado todas las sesiones activas. <strong>Te recomendamos cambiar tu contraseña.</strong></p>
 <p><a href="${USER_RESET_URL}" target="_blank" rel="noopener noreferrer">Cambiar mi contraseña</a></p>
-<p>Si no has sido tú, responde a este email.</p>
+<p>Si no has sido tú, puedes contactarnos a través del <a href="https://www.laboroteca.es/incidencias/" target="_blank" rel="noopener noreferrer">buzón de incidencias</a>.</p>
 `.trim();
 
   const payload = {
@@ -131,7 +134,6 @@ Si no has sido tú, responde a este email.`;
 
     const data = await resp.json().catch(() => ({}));
 
-    // Éxito según contrato SMTP2GO v3
     if (resp.ok && data?.data?.succeeded === 1) {
       if (LAB_DEBUG) console.log('[riskActions] Email enviado a usuario', email);
       return { ok:true };

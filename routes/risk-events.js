@@ -10,24 +10,73 @@
  *   WP_RISK_ENDPOINT, WP_RISK_SECRET
  *   WP_RISK_REQUIRE_RESET (opcional, para forzar cambio de contraseña)
  *   RISK_AUTO_ENFORCE=1   (aplica acciones automáticamente si risk.level === 'high')
- *   RISK_IPS_24H, RISK_UAS_24H, RISK_LOGINS_15M, RISK_GEO_KMH_MAX (umbralización en utils/riskDecider)
- *   PUBLIC_SITE_URL (opcional, para link de “Olvidé mi contraseña” al usuario)
+ *   RISK_IPS_24H, RISK_UAS_24H, RISK_LOGINS_15M, RISK_GEO_KMH_MAX (umbrales en utils/riskDecider)
+ *
+ *   === Email (SMTP2GO / Nodemailer) ===
+ *   SMTP_HOST=smtp.smtp2go.com
+ *   SMTP_PORT=2525            (o 587 / 465)
+ *   SMTP_USER=xxxxxxxx
+ *   SMTP_PASS=xxxxxxxx
+ *   SMTP_FROM="Laboroteca <no-reply@laboroteca.es>"
+ *   ADMIN_EMAIL=laboroteca@gmail.com
+ *
+ *   PUBLIC_SITE_URL=https://www.laboroteca.es
+ *   USER_RESET_URL=https://www.laboroteca.es/recuperar-contrasena
  */
 
 'use strict';
 
 const express = require('express');
 const crypto  = require('crypto');
+const nodemailer = require('nodemailer');
+
 const { recordLogin } = require('../utils/riskDecider');
 const { closeAllSessions, requirePasswordReset } = require('../utils/riskActions');
-const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
 const router = express.Router();
 
 const LAB_DEBUG         = (process.env.LAB_DEBUG === '1' || process.env.DEBUG === '1');
 const RISK_HMAC_SECRET  = String(process.env.RISK_HMAC_SECRET || '').trim();
 const RISK_AUTO_ENFORCE = (process.env.RISK_AUTO_ENFORCE === '1');
-const PUBLIC_SITE_URL   = (process.env.PUBLIC_SITE_URL || 'https://www.laboroteca.es').replace(/\/+$/,'');
+
+const PUBLIC_SITE_URL = (process.env.PUBLIC_SITE_URL || 'https://www.laboroteca.es').replace(/\/+$/,'');
+const USER_RESET_URL  = (process.env.USER_RESET_URL  || `${PUBLIC_SITE_URL}/recuperar-contrasena`).replace(/\/+$/,'');
+
+const SMTP_HOST  = process.env.SMTP_HOST || 'smtp.smtp2go.com';
+const SMTP_PORT  = Number(process.env.SMTP_PORT || 2525);
+const SMTP_USER  = process.env.SMTP_USER || '';
+const SMTP_PASS  = process.env.SMTP_PASS || '';
+const SMTP_FROM  = process.env.SMTP_FROM || 'Laboroteca <no-reply@laboroteca.es>';
+const ADMIN_EMAIL= process.env.ADMIN_EMAIL || 'laboroteca@gmail.com';
+
+/* ──────────────────────────────────────────────────────────
+ * Mailer (Nodemailer con SMTP2GO)
+ * ──────────────────────────────────────────────────────── */
+const mailer = (() => {
+  if (!SMTP_HOST || !SMTP_PORT || !SMTP_USER || !SMTP_PASS) {
+    console.warn('[mailer] ⚠️ SMTP no configurado: faltan variables de entorno');
+    return null;
+  }
+  const secure = SMTP_PORT === 465; // TLS implícito solo si 465
+  const transport = nodemailer.createTransport({
+    host: SMTP_HOST,
+    port: SMTP_PORT,
+    secure,
+    auth: { user: SMTP_USER, pass: SMTP_PASS },
+  });
+  return transport;
+})();
+
+async function sendMail({ to, subject, text, html }) {
+  if (!mailer) { throw new Error('smtp_not_configured'); }
+  return mailer.sendMail({
+    from: SMTP_FROM,
+    to,
+    subject,
+    text,
+    html,
+  });
+}
 
 /* ──────────────────────────────────────────────────────────
  * Utils
@@ -53,8 +102,7 @@ function requireRiskHmac(req, res, next) {
     return res.status(401).json({ ok:false, error:'bad_hmac_params' });
   }
 
-  // tolerancia ±5 min
-  const skewOk = Math.abs(Math.floor(Date.now()/1000) - Number(ts)) <= 300;
+  const skewOk = Math.abs(Math.floor(Date.now()/1000) - Number(ts)) <= 300; // ±5 min
   if (!skewOk) return res.status(403).json({ ok:false, error:'stale_ts' });
 
   const calc = crypto.createHmac('sha256', RISK_HMAC_SECRET).update(`${uid}.${ts}`).digest('hex');
@@ -72,9 +120,9 @@ function requireRiskHmac(req, res, next) {
 
 /**
  * Enforce robusto en WP (cierre + reset) con reintentos y backoff.
- * Considera éxito si:
+ * Éxito si:
  *  - status 2xx  (r.ok === true)
- *  - status 423  (tratamos como “ya aplicado / bloqueado”)
+ *  - status 423  (lo consideramos “ya aplicado/bloqueado” en WP)
  */
 async function enforceRiskActions({ userId, email }) {
   const maxRetries = 3;
@@ -85,7 +133,7 @@ async function enforceRiskActions({ userId, email }) {
     for (let i = 0; i <= maxRetries; i++) {
       last = await fn();
       const ok2xx = last && last.ok === true;
-      const ok423 = Number(last?.status) === 423; // p.ej. WP responde 423 cuando ya está forzado/bloqueado
+      const ok423 = Number(last?.status) === 423;
       if (ok2xx || ok423) {
         return { ok:true, status:last.status, data:last.data, tries:i+1 };
       }
@@ -100,7 +148,7 @@ async function enforceRiskActions({ userId, email }) {
   const resetRes = await retry(() => requirePasswordReset(userId, email), 'requirePasswordReset');
 
   const summary = {
-    closeAll: { ok: closeRes.ok, status: closeRes.status, tries: closeRes.tries, error: closeRes.data?.error || null },
+    closeAll:     { ok: closeRes.ok, status: closeRes.status, tries: closeRes.tries, error: closeRes.data?.error || null },
     requireReset: { ok: resetRes.ok, status: resetRes.status, tries: resetRes.tries, error: resetRes.data?.error || null }
   };
   if (summary.closeAll.ok && summary.requireReset.ok) {
@@ -111,12 +159,12 @@ async function enforceRiskActions({ userId, email }) {
   return summary;
 }
 
-/** Email al admin en español (asunto claro + métricas + acciones) */
-async function notifyAdminES({ userId, email, risk }) {
+/** Email al admin (ES) */
+async function emailAdminES({ userId, email, risk, enforce }) {
   const entorno = process.env.NODE_ENV || 'unknown';
-  const subject = `🚨 Riesgo ALTO: posible compartición de credenciales · userId=${userId}`;
+  const subject = `🚨 Riesgo ALTO — posible compartición de credenciales · userId=${userId}`;
 
-  const textoPlano =
+  const text =
 `Se ha detectado actividad de ALTO RIESGO en una cuenta.
 
 Motivo principal: ${risk.reasons.join(', ') || '—'}
@@ -133,8 +181,8 @@ Muestras:
 - UAs: ${risk.samples.uas.map(x => `${x.ua.slice(0,80)}…(${x.n})`).join(', ')}
 
 Acciones aplicadas automáticamente:
-- Cierre de sesiones (WordPress)
-- Forzar cambio de contraseña
+- Cerrar sesiones: ${enforce?.closeAll?.ok ? 'sí' : 'no'}
+- Forzar cambio de contraseña: ${enforce?.requireReset?.ok ? 'sí' : 'no'}
 
 Entorno: ${entorno}`;
 
@@ -154,59 +202,50 @@ Entorno: ${entorno}`;
 <p><strong>UAs:</strong> ${risk.samples.uas.map(x => `${x.ua.slice(0,120)}…(${x.n})`).join(', ')}</p>
 <h3>Acciones aplicadas</h3>
 <ul>
-  <li>Cerrar todas las sesiones en WP</li>
-  <li>Forzar cambio de contraseña</li>
+  <li>Cerrar todas las sesiones en WP: <strong>${enforce?.closeAll?.ok ? 'sí' : 'no'}</strong></li>
+  <li>Forzar cambio de contraseña: <strong>${enforce?.requireReset?.ok ? 'sí' : 'no'}</strong></li>
 </ul>
 <p style="color:#888">Entorno: ${entorno}</p>`;
 
-  await alertAdmin({
-    area: 'risk_high',
-    email: email || '-',         // se usa solo como referencia; el proxy decide destinatarios
-    subject,
-    text: textoPlano,
-    html,
-    err: new Error('risk_high'),
-    meta: { userId, risk, entorno }
-  });
-
-  if (LAB_DEBUG) console.log('[ALERT SENT ES]', subject);
+  try {
+    await sendMail({ to: ADMIN_EMAIL, subject, text, html });
+    if (LAB_DEBUG) console.log('[mail → admin] OK');
+  } catch (e) {
+    console.warn('[mail → admin] ERROR:', e?.message || e);
+  }
 }
 
-/** Email al usuario (español) para que cambie la contraseña */
-async function notifyUserES({ email }) {
+/** Email al usuario infractor (ES) */
+async function emailUserES({ email }) {
   if (!email || !email.includes('@')) return;
-  const resetUrl = `${PUBLIC_SITE_URL}/wp-login.php?action=lostpassword`;
-  const subject  = 'Seguridad de tu cuenta: es necesario cambiar la contraseña';
-  const textoPlano =
-`Hemos detectado actividad inusual en tu cuenta (accesos desde varios dispositivos o ubicaciones).
+  const resetUrl = USER_RESET_URL;
+
+  const subject = 'Seguridad de tu cuenta — es necesario cambiar la contraseña';
+  const text =
+`Hemos detectado actividad inusual en tu cuenta (accesos desde demasiadas direcciones IP).
 Por seguridad, hemos cerrado todas las sesiones activas y debes cambiar tu contraseña para volver a acceder.
 
 Cambia tu contraseña aquí:
 ${resetUrl}
 
-Si no has sido tú, por favor responde a este email.`;
+Si no has sido tú, responde a este email.`;
+
   const html =
-`<p>Hemos detectado <strong>actividad inusual</strong> en tu cuenta (accesos desde varios dispositivos o ubicaciones).</p>
+`<p>Hemos detectado <strong>actividad inusual</strong> en tu cuenta (accesos desde demasiadas direcciones IP).</p>
 <p>Por seguridad, hemos cerrado todas las sesiones activas y <strong>debes cambiar tu contraseña</strong> para volver a acceder.</p>
 <p><a href="${resetUrl}" target="_blank" rel="noopener noreferrer">Cambiar mi contraseña</a></p>
 <p>Si no has sido tú, responde a este email.</p>`;
 
-  // Usamos el mismo proxy; si admite “to” úsalo; si no, muchos setups envían a `email`.
-  await alertAdmin({
-    area: 'risk_user_notice',
-    email,            // destinatario principal
-    subject,
-    text: textoPlano,
-    html,
-    err: new Error('risk_user_notice'),
-    meta: { resetUrl }
-  });
-  if (LAB_DEBUG) console.log('[USER NOTICE ES] →', email);
+  try {
+    await sendMail({ to: email, subject, text, html });
+    if (LAB_DEBUG) console.log('[mail → usuario] OK', email);
+  } catch (e) {
+    console.warn('[mail → usuario] ERROR:', e?.message || e);
+  }
 }
 
 /* ──────────────────────────────────────────────────────────
  * POST /risk/login-ok
- * Registra señal, evalúa riesgo y (si procede) ejecuta acciones.
  * ──────────────────────────────────────────────────────── */
 router.post('/risk/login-ok', requireJson, requireRiskHmac, async (req, res) => {
   try {
@@ -217,7 +256,7 @@ router.post('/risk/login-ok', requireJson, requireRiskHmac, async (req, res) => 
     const ip = ipHdr.split(',')[0].trim();
     const ua = String(req.headers['user-agent'] || '').slice(0,180);
 
-    // Geo opcional (preferir body.geo; si no, cabeceras CDN si existen)
+    // Geo opcional
     const lat = geo && Number.isFinite(geo.lat) ? Number(geo.lat)
                : (Number.isFinite(Number(req.headers['x-geo-lat'])) ? Number(req.headers['x-geo-lat']) : undefined);
     const lon = geo && Number.isFinite(geo.lon) ? Number(geo.lon)
@@ -230,16 +269,17 @@ router.post('/risk/login-ok', requireJson, requireRiskHmac, async (req, res) => 
 
     let enforceSummary = null;
 
-    // Acciones automáticas si umbral superado
     if (risk.level === 'high' && RISK_AUTO_ENFORCE) {
       enforceSummary = await enforceRiskActions({ userId, email }).catch(e => {
         console.warn('[risk enforce] error', e?.message || e);
         return null;
       });
 
-      // Avisos en ES
-      try { await notifyAdminES({ userId, email, risk }); } catch (_) {}
-      try { await notifyUserES({ email }); } catch (_) {}
+      // Emails (admin + usuario) en castellano
+      await Promise.allSettled([
+        emailAdminES({ userId, email, risk, enforce: enforceSummary }),
+        emailUserES({ email })
+      ]);
     }
 
     return res.json({ ok:true, userId, email, risk, enforce: enforceSummary });
@@ -250,7 +290,7 @@ router.post('/risk/login-ok', requireJson, requireRiskHmac, async (req, res) => 
 });
 
 /* ──────────────────────────────────────────────────────────
- * POST /risk/close-all (manual o para pruebas)
+ * POST /risk/close-all (manual o pruebas)
  * ──────────────────────────────────────────────────────── */
 router.post('/risk/close-all', requireJson, async (req, res) => {
   try {
@@ -258,7 +298,6 @@ router.post('/risk/close-all', requireJson, async (req, res) => {
     const email  = String(req.body?.email || '');
     if (!userId) return res.status(400).json({ ok:false, error:'missing_userId' });
 
-    // Aplicamos el mismo flujo de enforce (close + reset)
     const summary = await enforceRiskActions({ userId, email });
     const ok = !!(summary && summary.closeAll && summary.closeAll.ok);
     const status = ok ? 200 : 502;

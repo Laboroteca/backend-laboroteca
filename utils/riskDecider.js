@@ -4,21 +4,20 @@
  *  - Memoria 24h por usuario (en Map)
  *  - Umbrales por ENV (con defaults):
  *      RISK_IPS_24H=5
- *      RISK_UAS_24H=6
- *      RISK_LOGINS_15M=10
- *  - Geovelocidad DESACTIVADA por defecto.
- *      Actívala con: RISK_CHECK_GEO_KMH=1 y RISK_GEO_KMH_MAX>0
+ *      RISK_UAS_24H=4
+ *      RISK_LOGINS_15M=6
+ *  - Geovelocidad DESACTIVADA por defecto (solo métrica para debug).
  */
 
 'use strict';
 
 const MAX_IPS_24     = Number(process.env.RISK_IPS_24H     || 5);
-const MAX_UA_24      = Number(process.env.RISK_UAS_24H     || 6);
-const MAX_LOGINS_15  = Number(process.env.RISK_LOGINS_15M  || 10);
+const MAX_UA_24      = Number(process.env.RISK_UAS_24H     || 4);
+const MAX_LOGINS_15  = Number(process.env.RISK_LOGINS_15M  || 6);
 
-// Geovelocidad (off por defecto)
-const CHECK_GEO      = String(process.env.RISK_CHECK_GEO_KMH || '0') === '1';
-const MAX_GEO_KMH    = Number(process.env.RISK_GEO_KMH_MAX   || 0);
+// Geovelocidad (anulada en reasons)
+const CHECK_GEO      = false;
+const MAX_GEO_KMH    = 0;
 
 const LAB_DEBUG      = (process.env.LAB_DEBUG === '1' || process.env.DEBUG === '1');
 
@@ -27,6 +26,16 @@ const mem = new Map(); // mem[userId] = [{ t, ip, ua, lat, lon, country }]
 function keep24h(arr, now) {
   const cutoff = now - 24*60*60*1000;
   return arr.filter(e => e.t >= cutoff);
+}
+
+// No contar IPs “ruidosas” (localhost y redes de test)
+function isNoiseIp(ip) {
+  if (!ip) return true;
+  const x = String(ip).trim();
+  return (
+    x === '127.0.0.1' || x === '::1' ||
+    x.startsWith('192.0.2.') || x.startsWith('198.51.100.') || x.startsWith('203.0.113.')
+  );
 }
 
 function haversineKm(lat1, lon1, lat2, lon2) {
@@ -61,13 +70,13 @@ function recordLogin(userId, ctx = {}) {
   mem.set(u, trimmed);
 
   // métricas
-  const ipSet = new Set(trimmed.map(e => e.ip).filter(Boolean));
+  const ipSet = new Set(trimmed.map(e => e.ip).filter(ip => ip && !isNoiseIp(ip)));
   const uaSet = new Set(trimmed.map(e => e.ua).filter(Boolean));
   const last15 = trimmed.filter(e => e.t >= (now - 15*60*1000)).length;
 
-  // geovelocidad (OPCIONAL, desactivada por defecto)
+  // geovelocidad (solo métrica, no en reasons)
   let geoKmh = 0;
-  if (CHECK_GEO && MAX_GEO_KMH > 0 && Number.isFinite(lat) && Number.isFinite(lon)) {
+  if (Number.isFinite(lat) && Number.isFinite(lon)) {
     for (let i = trimmed.length - 2; i >= 0; i--) {
       const prev = trimmed[i];
       if (Number.isFinite(prev.lat) && Number.isFinite(prev.lon)) {
@@ -84,13 +93,11 @@ function recordLogin(userId, ctx = {}) {
   if (ipSet.size > MAX_IPS_24)    reasons.push(`ips24=${ipSet.size}>${MAX_IPS_24}`);
   if (uaSet.size > MAX_UA_24)     reasons.push(`uas24=${uaSet.size}>${MAX_UA_24}`);
   if (last15 > MAX_LOGINS_15)     reasons.push(`logins15=${last15}>${MAX_LOGINS_15}`);
-  if (CHECK_GEO && MAX_GEO_KMH > 0 && geoKmh > MAX_GEO_KMH) {
-    reasons.push(`geo_kmh=${geoKmh.toFixed(0)}>${MAX_GEO_KMH}`);
-  }
+  // geoKmh nunca dispara razones (anulado)
 
   // muestrario para alertas
   const ipCounts = Object.entries(
-    trimmed.reduce((acc, e)=>{ if(e.ip) acc[e.ip]=(acc[e.ip]||0)+1; return acc; }, {})
+    trimmed.reduce((acc, e)=>{ if(e.ip && !isNoiseIp(e.ip)) acc[e.ip]=(acc[e.ip]||0)+1; return acc; }, {})
   ).sort((a,b)=>b[1]-a[1]).slice(0,5);
 
   const uaCounts = Object.entries(
@@ -104,7 +111,7 @@ function recordLogin(userId, ctx = {}) {
       ip24: ipSet.size,
       ua24: uaSet.size,
       logins15: last15,
-      geoKmh: Number(geoKmh.toFixed(1)) // seguirá en métricas aunque no se evalúe, para depurar
+      geoKmh: Number(geoKmh.toFixed(1)) // métrica visible para depuración
     },
     samples: {
       ips: ipCounts.map(([k,v])=>({ ip:k, n:v })),

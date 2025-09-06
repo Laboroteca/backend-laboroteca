@@ -1,9 +1,9 @@
 /**
  * Archivo: routes/risk-events.js
  * Rutas:
- *   POST /risk/login-ok   ← WP informa "login correcto" (requiere HMAC)
- *   POST /risk/close-all  ← Node ordena a WP cerrar sesiones (firma HMAC hacia WP)
- *   GET  /risk/ping       ← prueba rápida (sin HMAC)
+ *   POST /login-ok   ← WP informa "login correcto" (requiere HMAC)
+ *   POST /close-all  ← Node ordena a WP cerrar sesiones (firma HMAC hacia WP)
+ *   GET  /ping       ← prueba rápida (sin HMAC)
  *
  * ENV necesarias:
  *   RISK_HMAC_SECRET
@@ -17,7 +17,7 @@
  *   SMTP_PORT=2525            (o 587 / 465)
  *   SMTP_USER=xxxxxxxx
  *   SMTP_PASS=xxxxxxxx
- *   SMTP_FROM="Laboroteca <no-reply@laboroteca.es>"
+ *   SMTP_FROM="Laboroteca <laboroteca@laboroteca.es>"
  *   ADMIN_EMAIL=laboroteca@gmail.com
  *
  *   PUBLIC_SITE_URL=https://www.laboroteca.es
@@ -46,7 +46,7 @@ const SMTP_HOST  = process.env.SMTP_HOST || 'smtp.smtp2go.com';
 const SMTP_PORT  = Number(process.env.SMTP_PORT || 2525);
 const SMTP_USER  = process.env.SMTP_USER || '';
 const SMTP_PASS  = process.env.SMTP_PASS || '';
-const SMTP_FROM  = process.env.SMTP_FROM || 'Laboroteca <no-reply@laboroteca.es>';
+const SMTP_FROM  = process.env.SMTP_FROM || 'Laboroteca <laboroteca@laboroteca.es>';
 const ADMIN_EMAIL= process.env.ADMIN_EMAIL || 'laboroteca@gmail.com';
 
 /* ──────────────────────────────────────────────────────────
@@ -68,14 +68,8 @@ const mailer = (() => {
 })();
 
 async function sendMail({ to, subject, text, html }) {
-  if (!mailer) { throw new Error('smtp_not_configured'); }
-  return mailer.sendMail({
-    from: SMTP_FROM,
-    to,
-    subject,
-    text,
-    html,
-  });
+  if (!mailer) throw new Error('smtp_not_configured');
+  return mailer.sendMail({ from: SMTP_FROM, to, subject, text, html });
 }
 
 /* ──────────────────────────────────────────────────────────
@@ -89,7 +83,7 @@ function requireJson(req, res, next) {
   next();
 }
 
-/** HMAC WP → Node: HMAC_SHA256(secret, `${userId}.${ts}`)  (headers: X-Risk-Ts, X-Risk-Sig) */
+/** HMAC WP → Node: HMAC_SHA256(secret, `${userId}.${ts}`) */
 function requireRiskHmac(req, res, next) {
   if (!RISK_HMAC_SECRET) {
     return res.status(500).json({ ok:false, error:'server_missing_hmac_secret' });
@@ -98,11 +92,9 @@ function requireRiskHmac(req, res, next) {
   const sig = String(req.header('X-Risk-Sig') || '');
   const uid = String((req.body && req.body.userId) || req.query.userId || '');
 
-  if (!ts || !sig || !uid) {
-    return res.status(401).json({ ok:false, error:'bad_hmac_params' });
-  }
+  if (!ts || !sig || !uid) return res.status(401).json({ ok:false, error:'bad_hmac_params' });
 
-  const skewOk = Math.abs(Math.floor(Date.now()/1000) - Number(ts)) <= 300; // ±5 min
+  const skewOk = Math.abs(Math.floor(Date.now()/1000) - Number(ts)) <= 300;
   if (!skewOk) return res.status(403).json({ ok:false, error:'stale_ts' });
 
   const calc = crypto.createHmac('sha256', RISK_HMAC_SECRET).update(`${uid}.${ts}`).digest('hex');
@@ -120,9 +112,6 @@ function requireRiskHmac(req, res, next) {
 
 /**
  * Enforce robusto en WP (cierre + reset) con reintentos y backoff.
- * Éxito si:
- *  - status 2xx  (r.ok === true)
- *  - status 423  (lo consideramos “ya aplicado/bloqueado” en WP)
  */
 async function enforceRiskActions({ userId, email }) {
   const maxRetries = 3;
@@ -134,9 +123,7 @@ async function enforceRiskActions({ userId, email }) {
       last = await fn();
       const ok2xx = last && last.ok === true;
       const ok423 = Number(last?.status) === 423;
-      if (ok2xx || ok423) {
-        return { ok:true, status:last.status, data:last.data, tries:i+1 };
-      }
+      if (ok2xx || ok423) return { ok:true, status:last.status, data:last.data, tries:i+1 };
       const delay = Math.floor(Math.pow(2, i) * baseDelayMs);
       if (LAB_DEBUG) console.warn(`[risk enforce] ${label} intento ${i+1} falló status=${last?.status}. Reintentando en ${delay}ms…`);
       await new Promise(r => setTimeout(r, delay));
@@ -245,9 +232,9 @@ Si no has sido tú, responde a este email.`;
 }
 
 /* ──────────────────────────────────────────────────────────
- * POST /risk/login-ok
+ * POST /login-ok
  * ──────────────────────────────────────────────────────── */
-router.post('/risk/login-ok', requireJson, requireRiskHmac, async (req, res) => {
+router.post('/login-ok', requireJson, requireRiskHmac, async (req, res) => {
   try {
     const { userId = '', email = '', geo = null } = (req.body || {});
 
@@ -275,7 +262,6 @@ router.post('/risk/login-ok', requireJson, requireRiskHmac, async (req, res) => 
         return null;
       });
 
-      // Emails (admin + usuario) en castellano
       await Promise.allSettled([
         emailAdminES({ userId, email, risk, enforce: enforceSummary }),
         emailUserES({ email })
@@ -284,15 +270,15 @@ router.post('/risk/login-ok', requireJson, requireRiskHmac, async (req, res) => 
 
     return res.json({ ok:true, userId, email, risk, enforce: enforceSummary });
   } catch (e) {
-    console.error('❌ /risk/login-ok error:', e?.message || e);
+    console.error('❌ /login-ok error:', e?.message || e);
     return res.status(500).json({ ok:false, error:'internal' });
   }
 });
 
 /* ──────────────────────────────────────────────────────────
- * POST /risk/close-all (manual o pruebas)
+ * POST /close-all
  * ──────────────────────────────────────────────────────── */
-router.post('/risk/close-all', requireJson, async (req, res) => {
+router.post('/close-all', requireJson, async (req, res) => {
   try {
     const userId = Number(req.body?.userId || req.query?.userId || 0);
     const email  = String(req.body?.email || '');
@@ -300,15 +286,14 @@ router.post('/risk/close-all', requireJson, async (req, res) => {
 
     const summary = await enforceRiskActions({ userId, email });
     const ok = !!(summary && summary.closeAll && summary.closeAll.ok);
-    const status = ok ? 200 : 502;
-    return res.status(status).json({ ok, enforce: summary });
+    return res.status(ok ? 200 : 502).json({ ok, enforce: summary });
   } catch (e) {
-    console.error('❌ /risk/close-all error:', e?.message || e);
+    console.error('❌ /close-all error:', e?.message || e);
     return res.status(500).json({ ok:false, error:'internal' });
   }
 });
 
 /* Ping */
-router.get('/risk/ping', (_req, res) => res.json({ ok:true, pong:true }));
+router.get('/ping', (_req, res) => res.json({ ok:true, pong:true }));
 
 module.exports = router;

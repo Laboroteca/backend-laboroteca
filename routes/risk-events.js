@@ -5,7 +5,7 @@
  *   GET  /ping      ← prueba rápida
  *
  * Reglas:
- *   - SOLO avisa (emails) si risk.level === 'high' **por IPs** (ips24), nunca por UAs/logins.
+ *   - AVISA (emails) si risk.level es 'high' o 'critical' (por cualquier motivo: IPs/UAs/logins).
  *   - NO cierra sesiones ni exige cambio de contraseña.
  */
 'use strict';
@@ -108,42 +108,38 @@ router.post('/login-ok', requireJson, requireRiskHmac, async (req, res) => {
     // Evaluación de riesgo
     const risk = recordLogin(uid, { ip, ua, lat, lon, country });
 
-    // Solo avisar si el motivo incluye ips24 (nunca por UA/logins)
-    const ipsOnlyTrigger = Array.isArray(risk?.reasons) && risk.reasons.some(r => r.startsWith('ips24='));
+    // ─── Disparo de avisos: en cualquier HIGH o CRITICAL, por cualquier motivo ───
+    const isTriggered = risk.level === 'high' || risk.level === 'critical';
+    if (isTriggered) {
+      // Idempotencia: nivel + razones + hora + hash(IP actual)
+      const hourKey    = new Date().toISOString().slice(0,13); // YYYY-MM-DDTHH
+      const reasonsKey = (Array.isArray(risk?.reasons) && risk.reasons.length)
+        ? risk.reasons.join('|')
+        : 'no_reasons';
+      const idemRaw = `${uid}:${risk.level}:${reasonsKey}:${hourKey}:${shortHash(ip)}`;
+      const idemKey = 'risk:' + crypto.createHash('sha256').update(idemRaw).digest('hex').slice(0,16);
 
-    if (risk.level === 'high' && ipsOnlyTrigger) {
-      // idemKey robusta para evitar duplicados y facilitar trazas cross-proceso:
-      // userId + ip24 + hora + hash(IP pública actual)
-      const ip24 = risk?.metrics?.ip24 ?? 0;
-      const hourKey = new Date().toISOString().slice(0,13); // YYYY-MM-DDTHH
-      const idemKey = `risk:${uid}:ips24:${ip24}:${hourKey}:${shortHash(ip)}`;
-
-      // Enviar avisos (usuario + admin). No lanzamos si fallan; registramos en debug.
+      // Enviar avisos (usuario + admin). No relanzamos si fallan; registramos en debug.
       const [adminRes, userRes] = await Promise.allSettled([
         sendAdminAlert(uid, email, risk, { idemKey }),
         sendUserNotice(email, { idemKey })
       ]);
 
       if (LAB_DEBUG) {
-        // Logs seguros: no imprimimos cuerpos ni secretos
         const fmt = (r) => (r.status === 'fulfilled'
           ? r.value
-          : { ok:false, status:500, data:{ error: String(r.reason && r.reason.message || r.reason || 'send_error') } });
-
+          : { ok:false, status:500, data:{ error: String(r.reason?.message || r.reason || 'send_error') } });
         console.log('[riskMail] results', {
           uid,
-          ip24,
+          level: risk.level,
+          reasons: risk.reasons,
           idemKey,
           admin: fmt(adminRes),
           user : fmt(userRes)
         });
       }
     } else {
-      logDebug('[riskMail] not-triggered', {
-        uid,
-        level: risk.level,
-        reasons: risk.reasons
-      });
+      logDebug('[riskMail] not-triggered', { uid, level: risk.level, reasons: risk.reasons });
     }
 
     return res.json({ ok:true, userId: uid, email, risk });

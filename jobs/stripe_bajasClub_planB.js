@@ -150,25 +150,21 @@ async function notifyOnce(area, err, meta = {}, key = null) {
 
 // éxito “Plan B ejecutado” (rate-limit 6h por sub/email)
 async function alertPlanBSuccess(source, { email, subId, reason, extra = {} }) {
+  // Solo se invoca cuando hubo desactivación real (no skip)
   const key = `planB.success:${source}:${subId || email}`;
   return ensureOnce('alertPlanB', key, 6 * 3600, async () => {
-    let subject, text;
-    if (source === 'replayer' || source === 'reconciler') {
-      subject = `✅ Plan B (${source}) ejecutado — acceso desactivado`;
-      text =
-        `Stripe no entregó/aceptamos el webhook a tiempo o hubo incoherencia.\n` +
-        `El Plan B (${source}) actuó y la membresía del email ${email} se desactivó correctamente en WordPress.\n` +
-        `SubID: ${subId || 'N/D'} · Motivo: ${reason || 'doDeactivate'}`;
-    } else if (source === 'bajaScheduler') {
-      subject = `✅ Plan B (baja programada) ejecutada — acceso desactivado`;
-      text = `Se ejecutó una baja programada para ${email} con éxito.\nReferencias: ${subId || 'N/D'}.`;
-    } else if (source === 'sanity') {
-      subject = `✅ Plan B (sanity) — acceso purgado sin sub activa en Stripe`;
-      text = `No existe suscripción activa en Stripe para ${email}. Se purgó el acceso en WP correctamente.`;
-    } else {
-      subject = `✅ Plan B — acceso desactivado`;
-      text = `Plan B (${source}) desactivó con éxito el acceso de ${email}.`;
-    }
+    const subject = 'EL PLAN B HA TENIDO QUE DESACTIVAR (BAJA) EN EL CLUB POR FALLO EN BACKEND';
+    const text =
+`Se ha ejecutado el Plan B por fallo en el Backend principal y se ha DESACTIVADO el acceso en WordPress para el CLUB LABOROTECA.
+
+Usuario afectado:
+- Email: ${email}
+- SubID: ${subId || 'N/D'}
+
+Motivo: ${reason || 'coherencia Stripe→WP (doDeactivate)'}
+Origen: ${source}
+
+Revisa en MemberPress y Stripe.`;
     await sendAdmin(subject, text, { email, subId, reason, source, ...extra });
   });
 }
@@ -279,6 +275,7 @@ async function wpDeactivateOnce(email, subId, source, extraMeta = {}, reason = '
     try {
       await syncMemberpressClub({ email, accion: 'desactivar', membership_id: CLUB_MEMBERSHIP_ID });
       vlog(source, '→ desactivar OK', { email, subId, reason });
+      // Email al admin SOLO cuando la desactivación se ejecuta (no hay skip)
       await alertPlanBSuccess(source, { email, subId, reason, extra: extraMeta });
     } catch (e) {
       verror(`${source}.sync_fail`, e, { email, subId, reason, ...extraMeta });
@@ -359,12 +356,6 @@ async function jobReplayer() {
           });
 
           if (doDeactivate && email) {
-            await notifyOnce(
-              'planB.replayer.action',
-              null,
-              { subId, email, type: ev.type, created: ev.created, reason: 'doDeactivate=true' },
-              `planB.replayer.action:${subId}`
-            );
             await wpDeactivateOnce(email, subId, 'replayer', info, 'replayer_doDeactivate');
           } else if (doDeactivate && !email) {
             await notifyOnce('planB.replayer.no_email', new Error('No email found for subscription'), { ...info, subId });
@@ -447,18 +438,7 @@ async function jobReconciler() {
           continue;
         }
 
-        await notifyOnce(
-          'planB.reconciler.action',
-          null,
-          {
-            subId: sub.id,
-            email,
-            status: sub.status,
-            cancel_at_period_end: sub.cancel_at_period_end,
-            current_period_end: sub.current_period_end,
-          },
-          `planB.reconciler.action:${sub.id}`
-        );
+        
 
         const r = await wpDeactivateOnce(email, null, 'reconciler', info, 'reconciler_doDeactivate');
         if (!r.skipped) acted++;
@@ -500,7 +480,6 @@ async function jobBajasScheduler() {
       const info = { id: doc.id, email, motivo: d.motivo, fechaEfectosMs: d.fechaEfectosMs };
 
       const res = await ensureOnce('bajaScheduler', `bajaProg:${doc.id}`, 6 * 3600, async () => {
-        await notifyOnce('planB.bajas.action', null, info, `planB.bajas.action:${doc.id}`);
         await wpDeactivateOnce(email, null, 'bajaScheduler', info, 'baja_programada');
         try {
           await doc.ref.set({ estadoBaja: 'ejecutada', ejecutadaAt: Date.now() }, { merge: true });
@@ -552,7 +531,6 @@ async function jobSanity() {
 
       if (!res.data.length) {
         vlog('sanity', '→ desactivar (sin sub activa en Stripe)', { email });
-        await notifyOnce('planB.sanity.action', null, { email }, `planB.sanity.action:${email}`);
         await wpDeactivateOnce(email, null, 'sanity', { email }, 'sin_sub_activa');
         fixed++;
       } else {

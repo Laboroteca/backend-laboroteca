@@ -570,7 +570,7 @@ app.use('/regalos', canjearLimiter, canjearRouter);
 app.use('/regalos', canjearLimiter, require('./regalos/routes/crear-codigo-regalo'));
 
 // --- Descuentos ---
-const descuentosRouterCrear = require('./descuentos/routes/crear-codigo-descuento');
+const routerCrearDescuento  = require('./descuentos/routes/crear-codigo-descuento');
 const routerCanjearDescuento = require('./descuentos/routes/canjear-codigo');   // 👈 ojo: nombre real del archivo
 const routerValidarDescuento = require('./descuentos/routes/validar-descuento');
 

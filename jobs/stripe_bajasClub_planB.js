@@ -127,15 +127,15 @@ function verror(area, err, meta = {}) {
 /* ===================== Alertas (helpers) ===================== */
 async function sendAdmin(subject, text, meta = {}) {
   try {
-    const res = await alertAdmin({ subject, text, meta }); // { ok?, status?, error? }
-    const ok =
-      res === undefined || res === null || res === true ||
-      res?.ok === true ||
-      (typeof res?.status === 'number' && res.status < 400);
-    if (!ok) {
-      throw new Error(`alertAdmin returned non-ok: ${safeStringify(res)}`);
-    }
-    vlog('alerts', 'sent', { subject, status: res?.status ?? 'ok' });
+    // Adaptamos al contrato de utils/alertAdmin.js
+    const payload = {
+      area: meta.area || String(subject || 'planB').replace(/^\[|\]$/g, ''),
+      email: meta.email || meta.userEmail || null,
+      err: new Error(text || subject || 'alert'),
+      meta,
+    };
+    await alertAdmin(payload);
+    vlog('alerts', 'sent', { area: payload.area, email: payload.email });
   } catch (e) {
     verror('alerts.send_fail', e, { subject });
   }
@@ -147,9 +147,7 @@ async function notifyOnce(area, err, meta = {}, key = null) {
     const k = key || `${area}:${JSON.stringify(meta).slice(0, 200)}`;
     if (__alertOnce.has(k)) return;
     __alertOnce.add(k);
-    const subject = `[${area}] ${err ? 'ERROR' : 'Aviso'}`;
-    const text = err ? (err?.message || String(err)) : 'Evento';
-    await sendAdmin(subject, text, meta);
+      await alertAdmin({ area, email: meta.email, err, meta, dedupeKey: k });
   } catch {
     /* silent */
   }

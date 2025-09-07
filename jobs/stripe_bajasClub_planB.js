@@ -1,25 +1,31 @@
 // jobs/stripe_bajasClub_planB.js
 // Plan B de resiliencia Stripe ↔ WP (MemberPress).
-// Replayer de eventos, Reconciliador de suscripciones, Reloj de bajas programadas
-// y (opcional) sanity WP→Stripe. Verboso pero sin filtrar secretos.
+// - Replayer de eventos (desde checkpoint)
+// - Reconciliador de suscripciones
+// - Reloj de bajas programadas (Firestore → WP)
+// - (Opcional) Sanity WP→Stripe
 //
 // ENV mínimos:
 //   STRIPE_SECRET_KEY
 //   MP_SYNC_API_URL_CLUB, MP_SYNC_API_KEY, MP_SYNC_HMAC_SECRET
-// Opcionales:
+//
+// Opcionales (recomendado para producción):
 //   MP_SYNC_DEBUG=1
 //   BAJAS_COLL=bajasClub
 //   CLUB_MEMBERSHIP_ID=10663
-//   ENABLE_PLANB_DAEMON=1 (activar planificador interno)
+//   ENABLE_PLANB_DAEMON=0|1
 //   PLANB_REPLAYER_MS, PLANB_RECONCILER_MS, PLANB_BAJAS_MS, PLANB_SANITY_MS
-//   PLANB_ENABLE_SANITY=1 (incluir sanity en daemon)
+//   PLANB_ENABLE_SANITY=0|1
+//   PLANB_MAX_EVENTS=1000       # límite por ejecución (replayer)
+//   PLANB_MAX_ACTS=200          # límite acciones (reconciler/bajas/sanity)
+//   PLANB_SLOWDOWN_EVERY=50     # cada N operaciones, dormir
+//   PLANB_SLOWDOWN_MS=1000      # milisegundos de pausa
 
 'use strict';
 
 /* ===================== Stripe ===================== */
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
 if (!STRIPE_SECRET_KEY) {
-  // Evita que arranque sin credenciales (fallo temprano y claro)
   console.error(JSON.stringify({
     at: new Date().toISOString(),
     area: 'boot',
@@ -29,11 +35,18 @@ if (!STRIPE_SECRET_KEY) {
 }
 
 const Stripe = require('stripe');
-const stripe = Stripe(STRIPE_SECRET_KEY);
+const stripe = new Stripe(STRIPE_SECRET_KEY, { maxNetworkRetries: 2 });
 
 /* ===================== Constantes ===================== */
 const CLUB_MEMBERSHIP_ID = parseInt(process.env.CLUB_MEMBERSHIP_ID || '10663', 10);
 const BAJAS_COLL = process.env.BAJAS_COLL || 'bajasClub';
+
+const MAX_EVENTS_PER_RUN  = parseInt(process.env.PLANB_MAX_EVENTS || '1000', 10);
+const MAX_ACTIONS_PER_RUN = parseInt(process.env.PLANB_MAX_ACTS   || '200', 10);
+const SLOWDOWN_EVERY      = parseInt(process.env.PLANB_SLOWDOWN_EVERY || '50', 10);
+const SLOWDOWN_MS         = parseInt(process.env.PLANB_SLOWDOWN_MS    || '1000', 10);
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 /* ===================== Firebase (locks / bajas) ===================== */
 // NO loguea secretos; inicialización en ../firebase
@@ -87,7 +100,6 @@ function safeStringify(obj) {
     if (s.length > MAX_LOG_BYTES) s = s.slice(0, MAX_LOG_BYTES) + '…[truncated]';
     return s;
   } catch {
-    // En caso de referencias circulares, degradar
     return String(obj);
   }
 }
@@ -115,8 +127,7 @@ function verror(area, err, meta = {}) {
 /* ===================== Alertas (helpers) ===================== */
 async function sendAdmin(subject, text, meta = {}) {
   try {
-    // El proxy espera SIEMPRE objeto {subject, text, meta}
-    await alertAdmin({ subject, text, meta });
+    await alertAdmin({ subject, text, meta }); // el proxy espera {subject, text, meta}
     vlog('alerts', 'sent', { subject });
   } catch (e) {
     verror('alerts.send_fail', e, { subject });
@@ -133,7 +144,7 @@ async function notifyOnce(area, err, meta = {}, key = null) {
     const text = err ? (err?.message || String(err)) : 'Evento';
     await sendAdmin(subject, text, meta);
   } catch {
-    // Silent; ya se logueó en sendAdmin
+    /* silent */
   }
 }
 
@@ -146,8 +157,7 @@ async function alertPlanBSuccess(source, { email, subId, reason, extra = {} }) {
       subject = `✅ Plan B (${source}) ejecutado — acceso desactivado`;
       text =
         `Stripe no entregó/aceptamos el webhook a tiempo o hubo incoherencia.\n` +
-        `El Plan B (${source}) actuó y la membresía del email ${email} ` +
-        `se desactivó correctamente en WordPress.\n` +
+        `El Plan B (${source}) actuó y la membresía del email ${email} se desactivó correctamente en WordPress.\n` +
         `SubID: ${subId || 'N/D'} · Motivo: ${reason || 'doDeactivate'}`;
     } else if (source === 'bajaScheduler') {
       subject = `✅ Plan B (baja programada) ejecutada — acceso desactivado`;
@@ -215,7 +225,6 @@ function needsDeactivation(sub) {
 
 /* ======= Resolver de email (robusto) ======= */
 async function resolveEmail(sub, evForFallback = null) {
-  // 0) Lo que ya tengamos en el objeto
   let email = extractEmailFromSub(sub);
   if (email) return email;
 
@@ -316,6 +325,11 @@ async function jobReplayer() {
       });
 
       for (const ev of page.data) {
+        if (processed + skipped >= MAX_EVENTS_PER_RUN) {
+          hasMore = false;
+          break;
+        }
+
         maxTs = Math.max(maxTs, ev.created || 0);
         const info = { id: ev.id, type: ev.type, created: ev.created, livemode: ev.livemode };
 
@@ -360,8 +374,10 @@ async function jobReplayer() {
           }
         });
 
-        if (res.skipped) { skipped++; vlog('replayer', 'skip (already handled)', info); }
+        if (res?.skipped) { skipped++; vlog('replayer', 'skip (already handled)', info); }
         else { processed++; }
+
+        if (processed % SLOWDOWN_EVERY === 0) { await sleep(SLOWDOWN_MS); }
       }
 
       hasMore = page.has_more;
@@ -378,8 +394,7 @@ async function jobReplayer() {
 }
 
 /* ===================== 2) Reconciliación ===================== */
-// ⚠️ Stripe Search no soporta `cancel_at_period_end`, así que NO lo usamos en la query.
-// La parte de cancelación programada la cubre el replayer con customer.subscription.updated.
+// ⚠️ Stripe Search no soporta `cancel_at_period_end`; esa parte la cubre el replayer.
 const RECON_QUERY = "status:'canceled' OR status:'unpaid' OR status:'incomplete_expired'";
 
 async function jobReconciler() {
@@ -399,6 +414,8 @@ async function jobReconciler() {
 
       for (const sub of res.data) {
         reviewed++;
+        if (acted >= MAX_ACTIONS_PER_RUN) { page = null; break; }
+
         let email = extractEmailFromSub(sub);
         const doDeactivate = needsDeactivation(sub);
         const info = {
@@ -410,7 +427,7 @@ async function jobReconciler() {
           doDeactivate,
         };
 
-        // Si hay que actuar y falta email, realiza una consulta puntual para resolverlo
+        // Si hay que actuar y falta email, consulta puntual para resolverlo
         if (doDeactivate && !email) {
           try {
             const subFull = await stripe.subscriptions.retrieve(sub.id, {
@@ -445,6 +462,8 @@ async function jobReconciler() {
 
         const r = await wpDeactivateOnce(email, null, 'reconciler', info, 'reconciler_doDeactivate');
         if (!r.skipped) acted++;
+
+        if ((reviewed % SLOWDOWN_EVERY) === 0) { await sleep(SLOWDOWN_MS); }
       }
 
       page = res.next_page;
@@ -474,6 +493,8 @@ async function jobBajasScheduler() {
 
     let done = 0, skipped = 0;
     for (const doc of snap.docs) {
+      if ((done + skipped) >= MAX_ACTIONS_PER_RUN) break;
+
       const d = doc.data();
       const email = d.email;
       const info = { id: doc.id, email, motivo: d.motivo, fechaEfectosMs: d.fechaEfectosMs };
@@ -490,8 +511,10 @@ async function jobBajasScheduler() {
         }
       });
 
-      if (res.skipped) { skipped++; vlog('bajaScheduler', 'skip (locked)', info); }
+      if (res?.skipped) { skipped++; vlog('bajaScheduler', 'skip (locked)', info); }
       else { done++; vlog('bajaScheduler', 'ok', info); }
+
+      if (((done + skipped) % SLOWDOWN_EVERY) === 0) { await sleep(SLOWDOWN_MS); }
     }
 
     vlog('bajaScheduler', 'end', { done, skipped });
@@ -516,13 +539,17 @@ async function jobSanity() {
     }
     const emails = await svc.getWpClubMembers();
     vlog('sanity', 'start', { candidates: emails.length });
-    let fixed = 0;
 
+    let fixed = 0, reviewed = 0;
     for (const email of emails) {
+      reviewed++;
+      if (fixed >= MAX_ACTIONS_PER_RUN) break;
+
       const res = await stripe.subscriptions.search({
         query: `status:'active' AND metadata['email']:'${email}'`,
         limit: 1,
       });
+
       if (!res.data.length) {
         vlog('sanity', '→ desactivar (sin sub activa en Stripe)', { email });
         await notifyOnce('planB.sanity.action', null, { email }, `planB.sanity.action:${email}`);
@@ -531,6 +558,8 @@ async function jobSanity() {
       } else {
         vlog('sanity', 'ok', { email, subId: res.data[0].id });
       }
+
+      if ((reviewed % SLOWDOWN_EVERY) === 0) { await sleep(SLOWDOWN_MS); }
     }
     vlog('sanity', 'end', { fixed });
   } catch (e) {
@@ -556,10 +585,10 @@ function makePoller(name, ms, fn) {
 }
 
 function startDaemon() {
-  const REPLAYER_MS   = parseInt(process.env.PLANB_REPLAYER_MS   || '120000', 10); // 2 min
-  const RECONC_MS     = parseInt(process.env.PLANB_RECONCILER_MS || '300000', 10); // 5 min
-  const BAJAS_MS      = parseInt(process.env.PLANB_BAJAS_MS      || '60000',  10); // 1 min
-  const SANITY_MS     = parseInt(process.env.PLANB_SANITY_MS     || '3600000',10); // 60 min
+  const REPLAYER_MS   = parseInt(process.env.PLANB_REPLAYER_MS   || '120000', 10);  // 2 min
+  const RECONC_MS     = parseInt(process.env.PLANB_RECONCILER_MS || '300000', 10);  // 5 min
+  const BAJAS_MS      = parseInt(process.env.PLANB_BAJAS_MS      || '60000',  10);  // 1 min
+  const SANITY_MS     = parseInt(process.env.PLANB_SANITY_MS     || '3600000',10);  // 60 min
   const ENABLE_SANITY = String(process.env.PLANB_ENABLE_SANITY || '0') === '1';
 
   makePoller('replayer',   REPLAYER_MS, jobReplayer);
@@ -601,7 +630,6 @@ async function main() {
 if (require.main === module) {
   main();
 } else {
-  // Si se importa, permite auto-iniciar daemon por ENV
   if (String(process.env.ENABLE_PLANB_DAEMON || '0') === '1') {
     try { startDaemon(); vlog('planB.daemon', 'autostart via import + ENABLE_PLANB_DAEMON=1'); }
     catch (e) { verror('planB.daemon.autostart', e); }

@@ -465,14 +465,18 @@ async function jobBajasScheduler() {
 
     const snap = await db.collection(BAJAS_COLL)
       .where('estadoBaja', '==', 'programada')
-      .where('fechaEfectosMs', '<=', now)
-      .limit(200)
+      .limit(500) // traemos más docs y filtramos en memoria
       .get();
 
-    if (snap.empty) { vlog('bajaScheduler', 'no pending'); return; }
+    const docs = snap.docs.filter(d => {
+      const data = d.data() || {};
+      return (data.fechaEfectosMs || 0) <= now;
+    });
+
+    if (!docs.length) { vlog('bajaScheduler', 'no pending'); return; }
 
     let done = 0, skipped = 0;
-    for (const doc of snap.docs) {
+    for (const doc of docs) {
       if ((done + skipped) >= MAX_ACTIONS_PER_RUN) break;
 
       const d = doc.data();

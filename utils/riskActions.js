@@ -4,7 +4,9 @@
  * - closeAllSessions(userId, email?)
  * - requirePasswordReset(userId, email?)
  * - sendUserNotice(email) → email directo al usuario (SMTP2GO API HTTP)
+ * - Predicados y helpers para ENFORCEMENT/EMAILS solo si se supera IPS24
  */
+
 'use strict';
 
 const crypto = require('crypto');
@@ -22,10 +24,33 @@ const SMTP2GO_FROM_NAME  = String(process.env.SMTP2GO_FROM_NAME  || 'Laboroteca'
 
 const USER_RESET_URL = (process.env.USER_RESET_URL || 'https://www.laboroteca.es/recuperar-contrasena').replace(/\/+$/,'');
 
+/* ──────────────────────────────────────────────────────────
+ * Utils
+ * ──────────────────────────────────────────────────────── */
 function _result(ok, status, data) {
   return { ok: !!ok, status: Number(status) || 0, data: data ?? {} };
 }
 
+function _hasIps24Exceeded(reasons) {
+  // Razón esperada: "ips24=7>5"
+  if (!Array.isArray(reasons)) return false;
+  return reasons.some(r => typeof r === 'string' && /^ips24=\d+>\d+$/.test(r));
+}
+
+/** Políticas: SOLO actuamos/avisamos si se supera ips24 */
+function shouldEnforceWP(risk) {
+  return !!(risk && Array.isArray(risk.reasons) && _hasIps24Exceeded(risk.reasons));
+}
+function shouldNotifyUser(risk) {
+  return shouldEnforceWP(risk); // mismo criterio: solo ips24
+}
+function shouldNotifyAdmin(risk) {
+  return shouldEnforceWP(risk); // mismo criterio: solo ips24
+}
+
+/* ──────────────────────────────────────────────────────────
+ * Petición firmada a WP (HMAC)
+ * ──────────────────────────────────────────────────────── */
 async function _postSigned(url, userId, email) {
   if (!url || !WP_RISK_SECRET) {
     return _result(false, 500, { error: 'wp_hmac_not_configured' });
@@ -71,6 +96,9 @@ async function _postSigned(url, userId, email) {
   }
 }
 
+/* ──────────────────────────────────────────────────────────
+ * Acciones WP
+ * ──────────────────────────────────────────────────────── */
 async function closeAllSessions(userId, email) {
   return _postSigned(WP_RISK_ENDPOINT, userId, email);
 }
@@ -83,10 +111,48 @@ async function requirePasswordReset(userId, email) {
 }
 
 /**
- * Envía email informativo al usuario (SMTP2GO API HTTP)
- * — Mensaje actualizado: ya no afirma que sea obligatorio cambiar la contraseña.
- * — Incluye enlace al buzón de incidencias.
+ * Enforcement con reintentos/backoff (cierre + require reset).
+ * Llama a los endpoints de WP para:
+ *  - cerrar todas las sesiones del usuario
+ *  - marcar el flag de "require reset" (tu plugin WP ya bloquea el login y fuerza reset)
  */
+async function enforceWithBackoff(userId, email) {
+  const maxRetries = 3;
+  const baseDelayMs = 400;
+
+  async function retry(fn, label) {
+    let last = { ok:false, status:0, data:{ error:'no_call' } };
+    for (let i = 0; i <= maxRetries; i++) {
+      last = await fn();
+      const ok2xx = last && last.ok === true;
+      const ok423 = Number(last?.status) === 423;
+      if (ok2xx || ok423) return { ok:true, status:last.status, tries:i+1, data:last.data };
+      const delay = Math.floor(Math.pow(2, i) * baseDelayMs);
+      if (LAB_DEBUG) console.warn(`[risk enforce] ${label} intento ${i+1} falló status=${last?.status}. Reintentando en ${delay}ms…`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+    return { ok:false, status:last?.status || 0, tries:maxRetries+1, data:last?.data };
+  }
+
+  const closeRes = await retry(() => closeAllSessions(userId, email), 'closeAllSessions');
+  const resetRes = await retry(() => requirePasswordReset(userId, email), 'requirePasswordReset');
+
+  const summary = {
+    closeAll:     { ok: closeRes.ok, status: closeRes.status, tries: closeRes.tries, error: closeRes.data?.error || null },
+    requireReset: { ok: resetRes.ok, status: resetRes.status, tries: resetRes.tries, error: resetRes.data?.error || null }
+  };
+
+  if (summary.closeAll.ok && summary.requireReset.ok) {
+    console.log('[risk enforce] ✅ cierre+reset aplicados', summary);
+  } else {
+    console.warn('[risk enforce] ⚠️ acciones incompletas', summary);
+  }
+  return summary;
+}
+
+/* ──────────────────────────────────────────────────────────
+ * Email usuario (SMTP2GO API HTTP) — SOLO cuando ips24 excedido
+ * ──────────────────────────────────────────────────────── */
 async function sendUserNotice(email) {
   if (!email || !email.includes('@')) return { ok:false, error:'invalid_email' };
 
@@ -151,7 +217,16 @@ https://www.laboroteca.es/incidencias/`;
 }
 
 module.exports = {
+  // Acciones WP
   closeAllSessions,
   requirePasswordReset,
-  sendUserNotice
+  enforceWithBackoff,
+
+  // Emails
+  sendUserNotice,
+
+  // Predicados para que la RUTA decida correctamente
+  shouldEnforceWP,
+  shouldNotifyUser,
+  shouldNotifyAdmin,
 };

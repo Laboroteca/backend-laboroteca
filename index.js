@@ -92,6 +92,7 @@ const desactivarMembresiaClub = require('./services/desactivarMembresiaClub');
 // ✔️ HMAC para baja voluntaria (WP → Backend)
 const { verifyHmac } = require('./utils/verifyHmac');
 const WP_ASSERTED_SENTINEL = process.env.WP_ASSERTED_SENTINEL || '__WP_ASSERTED__';
+// 👈 BAJA usa su propio secreto (no el de MP sync)
 const BAJA_HMAC_SECRET = (process.env.LAB_BAJA_HMAC_SECRET || '').trim();
 const validarEntrada = require('./entradas/routes/validarEntrada');
 const crearCodigoRegalo = require('./regalos/routes/crear-codigo-regalo');
@@ -162,7 +163,7 @@ function requireHmacPago(req,res,next){
   if (!REQUIRE_HMAC) return next();
   if (!PAGO_HMAC_SECRET) return res.status(500).json({ ok:false, error:'PAGO_HMAC_SECRET_MISSING' });
   const raw = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body || {});
-  const v = verifyHmac({
+  let v = verifyHmac({
     method: 'POST',
     path: req.path,
     bodyRaw: raw,
@@ -1048,13 +1049,35 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), requireJson, accountLi
           console.log('[BAJA HMAC CHECK]', { ts, path: pathname, bodyHash10: fullHash.slice(0,10) });
         } catch (_) {}
       }
-      const v = verifyHmac({
+      let v = verifyHmac({
         method: 'POST',
         path: pathname,
         bodyRaw: req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body || {}),
         headers: req.headers,
         secret: BAJA_HMAC_SECRET
       });
+      // 🛟 Fallback por skew (ms→s) y doble formato (legacy|v2) igual que en pagos
+      if (!v.ok && String(v.error || '').toLowerCase() === 'skew') {
+        try {
+          const raw = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body || {});
+          const rawHash = require('crypto').createHash('sha256').update(Buffer.from(raw,'utf8')).digest('hex');
+          const tsHeader = String(req.headers['x-lab-ts'] || '');
+          const sigHeader = String(req.headers['x-lab-sig'] || '');
+          const tsNum = Number(tsHeader);
+          const tsSec = (tsNum > 1e11) ? Math.floor(tsNum / 1000) : tsNum; // ms → s si hace falta
+          const nowSec = Math.floor(Date.now() / 1000);
+          const maxSkew = Number(process.env.LAB_HMAC_SKEW_SECS || 900);
+          const within = Math.abs(nowSec - tsSec) <= maxSkew;
+          const expectLegacy = require('crypto').createHmac('sha256', BAJA_HMAC_SECRET)
+            .update(`${tsSec}.${rawHash}`).digest('hex');
+          const expectV2 = require('crypto').createHmac('sha256', BAJA_HMAC_SECRET)
+            .update(`${tsSec}.POST.${pathname}.${rawHash}`).digest('hex');
+          if (within && (sigHeader === expectLegacy || sigHeader === expectV2)) {
+            if (LAB_DEBUG) console.warn('[BAJA HMAC] aceptado por fallback skew', { match: (sigHeader===expectLegacy?'legacy':'v2'), path: pathname });
+            v = { ok: true };
+          }
+        } catch(_) {}
+      }
       if (!v.ok) {
         if (LAB_DEBUG) console.warn('[BAJA HMAC FAIL]', v.error, { reqId, ts, sig10: String(sig).slice(0,10) });
         return res.status(401).json({ cancelada:false, mensaje:'Auth HMAC inválida', error: v.error });

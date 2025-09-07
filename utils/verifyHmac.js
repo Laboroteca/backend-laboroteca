@@ -85,14 +85,20 @@ function verifyHmac({ method, path, bodyRaw, headers, secret, skewMs = DEFAULT_S
   const tsSec = Math.floor(tsMs / 1000);
 
   // Formato de firma v2: ts.POST.<path>.sha256(body)
-  const base = `${tsSec}.${m}.${p}.${bodyHash}`;
-  const expect = crypto.createHmac('sha256', String(secret || '')).update(base).digest('hex');
+  const baseSec = `${tsSec}.${m}.${p}.${bodyHash}`;
+  const baseMs  = `${Math.floor(tsMs)}.${m}.${p}.${bodyHash}`;
+  const expectSec = crypto.createHmac('sha256', String(secret || '')).update(baseSec).digest('hex');
+  const expectMs  = crypto.createHmac('sha256', String(secret || '')).update(baseMs).digest('hex');
 
   // Comparación constant-time segura (mismo tamaño)
   const sigBuf = Buffer.from(sigHeader, 'hex');
-  const expBuf = Buffer.from(expect, 'hex');
-  if (sigBuf.length !== expBuf.length) return { ok: false, error: 'bad_sig' };
-  if (!crypto.timingSafeEqual(expBuf, sigBuf)) return { ok: false, error: 'bad_sig' };
+  const expBufS = Buffer.from(expectSec, 'hex');
+  const expBufM = Buffer.from(expectMs,  'hex');
+  const lenOk = (sigBuf.length === expBufS.length) || (sigBuf.length === expBufM.length);
+  if (!lenOk) return { ok: false, error: 'bad_sig' };
+  const match = (sigBuf.length === expBufS.length && crypto.timingSafeEqual(expBufS, sigBuf))
+            || (sigBuf.length === expBufM.length && crypto.timingSafeEqual(expBufM, sigBuf));
+  if (!match) return { ok: false, error: 'bad_sig' };
 
   // Marca anti-replay
   seen.set(reqId, now + (Number.isFinite(replayTtlMs) ? replayTtlMs : DEFAULT_REPLAY_TTL_MS));

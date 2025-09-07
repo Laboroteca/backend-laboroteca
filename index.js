@@ -35,7 +35,7 @@ console.log('🧠 INDEX REAL EJECUTÁNDOSE');
 console.log('🌍 NODE_ENV:', process.env.NODE_ENV);
 console.log('🔑 STRIPE_SECRET_KEY presente:', !!process.env.STRIPE_SECRET_KEY);
 console.log('🔐 STRIPE_WEBHOOK_SECRET presente:', !!process.env.STRIPE_WEBHOOK_SECRET);
-console.log('🔒 LAB_BAJA_HMAC_SECRET presente:', !!process.env.LAB_BAJA_HMAC_SECRET);
+console.log('🔒 MP_SYNC_HMAC_SECRET presente:', !!process.env.MP_SYNC_HMAC_SECRET);
 console.log('🔒 LAB_ELIM_HMAC_SECRET presente:', !!process.env.LAB_ELIM_HMAC_SECRET);
 console.log('🧷 LAB_REQUIRE_HMAC activo:', REQUIRE_HMAC);
 console.log('🔑 PAGO_API_KEY presente:', !!PAGO_API_KEY);
@@ -91,7 +91,7 @@ const desactivarMembresiaClub = require('./services/desactivarMembresiaClub');
 // ✔️ HMAC para baja voluntaria (WP → Backend)
 const { verifyHmac } = require('./utils/verifyHmac');
 const WP_ASSERTED_SENTINEL = process.env.WP_ASSERTED_SENTINEL || '__WP_ASSERTED__';
-const BAJA_HMAC_SECRET = (process.env.LAB_BAJA_HMAC_SECRET || '').trim();
+const BAJA_HMAC_SECRET = (process.env.MP_SYNC_HMAC_SECRET || '').trim();
 const validarEntrada = require('./entradas/routes/validarEntrada');
 const crearCodigoRegalo = require('./regalos/routes/crear-codigo-regalo');
 const registrarConsentimiento = require('./routes/registrar-consentimiento');
@@ -1029,6 +1029,8 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), requireJson, accountLi
     let resultado;
     let email;
     let via = 'legacy';
+    // Path EXACTO (sin query) para que coincida con el firmado en WP
+    const pathname = new URL(req.originalUrl || req.url, 'http://x').pathname;
 
     if (hasHmac) {
       if (!BAJA_HMAC_SECRET) {
@@ -1038,11 +1040,11 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), requireJson, accountLi
       if (LAB_DEBUG) {
         const raw = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body||{});
         const bodyHash10 = _first10Sha256(raw);
-        console.log('[BAJA HMAC IN]', { path: req.path, ts, bodyHash10, sig10: String(sig).slice(0,10), reqId });
+        console.log('[BAJA HMAC IN]', { path: pathname, ts, bodyHash10, sig10: String(sig).slice(0,10), reqId });
       }
       const v = verifyHmac({
         method: 'POST',
-        path: req.path,
+        path: pathname,
         bodyRaw: req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body || {}),
         headers: req.headers,
         secret: BAJA_HMAC_SECRET

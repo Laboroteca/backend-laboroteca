@@ -127,8 +127,15 @@ function verror(area, err, meta = {}) {
 /* ===================== Alertas (helpers) ===================== */
 async function sendAdmin(subject, text, meta = {}) {
   try {
-    await alertAdmin({ subject, text, meta }); // el proxy espera {subject, text, meta}
-    vlog('alerts', 'sent', { subject });
+    const res = await alertAdmin({ subject, text, meta }); // { ok?, status?, error? }
+    const ok =
+      res === undefined || res === null || res === true ||
+      res?.ok === true ||
+      (typeof res?.status === 'number' && res.status < 400);
+    if (!ok) {
+      throw new Error(`alertAdmin returned non-ok: ${safeStringify(res)}`);
+    }
+    vlog('alerts', 'sent', { subject, status: res?.status ?? 'ok' });
   } catch (e) {
     verror('alerts.send_fail', e, { subject });
   }

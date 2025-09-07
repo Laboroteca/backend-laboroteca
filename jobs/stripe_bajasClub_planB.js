@@ -465,12 +465,18 @@ async function jobBajasScheduler() {
 
     const snap = await db.collection(BAJAS_COLL)
       .where('estadoBaja', '==', 'programada')
-      .limit(500) // traemos más docs y filtramos en memoria
+      .limit(500)
       .get();
 
     const docs = snap.docs.filter(d => {
       const data = d.data() || {};
-      return (data.fechaEfectosMs || 0) <= now;
+      // Normaliza fechaEfectosMs si no existe
+      let fechaMs = data.fechaEfectosMs;
+      if (!fechaMs && data.fechaEfectos) {
+        try { fechaMs = new Date(data.fechaEfectos).getTime(); }
+        catch { fechaMs = 0; }
+      }
+      return (fechaMs || 0) <= now;
     });
 
     if (!docs.length) { vlog('bajaScheduler', 'no pending'); return; }
@@ -480,8 +486,13 @@ async function jobBajasScheduler() {
       if ((done + skipped) >= MAX_ACTIONS_PER_RUN) break;
 
       const d = doc.data();
-      const email = d.email;
-      const info = { id: doc.id, email, motivo: d.motivo, fechaEfectosMs: d.fechaEfectosMs };
+      const email = d.email || doc.id; // fallback al ID del doc
+      let fechaMs = d.fechaEfectosMs;
+      if (!fechaMs && d.fechaEfectos) {
+        try { fechaMs = new Date(d.fechaEfectos).getTime(); }
+        catch { fechaMs = 0; }
+      }
+      const info = { id: doc.id, email, motivo: d.motivo, fechaEfectosMs: fechaMs };
 
       const res = await ensureOnce('bajaScheduler', `bajaProg:${doc.id}`, 6 * 3600, async () => {
         await wpDeactivateOnce(email, null, 'bajaScheduler', info, 'baja_programada');

@@ -562,6 +562,35 @@ async function jobSanity() {
   }
 }
 
+
+/* ===================== Agregador: ejecutar TODO el Plan B ===================== */
+async function runAllPlanB() {
+  const out = { ok: true, steps: {} };
+  try {
+    out.steps.reconciler = await jobReconciler();
+  } catch (e) {
+    verror('planB.full.reconciler', e);
+    out.reconcilerError = e?.message || String(e);
+    out.ok = false;
+  }
+  try {
+    out.steps.replayer = await jobReplayer();
+  } catch (e) {
+    verror('planB.full.replayer', e);
+    out.replayerError = e?.message || String(e);
+    out.ok = false;
+  }
+  try {
+    out.steps.scheduler = await jobBajasScheduler();
+  } catch (e) {
+    verror('planB.full.scheduler', e);
+    out.schedulerError = e?.message || String(e);
+    out.ok = false;
+  }
+  vlog('planB.full', 'end', { ok: out.ok });
+  return out;
+}
+
 /* ===================== Daemon interno (opcional) ===================== */
 function makePoller(name, ms, fn) {
   let running = false;
@@ -601,6 +630,9 @@ async function main() {
     else if (cmd === 'bajas')      await jobBajasScheduler();
     else if (cmd === 'sanity')     await jobSanity();
     else if (cmd === 'testalert')  await sendAdmin('[PlanB][TEST]', 'Prueba de alertas OK', { service: 'Fallback Plan B' });
+    else if (cmd === 'full') {
+      const r = await runAllPlanB(); console.log(JSON.stringify({ area: 'planB.full', ...r }));
+    }
     else if (cmd === 'daemon')     startDaemon();
     else {
       console.log(`Usage:
@@ -608,6 +640,7 @@ async function main() {
   node jobs/stripe_bajasClub_planB.js reconciler
   node jobs/stripe_bajasClub_planB.js bajas
   node jobs/stripe_bajasClub_planB.js sanity
+  node jobs/stripe_bajasClub_planB.js full
   node jobs/stripe_bajasClub_planB.js testalert
   node jobs/stripe_bajasClub_planB.js daemon   # planificador interno`);
       process.exitCode = 2;
@@ -634,5 +667,6 @@ module.exports = {
   jobReconciler,
   jobBajasScheduler,
   jobSanity,
+  runAllPlanB,
   startDaemon,
 };

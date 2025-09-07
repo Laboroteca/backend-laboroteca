@@ -3,8 +3,8 @@
  * Función: registrar eventos de login y decidir riesgo según umbrales.
  *  - Memoria 24h por usuario (Map en proceso)
  *  - Umbrales por ENV (con defaults):
- *      RISK_IPS_24H=5
- *      RISK_UAS_24H=4
+ *      RISK_IPS_24H=6
+ *      RISK_UAS_24H=6
  *      RISK_LOGINS_15M=6
  *  - Geovelocidad DESACTIVADA por defecto (solo métrica para debug).
  *  - Endurecimientos: ignora IPs/UA “ruidosos”, cap de memoria, anti-ráfagas.
@@ -13,8 +13,8 @@
 'use strict';
 
 /* ================== Config vía ENV (con defaults) ================== */
-const MAX_IPS_24    = Math.max(1, Number(process.env.RISK_IPS_24H    || 5));
-const MAX_UA_24     = Math.max(1, Number(process.env.RISK_UAS_24H    || 4));
+const MAX_IPS_24    = Math.max(1, Number(process.env.RISK_IPS_24H    || 6));
+const MAX_UA_24     = Math.max(1, Number(process.env.RISK_UAS_24H    || 6));
 const MAX_LOGINS_15 = Math.max(1, Number(process.env.RISK_LOGINS_15M || 6));
 
 // Geovelocidad (visible en métricas; NO dispara razones)
@@ -94,13 +94,11 @@ function recordLogin(userId, ctx = {}) {
 
   // Protección ante inflado de usuarios en memoria
   if (!mem.has(u) && mem.size >= GLOBAL_USERS_CAP) {
-    // política FIFO simple: elimina el primer key insertado
     const it = mem.keys().next();
     if (!it.done) mem.delete(it.value);
   }
 
   const ip = (ctx.ip || '').trim();
-  // Limitar UA (longitudes absurdas), normalizar y permitir detectar ruido
   const ua = (ctx.ua || '').toString().slice(0, 180);
 
   const lat = Number.isFinite(ctx.lat) ? Number(ctx.lat) : undefined;
@@ -114,12 +112,11 @@ function recordLogin(userId, ctx = {}) {
     const last = arr[arr.length - 1];
     if (last && last.ip === ip && last.ua === ua && (now - last.t) < BURST_COOLDOWN_MS) {
       if (LAB_DEBUG) console.log('[riskDecider] burst-skip', u, `${now - last.t}ms < ${BURST_COOLDOWN_MS}ms`);
-      // devolvemos evaluación con el histórico actual (sin registrar el burst)
       return _evaluate(arr, now, ip, ua, lat, lon);
     }
   }
 
-  // Registrar (incluye el evento actual para que cuente en la ventana)
+  // Registrar
   arr.push({ t: now, ip, ua, lat, lon, country });
 
   // Conservar 24h y cap por usuario
@@ -168,7 +165,7 @@ function _evaluate(events, now, currentIp, currentUa, lat, lon) {
       const prev = events[i];
       if (Number.isFinite(prev.lat) && Number.isFinite(prev.lon)) {
         const km = haversineKm(prev.lat, prev.lon, lat, lon);
-        const h  = Math.max((now - prev.t) / 3600000, 1/3600); // mínimo 1s para evitar /0
+        const h  = Math.max((now - prev.t) / 3600000, 1/3600); // mínimo 1s
         geoKmh = km / h;
         break;
       }

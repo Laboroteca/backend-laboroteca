@@ -1,244 +1,190 @@
 /**
- * Archivo: utils/riskActions.js
- * Objetivo:
- *  - Cerrar TODAS las sesiones activas en WP cuando se dispare el riesgo.
- *  - Forzar "cambio de contraseña requerido" en WP.
- *  - Avisar al usuario por email (SMTP2GO API HTTP).
- *
- * Funciones exportadas:
- *  - closeAllSessions(userId, email?)
- *  - requirePasswordReset(userId, email?)
- *  - sendUserNotice(email)
+ * utils/riskActions.js — SOLO emails (usuario + admin)
+ * - sendUserNotice(email, { idemKey }?)
+ * - sendAdminAlert(userId, email, risk?, { idemKey }?)
+ * Incluye: firma "Laboroteca", pie RGPD, cooldown e Idempotency-Key.
  */
 'use strict';
 
-const crypto = require('crypto');
-const fetch  = require('node-fetch');
+const fetch = require('node-fetch');
 
-/* ===================== Config / ENV ===================== */
-const WP_RISK_ENDPOINT      = String(process.env.WP_RISK_ENDPOINT || '').trim();          // cerrar sesiones
-const WP_RISK_REQUIRE_RESET = String(process.env.WP_RISK_REQUIRE_RESET || '').trim();     // marcar require-reset
-const WP_RISK_SECRET        = String(process.env.WP_RISK_SECRET || '').trim();
+const SMTP2GO_API_KEY    = String(process.env.SMTP2GO_API_KEY || '').trim();
+const SMTP2GO_API_URL    = String(process.env.SMTP2GO_API_URL || 'https://api.smtp2go.com/v3/email/send').trim();
+const SMTP2GO_FROM_EMAIL = String(process.env.SMTP2GO_FROM_EMAIL || 'laboroteca@laboroteca.es').trim();
+const SMTP2GO_FROM_NAME  = String(process.env.SMTP2GO_FROM_NAME  || 'Laboroteca').trim();
 
-const SMTP2GO_API_KEY       = String(process.env.SMTP2GO_API_KEY || '').trim();
-const SMTP2GO_API_URL       = String(process.env.SMTP2GO_API_URL || 'https://api.smtp2go.com/v3/email/send').trim();
-const SMTP2GO_FROM_EMAIL    = String(process.env.SMTP2GO_FROM_EMAIL || 'laboroteca@laboroteca.es').trim();
-const SMTP2GO_FROM_NAME     = String(process.env.SMTP2GO_FROM_NAME  || 'Laboroteca').trim();
+const ADMIN_EMAIL        = String(process.env.ADMIN_EMAIL || 'laboroteca@gmail.com').trim();
+const USER_RESET_URL     = (process.env.USER_RESET_URL || 'https://www.laboroteca.es/recuperar-contrasena').replace(/\/+$/,'');
 
-const USER_RESET_URL        = (process.env.USER_RESET_URL || 'https://www.laboroteca.es/recuperar-contrasena').replace(/\/+$/,'');
-const LAB_DEBUG             = (process.env.LAB_DEBUG === '1' || process.env.DEBUG === '1');
+const LAB_DEBUG = (process.env.LAB_DEBUG === '1' || process.env.DEBUG === '1');
 
-/* Pequeña validación de arranque para detectar mal config en producción */
-function _assertServerConfig() {
-  const errs = [];
-  if (!WP_RISK_SECRET) errs.push('WP_RISK_SECRET vacío');
-  if (!WP_RISK_ENDPOINT) errs.push('WP_RISK_ENDPOINT vacío');
-  if (!SMTP2GO_API_KEY) errs.push('SMTP2GO_API_KEY vacío (solo afecta a emails)');
-  if (errs.length && LAB_DEBUG) {
-    console.warn('[riskActions] Advertencia de configuración:', errs.join(' | '));
-  }
+// Antispam
+const USER_MAIL_COOLDOWN_MIN  = Number(process.env.USER_MAIL_COOLDOWN_MIN  || 1440); // 24h
+const ADMIN_MAIL_COOLDOWN_MIN = Number(process.env.ADMIN_MAIL_COOLDOWN_MIN || 120);  // 2h
+const IDEMPOTENCY_SHORT_WINDOW_MS = Number(process.env.IDEMPOTENCY_SHORT_WINDOW_MS || 5 * 60 * 1000);
+
+const lastUserMail  = new Map();   // email -> ts
+const lastAdminMail = new Map();   // userId -> ts
+const recentIdem    = new Map();   // idemKey -> ts
+
+const PIE_HTML = `
+<hr style="margin-top:40px;margin-bottom:10px;" />
+<div style="font-size:12px;color:#777;line-height:1.5;">
+  En cumplimiento del Reglamento (UE) 2016/679 (RGPD) y la LOPDGDD, le informamos de que su dirección de correo electrónico forma parte de la base de datos de Ignacio Solsona Fernández-Pedrera (DNI 20481042W), con domicilio en calle Enmedio nº 22, 3.º E, 12001 Castellón de la Plana (España).<br /><br />
+  Finalidades: prestación de servicios jurídicos, venta de infoproductos, gestión de entradas a eventos, emisión y envío de facturas por email y, en su caso, envío de newsletter y comunicaciones comerciales si usted lo ha consentido. Base jurídica: ejecución de contrato y/o consentimiento. Puede retirar su consentimiento en cualquier momento.<br /><br />
+  Puede ejercer sus derechos de acceso, rectificación, supresión, portabilidad, limitación y oposición escribiendo a <a href="mailto:laboroteca@gmail.com">laboroteca@gmail.com</a>. También puede presentar una reclamación ante la autoridad de control competente. Más información en nuestra política de privacidad: <a href="https://www.laboroteca.es/politica-de-privacidad/" target="_blank" rel="noopener">https://www.laboroteca.es/politica-de-privacidad/</a>.
+</div>
+`.trim();
+
+const PIE_TEXT = `
+------------------------------------------------------------
+En cumplimiento del Reglamento (UE) 2016/679 (RGPD) y la LOPDGDD, su email forma parte de la base de datos de Ignacio Solsona Fernández-Pedrera (DNI 20481042W), calle Enmedio nº 22, 3.º E, 12001 Castellón de la Plana (España).
+
+Finalidades: prestación de servicios jurídicos, venta de infoproductos, gestión de entradas a eventos, emisión y envío de facturas por email y, en su caso, envío de newsletter y comunicaciones comerciales si usted lo ha consentido. Base jurídica: ejecución de contrato y/o consentimiento. Puede retirar su consentimiento en cualquier momento.
+
+Puede ejercer sus derechos de acceso, rectificación, supresión, portabilidad, limitación y oposición escribiendo a: laboroteca@gmail.com.
+También puede presentar una reclamación ante la autoridad de control competente.
+Más información: https://www.laboroteca.es/politica-de-privacidad/
+`.trim();
+
+function now(){ return Date.now(); }
+function minutes(ms){ return ms * 60 * 1000; }
+function underCooldown(map, key, mins){ return (now() - (map.get(key)||0)) < minutes(mins); }
+function stamp(map, key){ map.set(key, now()); }
+function skipByIdem(key){
+  if (!key) return false;
+  const last = recentIdem.get(key) || 0;
+  if (now() - last < IDEMPOTENCY_SHORT_WINDOW_MS) return true;
+  recentIdem.set(key, now());
+  return false;
 }
-_assertServerConfig();
 
-/* ===================== Utilidades comunes ===================== */
-function _result(ok, status, data) {
-  return { ok: !!ok, status: Number(status) || 0, data: data ?? {} };
-}
-
-function _makeSig(userId, ts, secret) {
-  return crypto.createHmac('sha256', secret).update(`${userId}.${ts}`).digest('hex');
-}
-
-function _abortPair(ms = 10000) {
+function abortPair(ms=10000){
   const { default: AbortController } = require('abort-controller');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ms);
   return { controller, timer };
 }
 
-/**
- * POST firmado hacia WP (firma en BODY y también en HEADERS por compat).
- * Reintenta con backoff exponencial (3 intentos + el primero = 4 máximo).
- * Éxito si HTTP 2xx o 423 (usuario ya bloqueado/expulsado).
- */
-async function _postSigned(url, { userId, email = '' }, { timeoutMs = 8000, label = 'wp-call' } = {}) {
-  if (!url || !WP_RISK_SECRET) {
-    if (LAB_DEBUG) console.error('[riskActions]', label, 'config incompleta: url/secret');
-    return _result(false, 500, { error: 'wp_hmac_not_configured' });
+async function sendMail({ to, subject, text, html }){
+  if (!SMTP2GO_API_KEY || !SMTP2GO_API_URL) {
+    return { ok:false, status:500, data:{ error:'smtp_not_configured' } };
   }
 
-  const uid = Number(userId);
-  if (!Number.isFinite(uid) || uid <= 0) {
-    return _result(false, 400, { error: 'invalid_userId' });
-  }
+  const SIGN_HTML = `<p style="margin-top:20px;">Un saludo,<br/> <strong>Laboroteca</strong></p>`;
+  const SIGN_TEXT = `\n\nUn saludo,\nLaboroteca`;
 
-  const maxRetries = 3;
-  const baseDelay  = 400; // ms
-
-  let last = _result(false, 0, { error: 'no_call' });
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const ts  = Math.floor(Date.now() / 1000);
-    const sig = _makeSig(uid, ts, WP_RISK_SECRET);
-
-    const body = {
-      userId: uid,
-      email: email || '',
-      ts,
-      sig
-    };
-
-    const { controller, timer } = _abortPair(timeoutMs);
-    const reqId = `risk_${Date.now().toString(36)}${Math.random().toString(36).slice(2,7)}`;
-
-    try {
-      const r = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type'  : 'application/json',
-          'Accept'        : 'application/json',
-          'User-Agent'    : 'LabRisk/1.0 (+node)',
-          'X-Request-Id'  : reqId,
-          // Firma también en cabeceras por compatibilidad con distintos handlers
-          'X-Risk-Ts'     : String(ts),
-          'X-Risk-Sig'    : sig
-        },
-        body: JSON.stringify(body),
-        signal: controller.signal
-      });
-
-      const raw = await r.text();
-      let data;
-      try { data = raw ? JSON.parse(raw) : {}; } catch { data = { _raw: raw }; }
-
-      const ok = r.ok || r.status === 423; // 423: ya estaba bloqueado
-      last = _result(ok, r.status, data);
-
-      if (LAB_DEBUG) {
-        console.log(`[riskActions] ${label} → ${url} :: status=${r.status} ok=${ok ? 'yes' : 'no'} id=${reqId}`);
-        if (!ok) console.warn(`[riskActions] ${label} respuesta:`, data);
-      }
-
-      if (ok) {
-        clearTimeout(timer);
-        return last;
-      }
-
-      // Si no ok, reintentar con backoff
-      clearTimeout(timer);
-      if (attempt < maxRetries) {
-        const delay = Math.floor(baseDelay * Math.pow(2, attempt));
-        if (LAB_DEBUG) console.warn(`[riskActions] ${label} intento ${attempt+1} falló; reintento en ${delay}ms…`);
-        await new Promise(r => setTimeout(r, delay));
-        continue;
-      } else {
-        break;
-      }
-    } catch (err) {
-      clearTimeout(timer);
-      const code = err?.name === 'AbortError' ? 504 : 500;
-      last = _result(false, code, { error: err?.message || String(err) });
-      if (LAB_DEBUG) console.warn(`[riskActions] ${label} ERROR:`, last.data.error);
-      if (attempt < maxRetries) {
-        const delay = Math.floor(baseDelay * Math.pow(2, attempt));
-        await new Promise(r => setTimeout(r, delay));
-        continue;
-      } else {
-        break;
-      }
-    }
-  }
-
-  return last;
-}
-
-/* ===================== Acciones hacia WP ===================== */
-
-/**
- * Cierra TODAS las sesiones en WordPress para el usuario indicado.
- * Devuelve ok=true si WP responde 2xx o 423.
- */
-async function closeAllSessions(userId, email) {
-  return _postSigned(WP_RISK_ENDPOINT, { userId, email }, { label: 'closeAllSessions' });
-}
-
-/**
- * Marca el usuario con "require password reset" en WordPress.
- * Devuelve ok=true si WP responde 2xx o 423.
- */
-async function requirePasswordReset(userId, email) {
-  if (!WP_RISK_REQUIRE_RESET) {
-    if (LAB_DEBUG) console.error('[riskActions] requirePasswordReset sin WP_RISK_REQUIRE_RESET');
-    return _result(false, 500, { error: 'wp_reset_endpoint_not_configured' });
-  }
-  return _postSigned(WP_RISK_REQUIRE_RESET, { userId, email }, { label: 'requirePasswordReset' });
-}
-
-/* ===================== Email al usuario (SMTP2GO) ===================== */
-/**
- * Envía email informativo al usuario (actividad inusual + enlace a reset).
- * No bloquea la lógica de expulsión/reset; si falla el email, retorna ok=false.
- */
-async function sendUserNotice(email) {
-  if (!email || !email.includes('@')) return { ok:false, error:'invalid_email' };
-  if (!SMTP2GO_API_KEY || !SMTP2GO_API_URL) return { ok:false, error:'smtp_not_configured' };
-
-  const subject = 'Seguridad de tu cuenta — actividad inusual detectada';
-  const text = `Hemos detectado actividad inusual en tu cuenta (accesos desde varias direcciones IP).
-Por seguridad, hemos cerrado todas las sesiones activas. Te recomendamos cambiar tu contraseña.
-
-Puedes cambiarla aquí: ${USER_RESET_URL}
-
-Si no has sido tú, puedes contactarnos a través del buzón de incidencias:
-https://www.laboroteca.es/incidencias/`;
-
-  const html = `
-<p>Hemos detectado <strong>actividad inusual</strong> en tu cuenta (accesos desde varias direcciones IP).</p>
-<p>Por seguridad, hemos cerrado todas las sesiones activas. <strong>Te recomendamos cambiar tu contraseña.</strong></p>
-<p><a href="${USER_RESET_URL}" target="_blank" rel="noopener noreferrer">Cambiar mi contraseña</a></p>
-<p>Si no has sido tú, puedes contactarnos a través del <a href="https://www.laboroteca.es/incidencias/" target="_blank" rel="noopener noreferrer">buzón de incidencias</a>.</p>
-`.trim();
+  const htmlFinal = (html || '') + SIGN_HTML + '\n' + PIE_HTML;
+  const textFinal = (text || '') + SIGN_TEXT + '\n\n' + PIE_TEXT;
 
   const payload = {
     api_key: SMTP2GO_API_KEY,
-    to: [ email ],
+    to: Array.isArray(to) ? to : [to],
     sender: `${SMTP2GO_FROM_NAME} <${SMTP2GO_FROM_EMAIL}>`,
     subject,
-    text_body: text,
-    html_body: html
+    html_body: htmlFinal,
+    text_body: textFinal
   };
 
-  const { controller, timer } = _abortPair(10000);
-
+  const { controller, timer } = abortPair(10000);
   try {
-    const resp = await fetch(SMTP2GO_API_URL, {
+    const r = await fetch(SMTP2GO_API_URL, {
       method: 'POST',
       headers: { 'Content-Type':'application/json' },
       body: JSON.stringify(payload),
       signal: controller.signal
     });
-
-    const data = await resp.json().catch(() => ({}));
-    if (resp.ok && data?.data?.succeeded === 1) {
-      if (LAB_DEBUG) console.log('[riskActions] Email enviado a', email);
-      clearTimeout(timer);
-      return { ok:true };
-    }
-    const errMsg = data?.data?.error || data?.error || JSON.stringify(data);
-    if (LAB_DEBUG) console.error('❌ [riskActions] smtp_send_failed:', errMsg);
-    clearTimeout(timer);
-    return { ok:false, error:`smtp_send_failed: ${errMsg}` };
-  } catch (err) {
-    if (LAB_DEBUG) console.error('❌ [riskActions] Error enviando email usuario:', err?.message || err);
-    return { ok:false, error: err?.message || String(err) };
+    const data = await r.json().catch(()=> ({}));
+    const ok = r.ok && data?.data?.succeeded === 1 && data?.data?.failed === 0;
+    return { ok, status: r.status, data: ok ? {} : { error: data?.data?.error || data?.error || `status_${r.status}` } };
+  } catch (e) {
+    return { ok:false, status: e?.name === 'AbortError' ? 504 : 500, data:{ error: e?.message || String(e) } };
   } finally {
     clearTimeout(timer);
   }
 }
 
-/* ===================== Exports ===================== */
+/** Email al USUARIO (con cooldown + idemKey) */
+async function sendUserNotice(email, { idemKey } = {}){
+  if (!email || !email.includes('@')) return { ok:false, status:400, data:{ error:'invalid_email' } };
+  if (skipByIdem(idemKey)) { if (LAB_DEBUG) console.log('[userMail] skip idem', idemKey); return { ok:true, status:200, data:{ skipped:'idempotent' } }; }
+  if (underCooldown(lastUserMail, email, USER_MAIL_COOLDOWN_MIN)) {
+    if (LAB_DEBUG) console.log('[userMail] skip cooldown', email);
+    return { ok:true, status:200, data:{ skipped:'cooldown' } };
+  }
+
+  const subject = 'Seguridad de tu cuenta — actividad inusual detectada';
+
+  const text = `Hemos detectado actividad inusual en tu cuenta (accesos desde varias direcciones IP o navegadores).
+Te recomendamos cambiar tu contraseña.
+Puedes cambiarla aquí: ${USER_RESET_URL}
+Si no has sido tú, puedes contactarnos a través del buzón de incidencias:
+https://www.laboroteca.es/incidencias/
+Recuerda que los términos y condiciones de los productos vendidos en Laboroteca, no permiten compartir cuentas, siendo posible la suspensión de la cuenta en caso de incumplimiento sin derecho a reembolso.
+Equipo Laboroteca`;
+
+  const html = `
+<p>Hemos detectado <strong>actividad inusual</strong> en tu cuenta (accesos desde varias direcciones IP o navegadores).</p>
+<p><strong>Te recomendamos cambiar tu contraseña.</strong></p>
+<p><a href="${USER_RESET_URL}" target="_blank" rel="noopener noreferrer">Cambiar mi contraseña</a></p>
+<p>Si no has sido tú, puedes contactarnos a través del <a href="https://www.laboroteca.es/incidencias/" target="_blank" rel="noopener noreferrer">buzón de incidencias</a>.</p>
+<p style="margin-top:14px;">Recuerda que los <strong>Términos y Condiciones</strong> de los productos vendidos en Laboroteca no permiten compartir cuentas, siendo posible la suspensión de la cuenta en caso de incumplimiento sin derecho a reembolso.</p>
+<p><em>Equipo Laboroteca</em></p>
+`.trim();
+
+  const resp = await sendMail({ to: email, subject, text, html });
+  if (resp.ok) stamp(lastUserMail, email);
+  return resp;
+}
+
+/** Email al ADMIN (con cooldown + idemKey) */
+async function sendAdminAlert(userId, email, risk=null, { idemKey } = {}){
+  const uid = String(userId || '').trim();
+  if (!uid) return { ok:false, status:400, data:{ error:'invalid_userId' } };
+  if (!ADMIN_EMAIL) return { ok:false, status:500, data:{ error:'admin_email_not_configured' } };
+
+  if (skipByIdem(idemKey)) { if (LAB_DEBUG) console.log('[adminMail] skip idem', idemKey); return { ok:true, status:200, data:{ skipped:'idempotent' } }; }
+  if (underCooldown(lastAdminMail, uid, ADMIN_MAIL_COOLDOWN_MIN)) {
+    if (LAB_DEBUG) console.log('[adminMail] skip cooldown', uid);
+    return { ok:true, status:200, data:{ skipped:'cooldown' } };
+  }
+
+  const subject = `🚨 Actividad inusual — userId=${uid}`;
+  const reasons = Array.isArray(risk?.reasons) ? risk.reasons.join(', ') : '—';
+  const ip24 = risk?.metrics?.ip24 ?? 'n/a';
+  const ua24 = risk?.metrics?.ua24 ?? 'n/a';
+  const log15 = risk?.metrics?.logins15 ?? 'n/a';
+  const geoKmh = risk?.metrics?.geoKmh ?? 'n/a';
+
+  const text =
+`Se ha detectado actividad inusual.
+
+Usuario: ${uid}${email ? ` · ${email}` : ''}
+Motivo: ${reasons}
+
+Métricas:
+- IPs (24h): ${ip24}
+- UAs (24h): ${ua24}
+- Logins (15m): ${log15}
+- Geo (km/h): ${geoKmh}`;
+
+  const html =
+`<h2>🚨 Actividad inusual</h2>
+<p><strong>Usuario:</strong> ${uid}${email ? ` · ${email}` : ''}</p>
+<p><strong>Motivo:</strong> ${reasons}</p>
+<ul>
+  <li>IPs (24h): <strong>${ip24}</strong></li>
+  <li>UAs (24h): <strong>${ua24}</strong></li>
+  <li>Logins (15m): <strong>${log15}</strong></li>
+  <li>Geo (km/h): <strong>${geoKmh}</strong></li>
+</ul>`;
+
+  const resp = await sendMail({ to: ADMIN_EMAIL, subject, text, html });
+  if (resp.ok) stamp(lastAdminMail, uid);
+  return resp;
+}
+
 module.exports = {
-  closeAllSessions,
-  requirePasswordReset,
-  sendUserNotice
+  sendUserNotice,
+  sendAdminAlert
 };

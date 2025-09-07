@@ -15,6 +15,9 @@ const {
   DEFAULT_IMAGE
 } = require('../utils/productos');
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
+// 🔗 Firestore (solo para validar descuentos — modo best-effort)
+const admin = require('../firebase');
+const firestore = admin.firestore();
 
 router.post('/create-session', async (req, res) => {
   // ❌ Bloquear intentos de lanzar entradas por esta ruta
@@ -39,7 +42,9 @@ router.post('/create-session', async (req, res) => {
 
   // Vars para meta en alertas del catch final (no afectan al flujo)
   let email, tipoProducto, nombreProducto, esEntrada, isSuscripcion, totalAsistentes, importeFormulario;
-
+  // métricas internas de descuento (no afectan al flujo si fallan)
+  let codigoDescuentoInput = '';
+  let descuentoCents = 0;
 
   try {
     const body = req.body;
@@ -60,7 +65,8 @@ router.post('/create-session', async (req, res) => {
     const descripcionFormulario = (datos.descripcionProducto || '').trim();
     const imagenFormulario = (datos.imagenProducto || '').trim();
     importeFormulario = parseFloat((datos.importe || '').toString().replace(',', '.'));
-
+    // 🏷️ Campo opcional del formulario duplicado
+    codigoDescuentoInput = ((datos.codigoDescuento || '') + '').trim().toUpperCase();
     // 🔒 Este endpoint es SOLO para pago único
     isSuscripcion = tipoProducto.toLowerCase().includes('suscrip') || tipoProducto.toLowerCase().includes('club');
     esEntrada = tipoProducto.toLowerCase() === 'entrada';
@@ -136,7 +142,7 @@ router.post('/create-session', async (req, res) => {
 
     // 💶 Importe para pago único (sin entradas): catálogo > formulario
     const precioCatalogoCents = Number.isFinite(Number(producto?.precio_cents)) ? Number(producto.precio_cents) : NaN;
-    const importeFinalCents = Math.round(
+    let importeFinalCents = Math.round(
       Number.isFinite(importeFormulario) && importeFormulario > 0
         ? importeFormulario * 100
         : (Number.isFinite(precioCatalogoCents) ? precioCatalogoCents : 0)
@@ -157,6 +163,40 @@ router.post('/create-session', async (req, res) => {
     // 💳 Línea de Stripe: prioriza price_id del catálogo (precio “oficial”)
     let line_items;
     let usarPriceId = false;
+
+    /* ==============================================
+     *  DESCUENTOS — validación best-effort (no bloquea)
+     * ============================================== */
+    try {
+      // Solo procesamos si viene un posible código con patrón
+      if (/^DSC-[A-Z0-9]{5}$/.test(codigoDescuentoInput)) {
+        const doc = await firestore.collection('codigosDescuento').doc(codigoDescuentoInput).get();
+        const d = doc.exists ? (doc.data() || {}) : null;
+        const yaUsado = !!d?.usado;
+        const valorEur = Number(d?.valor) || 0; // el generador guarda "valor" en €
+        const candidato = Math.round(Math.max(0, valorEur) * 100);
+
+        if (!doc.exists) {
+          console.warn('🔎 [descuento] código no existe:', codigoDescuentoInput);
+        } else if (yaUsado) {
+          console.warn('🔒 [descuento] código ya usado:', codigoDescuentoInput);
+        } else if (candidato <= 0) {
+          console.warn('⚠️ [descuento] valor inválido para código:', codigoDescuentoInput, d?.valor);
+        } else {
+          // Cap para no dejar importe <= 0 (evitamos sesiones 0€ aquí: decisión conservadora)
+          if (candidato >= importeFinalCents) {
+            console.warn('⚠️ [descuento] supera o iguala el importe; se ignora para no romper el checkout.');
+          } else {
+            descuentoCents = candidato;
+            importeFinalCents = Math.max(0, importeFinalCents - descuentoCents);
+          }
+        }
+      }
+    } catch (e) {
+      // Nunca bloquea el flujo por descuentos
+      console.warn('⚠️ [descuento] error no bloqueante:', e?.message || e);
+      descuentoCents = 0;
+    }
     if (candidatePriceId) {
       try {
         const pr = await stripe.prices.retrieve(candidatePriceId);
@@ -172,6 +212,11 @@ router.post('/create-session', async (req, res) => {
         console.warn('⚠️ price_id no recuperable en Stripe:', candidatePriceId, e?.message || e);
       }
     }
+    // Si hay descuento aplicado, forzamos price_data con unit_amount ya descontado
+    if (usarPriceId && descuentoCents > 0) {
+      usarPriceId = false;
+    }
+
     if (usarPriceId) {
       line_items = [{ price: candidatePriceId, quantity: 1 }];
     } else {
@@ -223,7 +268,13 @@ router.post('/create-session', async (req, res) => {
         // Auditoría/compat
         importe: (Number.isFinite(importeFinalCents) ? (importeFinalCents / 100) : 0).toFixed(2),
         tipoProductoOriginal: tipoProducto,
-        nombreProductoOriginal: nombreProducto
+        nombreProductoOriginal: nombreProducto,
+        // 🧾 Trazabilidad de descuento (para webhook)
+        codigoDescuento: codigoDescuentoInput || '',
+        descuentoCents: String(descuentoCents || 0),
+        descuentoEur: ((descuentoCents || 0) / 100).toFixed(2),
+        descuentoFuente: descuentoCents > 0 ? 'codigoDescuento' : '',
+        descuentoAplicado: descuentoCents > 0 ? '1' : '0'
       }
     });
 

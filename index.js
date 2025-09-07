@@ -101,7 +101,7 @@ const marketingConsent = require('./routes/marketing-consent');
 const marketingUnsubscribe = require('./routes/marketing-unsubscribe');
 const marketingSend = require('./routes/marketing-send');
 const marketingCron = require('./routes/marketing-cron');
-const cronBajasClub = require('./services/cronBajasClub');
+const { jobBajasScheduler: cronBajasClub } = require('./jobs/stripe_bajasClub_planB');
 
 const app = express();
 app.set('trust proxy', 1);

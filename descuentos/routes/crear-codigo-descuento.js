@@ -4,46 +4,49 @@
 const express = require('express');
 const router = express.Router();
 
-const { crearCodigoDescuento } = require('../services/crear-descuento'); // <-- ojo al path del service
+const { crearCodigoDescuento } = require('../services/crear-codigo-descuento'); // <- service real
 const { verifyHmac } = require('../../utils/verifyHmac');
 const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 
 const REQUIRE_HMAC = process.env.LAB_REQUIRE_HMAC === '1';
 const HSEC = String(
   process.env.DESCUENTOS_HMAC_SECRET ||
-  process.env.ENTRADAS_HMAC_SECRET || // fallback por compat
+  process.env.ENTRADAS_HMAC_SECRET || // compat
   ''
 ).trim();
 
 const API_KEY = String(
   process.env.DESCUENTOS_API_KEY ||
-  process.env.ENTRADAS_API_KEY || '' // fallback por compat
+  process.env.ENTRADAS_API_KEY || // compat
+  ''
 ).trim();
 
-function getSigHeaders(req) {
-  // Acepta x-lab-*, x-entr-* y x-e-*
-  const ts = String(
-    req.headers['x-lab-ts'] ||
-    req.headers['x_lb_ts'] ||
-    req.headers['x-entr-ts'] ||
-    req.headers['x_e_ts'] ||
-    req.headers['x-e-ts'] ||
-    ''
-  );
-  const sig = String(
-    req.headers['x-lab-sig'] ||
-    req.headers['x_lb_sig'] ||
-    req.headers['x-entr-sig'] ||
-    req.headers['x_e_sig'] ||
-    req.headers['x-e-sig'] ||
-    ''
-  );
-  return { ts, sig };
+// Lee alias de headers (x-lab-*, x-entr-*, x-e-*)
+function pickSigHeaders(req) {
+  const h = req.headers || {};
+  const ts =
+    String(h['x-lab-ts'] || h['x_lb_ts'] ||
+           h['x-entr-ts'] || h['x_e_ts'] ||
+           h['x-e-ts'] || '')
+      .trim();
+
+  const sig =
+    String(h['x-lab-sig'] || h['x_lb_sig'] ||
+           h['x-entr-sig'] || h['x_e_sig'] ||
+           h['x-e-sig'] || '')
+      .trim();
+
+  const reqId =
+    String(h['x-request-id'] || h['x_request_id'] || '')
+      .trim()
+    || `gen_${Date.now().toString(36)}${Math.random().toString(36).slice(2,8)}`;
+
+  return { ts, sig, reqId };
 }
 
 router.post('/crear-codigo-descuento', async (req, res) => {
   try {
-    // ── API KEY (opcional, si la config existe)
+    // ── API KEY (opcional: si está configurada, la exigimos)
     if (API_KEY) {
       const inKey = String(req.headers['x-api-key'] || '').trim();
       if (inKey !== API_KEY) {
@@ -53,77 +56,77 @@ router.post('/crear-codigo-descuento', async (req, res) => {
 
     // ── HMAC (según flag global)
     if (REQUIRE_HMAC) {
-      if (!HSEC) return res.status(500).json({ ok: false, error: 'HMAC_SECRET_MISSING' });
+      if (!HSEC) {
+        return res.status(500).json({ ok:false, error:'HMAC_SECRET_MISSING' });
+      }
 
-      const raw = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body || {});
-      const path = req.path;
+      // Body EXACTO (buffer) y path COMPLETO montado (coincide con lo firmado en WP)
+      const raw  = req.rawBody ? req.rawBody : Buffer.from(JSON.stringify(req.body || {}), 'utf8');
+      const path = new URL(req.originalUrl || req.url, 'http://x').pathname;
 
-      // Verificación principal (la lib ya sabe leer headers si se los pasamos)
+      // Normalizamos cabeceras a x-lab-* y garantizamos x-request-id
+      const { ts, sig, reqId } = pickSigHeaders(req);
+      const hdrs = {
+        'x-lab-ts': ts,
+        'x-lab-sig': sig,
+        'x-request-id': reqId
+      };
+
       let v = verifyHmac({
         method: 'POST',
         path,
         bodyRaw: raw,
-        headers: req.headers,
+        headers: { ...req.headers, ...hdrs }, // mantenemos también las originales
         secret: HSEC
       });
 
-      // Fallback si falla por skew y/o por formato legacy (ts.sha256(body))
-      if (!v.ok && String(v.error || '').toLowerCase() === 'missing_headers') {
-        // Inyectar alias mínimos por si el verificador solo mira x-lab-*
-        const { ts, sig } = getSigHeaders(req);
-        if (!ts || !sig) {
-          return res.status(401).json({ ok: false, error: 'HMAC_INVALID', detail: 'missing_headers' });
-        }
-        v = verifyHmac({
-          method: 'POST',
-          path,
-          bodyRaw: raw,
-          headers: { 'x-lab-ts': ts, 'x-lab-sig': sig }, // normalizamos alias
-          secret: HSEC
-        });
-      }
-
+      // Tolerancia extra si el verificador devuelve skew (ms/seg o v1/legacy)
       if (!v.ok && String(v.error || '').toLowerCase() === 'skew') {
-        // toleramos ms/seg y legacy
         try {
           const crypto = require('crypto');
-          const tsHdr = getSigHeaders(req).ts;
-          const sigHdr = getSigHeaders(req).sig;
-          const tsNum = Number(tsHdr);
-          const tsSec = (tsNum > 1e11) ? Math.floor(tsNum / 1000) : tsNum;
+          const tsNum  = Number(ts);
+          const tsSec  = (tsNum > 1e11) ? Math.floor(tsNum / 1000) : tsNum;
           const nowSec = Math.floor(Date.now() / 1000);
           const maxSkew = Number(process.env.LAB_HMAC_SKEW_SECS || 900);
-          const within = Math.abs(nowSec - tsSec) <= maxSkew;
-          const rawHash = crypto.createHash('sha256').update(Buffer.from(raw, 'utf8')).digest('hex');
+          const within  = Math.abs(nowSec - tsSec) <= maxSkew;
+          const rawHash = crypto.createHash('sha256').update(raw).digest('hex');
 
-          const expectLegacy = crypto.createHmac('sha256', HSEC).update(`${tsSec}.${rawHash}`).digest('hex');
-          const expectV2     = crypto.createHmac('sha256', HSEC).update(`${tsSec}.POST.${path}.${rawHash}`).digest('hex');
+          const expectV1 = crypto.createHmac('sha256', HSEC).update(`${tsSec}.${rawHash}`).digest('hex');                 // ts.sha256(body)
+          const expectV2 = crypto.createHmac('sha256', HSEC).update(`${tsSec}.POST.${path}.${rawHash}`).digest('hex');    // ts.POST.<path>.sha256(body)
 
-          if (within && (sigHdr === expectLegacy || sigHdr === expectV2)) v = { ok: true };
+          if (within && (sig === expectV1 || sig === expectV2)) v = { ok: true };
         } catch (_) {}
       }
 
       if (!v.ok) {
-        return res.status(401).json({ ok: false, error: 'HMAC_INVALID', detail: v.error });
+        return res.status(401).json({ ok:false, error:'HMAC_INVALID', detail: v.error });
       }
     }
 
+    // ── Validación de payload
     const { nombre, email, codigo, valor, otorganteEmail } = req.body || {};
     if (!nombre || !email || !codigo || !valor) {
-      return res.status(400).json({ ok: false, error: 'FALTAN_DATOS' });
+      return res.status(400).json({ ok:false, error:'FALTAN_DATOS' });
     }
 
+    // ── Crear (service idempotente)
     const result = await crearCodigoDescuento({ nombre, email, codigo, valor, otorganteEmail });
-    return res.status(201).json({ ok: true, ...result });
+    return res.status(201).json({ ok:true, ...result });
+
   } catch (err) {
-    if (err.code === 'ALREADY_EXISTS') {
-      return res.status(409).json({ ok: false, error: 'YA_EXISTE' });
+    if (err && err.code === 'ALREADY_EXISTS') {
+      return res.status(409).json({ ok:false, error:'YA_EXISTE' });
     }
     try {
-      await alertAdmin({ area: 'descuentos.crear.error', email: req.body?.email || '-', err, meta: { body: req.body || {} } });
+      await alertAdmin({
+        area: 'descuentos.crear.error',
+        email: (req.body?.email || '-'),
+        err,
+        meta: { bodyKeys: Object.keys(req.body || {}) }
+      });
     } catch (_) {}
     console.error('❌ [crear-codigo-descuento] Error:', err?.message || err);
-    return res.status(500).json({ ok: false, error: 'ERROR_INTERNO' });
+    return res.status(500).json({ ok:false, error:'ERROR_INTERNO' });
   }
 });
 

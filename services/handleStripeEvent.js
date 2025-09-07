@@ -722,7 +722,6 @@ if (falloFactura) {
       html: `
         <p>Hola ${nombre || 'cliente'},</p>
         <p>Tu <strong>membresía del Club Laboroteca</strong> ha sido <strong>activada correctamente</strong>.</p>
-        <p><em>Hemos tenido un problema generando o enviando tu factura.</em> En cuanto esté disponible, te la enviaremos a este mismo correo.</p>
         <p><strong>Producto:</strong> ${isAlta ? 'Alta y primera cuota Club Laboroteca' : 'Renovación mensual Club Laboroteca'}<br>
            <strong>Importe:</strong> ${((invoice.amount_paid ?? invoice.amount_due ?? 0)/100).toFixed(2).replace('.', ',')} €<br>
            <strong>Fecha:</strong> ${fechaISO}</p>
@@ -731,7 +730,6 @@ if (falloFactura) {
       text: `Hola ${nombre || 'cliente'},
 
 Tu membresía del Club Laboroteca ha sido activada correctamente.
-Hemos tenido un problema generando o enviando tu factura. En cuanto esté disponible, te la enviaremos.
 
 Producto: ${isAlta ? 'Alta y primera cuota Club Laboroteca' : 'Renovación mensual Club Laboroteca'}
 Importe: ${((invoice.amount_paid ?? invoice.amount_due ?? 0)/100).toFixed(2)} €
@@ -1549,7 +1547,6 @@ if (!esEntrada && catalogItem?.tipo === 'libro' && falloFactura) {
       html: `
         <p>Hola ${datosCliente.nombre || 'cliente'},</p>
         <p>Tu <strong>compra del libro</strong> <strong>${productoLabel}</strong> se ha procesado correctamente y tu acceso ya está <strong>activado</strong>.</p>
-        <p><em>Hemos tenido un problema generando o enviando tu factura.</em> En cuanto esté disponible, te la enviaremos a este mismo correo.</p>
         <p><strong>Importe:</strong> ${datosCliente.importe.toFixed(2).replace('.', ',')} €<br>
            <strong>Fecha:</strong> ${ahoraISO}</p>
         <p><a href="https://www.laboroteca.es/mi-cuenta/">Accede a tu área de cliente</a></p>
@@ -1557,7 +1554,6 @@ if (!esEntrada && catalogItem?.tipo === 'libro' && falloFactura) {
       text: `Hola ${datosCliente.nombre || 'cliente'},
 
 Tu compra del libro ${productoLabel} se ha procesado correctamente y tu acceso ya está activado.
-Hemos tenido un problema generando o enviando tu factura. En cuanto esté disponible, te la enviaremos.
 
 Importe: ${datosCliente.importe.toFixed(2)} €
 Fecha: ${ahoraISO}

@@ -101,6 +101,7 @@ const marketingConsent = require('./routes/marketing-consent');
 const marketingUnsubscribe = require('./routes/marketing-unsubscribe');
 const marketingSend = require('./routes/marketing-send');
 const marketingCron = require('./routes/marketing-cron');
+const cronBajasClub = require('./services/cronBajasClub');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -1258,6 +1259,21 @@ process.on('unhandledRejection', (err) => {
       meta: { pid: process.pid, nodeEnv: process.env.NODE_ENV }
     }).catch(() => {});
   } catch (_) {}
+});
+
+
+// ─────────────────────────────────────
+// Ruta GET manual: /cron/bajas-club
+// Railway Scheduler o curl → activa el plan B
+// ─────────────────────────────────────
+app.get('/cron/bajas-club', async (req, res) => {
+  try {
+    await cronBajasClub();
+    return res.json({ ok: true, mensaje: 'Cron de bajasClub ejecutado' });
+  } catch (e) {
+    console.error('❌ Cron bajasClub error:', e?.message || e);
+    return res.status(500).json({ ok: false, error: e?.message || 'Error interno' });
+  }
 });
 
 // ─────────────────────────────────────

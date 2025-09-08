@@ -112,7 +112,7 @@ async function crearCodigoDescuento({ nombre, email, codigo, valor, otorganteEma
 
     await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID,
-      range: `'${SHEET_NAME}'!A:G`,  // ahora con columna A = Fecha
+      range: `'${SHEET_NAME}'!A1:G1`,  // ahora con columna A = Fecha
       valueInputOption: 'USER_ENTERED',
       requestBody: {
         values: [[

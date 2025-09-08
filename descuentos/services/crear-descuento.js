@@ -66,7 +66,7 @@ async function crearCodigoDescuento({ nombre, email, codigo, valor, otorganteEma
     // Añadir nueva fila (A..G). G = "Canjeado"
     await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID,
-      range: `'${SHEET_NAME}'!A:G`,
+      range: `'${SHEET_NAME}'!A1:G1`,
       valueInputOption: 'USER_ENTERED',
       insertDataOption: 'INSERT_ROWS',
       requestBody: {

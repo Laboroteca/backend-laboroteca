@@ -228,7 +228,7 @@ async function sendMail({ to, subject, text, html, idemKey }){
 
 /* ======================== Emails de negocio ======================== */
 /** Email al USUARIO (con cooldown + idemKey) */
-async function sendUserNotice(email, { idemKey } = {}){
+async function sendUserNotice(email, { idemKey } = {}) {
   const safeEmail = sanitizeEmail(email);
   if (!safeEmail) return { ok:false, status:400, data:{ error:'invalid_email' } };
 
@@ -247,7 +247,7 @@ async function sendUserNotice(email, { idemKey } = {}){
 
   const subject = 'Seguridad de tu cuenta — actividad inusual detectada';
 
-  const text = `Hemos detectado actividad inusual en tu cuenta (accesos desde varias direcciones IP o navegadores).
+  const text = `Hemos detectado actividad inusual en tu cuenta: accesos desde varias direcciones IP o navegadores.
 Te recomendamos cambiar tu contraseña.
 Puedes cambiarla aquí: ${USER_RESET_URL}
 Si no has sido tú, puedes contactarnos a través del buzón de incidencias:
@@ -256,7 +256,7 @@ Recuerda que los términos y condiciones de los productos vendidos en Laboroteca
 Equipo Laboroteca`;
 
   const html = `
-<p>Hemos detectado <strong>actividad inusual</strong> en tu cuenta (accesos desde varias direcciones IP o navegadores).</p>
+<p>Hemos detectado <strong>actividad inusual en tu cuenta</strong>: accesos desde varias direcciones IP o navegadores.</p>
 <p><strong>Te recomendamos cambiar tu contraseña.</strong></p>
 <p><a href="${USER_RESET_URL}" target="_blank" rel="noopener noreferrer">Cambiar mi contraseña</a></p>
 <p>Si no has sido tú, puedes contactarnos a través del <a href="https://www.laboroteca.es/incidencias/" target="_blank" rel="noopener noreferrer">buzón de incidencias</a>.</p>
@@ -268,6 +268,7 @@ Equipo Laboroteca`;
   if (resp.ok) stamp(lastUserMail, safeEmail);
   return resp;
 }
+
 
 /** Email al ADMIN (con cooldown + idemKey) */
 async function sendAdminAlert(userId, email, risk=null, { idemKey } = {}){

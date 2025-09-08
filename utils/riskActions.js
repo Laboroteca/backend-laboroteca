@@ -234,7 +234,9 @@ async function sendUserNotice(email, { idemKey } = {}){
 
   logDebug('[userMail] called', { email: safeEmail, idemKey: idemKey ? redact(idemKey) : undefined });
 
-  if (skipByIdem(idemKey)) {
+  // Idempotencia corta con namespace por canal (user)
+  const scopedKey = idemKey ? `user:${idemKey}` : null;
+  if (skipByIdem(scopedKey)) {
     logDebug('[userMail] skip idem', { email: safeEmail });
     return { ok:true, status:200, data:{ skipped:'idempotent' } };
   }
@@ -262,7 +264,7 @@ Equipo Laboroteca`;
 <p><em>Equipo Laboroteca</em></p>
 `.trim();
 
-  const resp = await sendMail({ to: safeEmail, subject, text, html, idemKey });
+  const resp = await sendMail({ to: safeEmail, subject, text, html, idemKey: scopedKey });
   if (resp.ok) stamp(lastUserMail, safeEmail);
   return resp;
 }
@@ -281,7 +283,9 @@ async function sendAdminAlert(userId, email, risk=null, { idemKey } = {}){
     idemKey: idemKey ? redact(idemKey) : undefined
   });
 
-  if (skipByIdem(idemKey)) {
+  // Idempotencia corta con namespace por canal (admin)
+  const scopedKey = idemKey ? `admin:${idemKey}` : null;
+  if (skipByIdem(scopedKey)) {
     logDebug('[adminMail] skip idem', { uid });
     return { ok:true, status:200, data:{ skipped:'idempotent' } };
   }
@@ -320,7 +324,7 @@ Métricas:
   <li>Geo (km/h): <strong>${geoKmh}</strong></li>
 </ul>`;
 
-  const resp = await sendMail({ to: ADMIN_EMAIL, subject, text, html, idemKey });
+  const resp = await sendMail({ to: ADMIN_EMAIL, subject, text, html, idemKey: scopedKey });
   if (resp.ok) stamp(lastAdminMail, uid);
   return resp;
 }

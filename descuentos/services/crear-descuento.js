@@ -1,3 +1,4 @@
+// 📂 descuentos/services/crear-descuento.js
 'use strict';
 
 const admin = require('../../firebase');
@@ -13,7 +14,7 @@ const SHEET_ID =
   '15ruIDI8avTYm1-7ElAEWI6eX89wzkLnoFt-E9yuSLVs';
 const SHEET_NAME = 'CODIGOS DESCUENTO GENERADOS';
 
-/* 🎨 Colores por defecto */
+/* 🎨 Estilos */
 const COLOR_VERDE = { red: 0.2, green: 0.8, blue: 0.2 };
 const TEXTO_BLANCO_BOLD = {
   foregroundColor: { red: 1, green: 1, blue: 1 },
@@ -23,7 +24,7 @@ const TEXTO_BLANCO_BOLD = {
 /**
  * Crear un código descuento (idempotente).
  * - Firestore: codigosDescuento
- * - Sheets: nueva fila con "NO" (verde)
+ * - Sheets: fila nueva con "NO" en F (verde)
  */
 async function crearCodigoDescuento({ nombre, email, codigo, valor, otorganteEmail }) {
   const cod = String(codigo || '').trim().toUpperCase();
@@ -52,59 +53,57 @@ async function crearCodigoDescuento({ nombre, email, codigo, valor, otorganteEma
   // 1️⃣ Guardar en Firestore
   await docRef.set(data, { merge: true });
 
-  // 2️⃣ Registrar en Sheets
+  // 2️⃣ Registrar en Google Sheets
   try {
     const authClient = await auth();
     const sheets = google.sheets({ version: 'v4', auth: authClient });
 
-    // 👉 Añadir nueva fila al final
-    //    Usamos una referencia A1 concreta para evitar errores de parseo de rango.
+    // Añadir nueva fila (A..F). F = "Canjeado"
     await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID,
-      range: `'${SHEET_NAME}'!A1:E1`,
+      range: `'${SHEET_NAME}'!A1:F1`,
       valueInputOption: 'USER_ENTERED',
       insertDataOption: 'INSERT_ROWS',
       requestBody: {
-        values: [
-          [
-            data.nombre,
-            data.email,
-            cod,
-            `${data.valor} €`,
-            'NO',
-          ],
-        ],
+        values: [[
+          data.nombre,                // A: Nombre beneficiario
+          data.email,                 // B: Email
+          cod,                        // C: Código Descuento
+          `${data.valor} €`,          // D: Valor del descuento
+          data.otorganteEmail || '',  // E: ¿Quién ha generado?
+          'NO',                       // F: Canjeado
+        ]],
       },
     });
 
-    // 🎯 Localizar la fila real por el código (columna C) y aplicar estilo en E
+    // Estilo verde + texto blanco en la celda F de esa fila
+    // Buscamos la fila por coincidencia exacta del código en la columna C
     const meta = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID });
     const sheet = meta.data.sheets.find((s) => s.properties.title === SHEET_NAME);
 
     if (sheet) {
-      // Leer solo columna C para buscar el código
       const read = await sheets.spreadsheets.values.get({
         spreadsheetId: SHEET_ID,
-        range: `'${SHEET_NAME}'!C:C`
+        range: `'${SHEET_NAME}'!C:C`,
       });
+
       const rows = read.data.values || [];
-      const idx  = rows.findIndex(r => (r[0] || '').toString().trim().toUpperCase() === cod);
+      const idx = rows.findIndex(r => (r[0] || '').toString().trim().toUpperCase() === cod);
 
       if (idx >= 0) {
-        const rowNumber = idx + 1; // A1 notation (1-based)
+        const rowNumber = idx + 1; // filas en A1 empiezan en 1
 
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: SHEET_ID,
-        requestBody: {
-          requests: [
-            {
+        await sheets.spreadsheets.batchUpdate({
+          spreadsheetId: SHEET_ID,
+          requestBody: {
+            requests: [{
               repeatCell: {
                 range: {
                   sheetId: sheet.properties.sheetId,
                   startRowIndex: rowNumber - 1,
                   endRowIndex: rowNumber,
-                  startColumnIndex: 4,
-                  endColumnIndex: 5,
+                  startColumnIndex: 5, // F (0=A)
+                  endColumnIndex: 6,
                 },
                 cell: {
                   userEnteredFormat: {
@@ -114,21 +113,22 @@ async function crearCodigoDescuento({ nombre, email, codigo, valor, otorganteEma
                 },
                 fields: 'userEnteredFormat(backgroundColor,textFormat)',
               },
-            },
-          ],
-        },
-      });
-    }
+            }],
+          },
+        });
       } else {
         console.warn(`⚠️ Código ${cod} no localizado en '${SHEET_NAME}' para aplicar estilo`);
       }
+    }
   } catch (e) {
     console.warn(`⚠️ Error actualizando Sheets al crear ${cod}:`, e.message || e);
-    await alertAdmin({
-      area: 'descuentos.crear.sheets_error',
-      err: e,
-      meta: { codigo: cod, email },
-    });
+    try {
+      await alertAdmin({
+        area: 'descuentos.crear.sheets_error',
+        err: e,
+        meta: { codigo: cod, email, sheet: SHEET_NAME },
+      });
+    } catch (_) {}
   }
 
   console.log(`✅ Código ${cod} creado para ${email} (${valor} €)`);

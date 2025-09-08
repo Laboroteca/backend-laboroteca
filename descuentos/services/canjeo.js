@@ -67,10 +67,10 @@ async function marcarCodigoComoUsado(codigo) {
     const authClient = await auth();
     const sheets = google.sheets({ version: 'v4', auth: authClient });
 
-    // Col C = código, col E = Canjeado
+    // Col C = código, col F = Canjeado
     const read = await sheets.spreadsheets.values.get({
       spreadsheetId: SHEET_ID,
-      range: `'${SHEET_NAME}'!C:E`,
+      range: `'${SHEET_NAME}'!C:C`,
     });
 
     const rows = read.data.values || [];
@@ -81,10 +81,10 @@ async function marcarCodigoComoUsado(codigo) {
     if (idx >= 0) {
       const rowNumber = idx + 1;
 
-      // Cambiar valor en la columna E
+      // Cambiar valor en la columna F
       await sheets.spreadsheets.values.update({
         spreadsheetId: SHEET_ID,
-        range: `'${SHEET_NAME}'!E${rowNumber}`,
+        range: `'${SHEET_NAME}'!F${rowNumber}`,
         valueInputOption: 'USER_ENTERED',
         requestBody: { values: [['SÍ']] },
       });
@@ -106,8 +106,8 @@ async function marcarCodigoComoUsado(codigo) {
                     sheetId: sheet.properties.sheetId,
                     startRowIndex: rowNumber - 1,
                     endRowIndex: rowNumber,
-                    startColumnIndex: 4,
-                    endColumnIndex: 5,
+                    startColumnIndex: 5,  // F (0=A)
+                    endColumnIndex: 6,
                   },
                   cell: {
                     userEnteredFormat: {

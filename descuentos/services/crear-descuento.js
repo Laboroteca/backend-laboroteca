@@ -58,11 +58,12 @@ async function crearCodigoDescuento({ nombre, email, codigo, valor, otorganteEma
     const sheets = google.sheets({ version: 'v4', auth: authClient });
 
     // 👉 Añadir nueva fila al final
-    //    IMPORTANTE: el nombre de la hoja lleva espacios → hay que entrecomillar el rango.
+    //    Usamos una referencia A1 concreta para evitar errores de parseo de rango.
     await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID,
-      range: `'${SHEET_NAME}'!A:E`,
+      range: `'${SHEET_NAME}'!A1:E1`,
       valueInputOption: 'USER_ENTERED',
+      insertDataOption: 'INSERT_ROWS',
       requestBody: {
         values: [
           [

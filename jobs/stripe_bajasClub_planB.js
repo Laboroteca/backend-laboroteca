@@ -131,7 +131,7 @@ async function sendAdmin(subject, text, meta = {}) {
     // Adaptamos al contrato de utils/alertAdmin.js
     const payload = {
       area: meta.area || String(subject || 'planB').replace(/^\[|\]$/g, ''),
-      email: meta.email || meta.userEmail || null,
+      email: ADMIN_EMAIL, // ← fuerza destinatario ADMIN siempre
       err: new Error(text || subject || 'alert'),
       meta,
     };

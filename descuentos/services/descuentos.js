@@ -90,13 +90,18 @@ async function crearCodigoDescuento({ nombre, email, codigo, valor, otorganteEma
     throw err;
   }
 
+  const ahora = new Date();
+  const fechaStr = ahora.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  const horaStr = ahora.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', hour12: false });
+  const fechaHora = `${fechaStr} ${horaStr}h`;
+
   await docRef.set({
     nombre,
     email: String(email).toLowerCase(),
     codigo: cod,
     valor: Number(valor),
     otorgante_email: otorganteEmail || null,
-    creado: new Date().toISOString(),
+    creado: ahora.toISOString(),
     usado: false
   });
 
@@ -107,16 +112,17 @@ async function crearCodigoDescuento({ nombre, email, codigo, valor, otorganteEma
 
     await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID,
-      range: `'${SHEET_NAME}'!A:F`,  // inserta en columnas A-F
+      range: `'${SHEET_NAME}'!A:G`,  // ahora con columna A = Fecha
       valueInputOption: 'USER_ENTERED',
       requestBody: {
         values: [[
-          nombre,             // A: Nombre beneficiario
-          email,              // B: Email
-          cod,                // C: Código Descuento
-          valor,              // D: Valor del descuento
-          otorganteEmail || '', // E: Quién ha generado
-          'NO'                // F: Canjeado
+          fechaHora,          // A: Fecha
+          nombre,             // B: Nombre beneficiario
+          email,              // C: Email
+          cod,                // D: Código Descuento
+          valor,              // E: Valor del descuento
+          otorganteEmail || '', // F: Quién ha generado
+          'NO'                // G: Canjeado
         ]]
       }
     });

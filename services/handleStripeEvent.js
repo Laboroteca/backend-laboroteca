@@ -1255,22 +1255,6 @@ try {
     }
     // ✅ A partir de aquí, el pago está confirmado: se puede activar sin miedo.
 
-    // 🎟️ Si se aplicó un descuento, márcalo como usado (no bloquea el flujo)
-    try {
-      if (m.descuentoAplicado === '1' && m.codigoDescuento) {
-        console.log(`🎟️ Intentando marcar descuento ${m.codigoDescuento} como usado`);
-        await marcarCodigoComoUsado(m.codigoDescuento);
-      }
-    } catch (e) {
-      console.warn(`⚠️ Error marcando código descuento ${m.codigoDescuento}:`, e?.message || e);
-      await alertAdmin({
-        area: 'descuentos.canjeo',
-        email,
-        err: e,
-        meta: { codigo: m.codigoDescuento }
-      });
-      // no rompe el webhook
-    }
 
         // 🔓 Activación inmediata (no bloqueada por Sheets/Email/GCS/FacturaCity)
     try {

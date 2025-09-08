@@ -569,14 +569,6 @@ app.use('/regalos', canjearLimiter, canjearRouter);
 
 app.use('/regalos', canjearLimiter, require('./regalos/routes/crear-codigo-regalo'));
 
-// --- Descuentos ---
-const routerCrearDescuento  = require('./descuentos/routes/crear-codigo-descuento');
-const routerCanjearDescuento = require('./descuentos/routes/canjear-codigo');   // 👈 ojo: nombre real del archivo
-const routerValidarDescuento = require('./descuentos/routes/validar-descuento');
-
-app.use('/descuentos', canjearLimiter, routerCrearDescuento);
-app.use('/descuentos', canjearLimiter, routerCanjearDescuento);
-app.use('/descuentos', canjearLimiter, routerValidarDescuento);
 
 // ⚠️ Aplica ANTES de montar routers que sirvan /entradas/reenviar
 app.use('/entradas/reenviar', reenvioLimiter);

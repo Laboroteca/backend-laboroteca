@@ -1,9 +1,7 @@
 // routes/checkout.js
-// 
 const express = require('express');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const router = express.Router();
-
 const { normalizar } = require('../utils/normalizar');
 const { emailRegistradoEnWordPress } = require('../utils/wordpress');
 // ⬇️ Importa el catálogo y utilidades correctas (antes se importaba mal)
@@ -12,18 +10,14 @@ const {
   normalizarProducto: normalizarProductoCat,
   resolverProducto,
   getImagenProducto,
-  DEFAULT_IMAGE
+  DEFAULT_IMAGE,
 } = require('../utils/productos');
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
-// 🔗 Firestore (solo para validar descuentos — modo best-effort)
-const admin = require('../firebase');
-const firestore = admin.firestore();
 
 router.post('/create-session', async (req, res) => {
   // ❌ Bloquear intentos de lanzar entradas por esta ruta
   if ((req.body?.tipoProducto || '').toLowerCase() === 'entrada') {
     console.warn('🚫 [create-session] Entrada bloqueada en checkout.js');
-
     // 🔔 Aviso admin (no bloquea respuesta)
     try {
       await alertAdmin({
@@ -32,25 +26,24 @@ router.post('/create-session', async (req, res) => {
         err: new Error('Intento de procesar entradas por ruta no permitida'),
         meta: {
           tipoProducto: req.body?.tipoProducto || null,
-          nombreProducto: req.body?.nombreProducto || null
-        }
+          nombreProducto: req.body?.nombreProducto || null,
+        },
       });
-    } catch (_) { /* no-op */ }
-
+    } catch (_) {
+      /* no-op */
+    }
     return res.status(400).json({ error: 'Las entradas no se procesan por esta ruta.' });
   }
 
   // Vars para meta en alertas del catch final (no afectan al flujo)
   let email, tipoProducto, nombreProducto, esEntrada, isSuscripcion, totalAsistentes, importeFormulario;
-  // métricas internas de descuento (no afectan al flujo si fallan)
-  let codigoDescuentoInput = '';
-  let descuentoCents = 0;
 
   try {
     const body = req.body;
-    const datos = typeof body === 'object' && (body.email || body.email_autorelleno || body.nombre)
-      ? body
-      : (Object.values(body)[0] || {});
+    const datos =
+      typeof body === 'object' && (body.email || body.email_autorelleno || body.nombre)
+        ? body
+        : (Object.values(body)[0] || {});
 
     const nombre = (datos.nombre || datos.Nombre || '').trim();
     const apellidos = (datos.apellidos || datos.Apellidos || '').trim();
@@ -60,36 +53,52 @@ router.post('/create-session', async (req, res) => {
     const ciudad = (datos.ciudad || '').trim();
     const provincia = (datos.provincia || '').trim();
     const cp = (datos.cp || '').trim();
+
     tipoProducto = (datos.tipoProducto || '').trim();
     nombreProducto = (datos.nombreProducto || '').trim();
     const descripcionFormulario = (datos.descripcionProducto || '').trim();
     const imagenFormulario = (datos.imagenProducto || '').trim();
     importeFormulario = parseFloat((datos.importe || '').toString().replace(',', '.'));
-    // 🏷️ Campo opcional del formulario duplicado
-    codigoDescuentoInput = ((datos.codigoDescuento || '') + '').trim().toUpperCase();
+
     // 🔒 Este endpoint es SOLO para pago único
-    isSuscripcion = tipoProducto.toLowerCase().includes('suscrip') || tipoProducto.toLowerCase().includes('club');
+    isSuscripcion =
+      tipoProducto.toLowerCase().includes('suscrip') || tipoProducto.toLowerCase().includes('club');
     esEntrada = tipoProducto.toLowerCase() === 'entrada';
     totalAsistentes = parseInt(datos.totalAsistentes) || 1;
 
     // ⛔ Redirige suscripciones al endpoint específico
     if (isSuscripcion) {
-      return res.status(400).json({ error: 'Las suscripciones no se crean aquí. Usa /crear-suscripcion-club.' });
+      return res
+        .status(400)
+        .json({ error: 'Las suscripciones no se crean aquí. Usa /crear-suscripcion-club.' });
     }
 
-    
     // 🧭 Resolver producto del catálogo (acepta price_id o priceId)
-    const productoResuelto =
-      resolverProducto(
-        { tipoProducto, nombreProducto, descripcionProducto: datos.descripcionProducto, price_id: datos.price_id, priceId: datos.priceId },
-        []
-      );
+    const productoResuelto = resolverProducto(
+      {
+        tipoProducto,
+        nombreProducto,
+        descripcionProducto: datos.descripcionProducto,
+        price_id: datos.price_id,
+        priceId: datos.priceId,
+      },
+      []
+    );
+
     const slug = productoResuelto?.slug || normalizarProductoCat(nombreProducto, tipoProducto);
     const producto = slug ? PRODUCTOS[slug] : null;
 
     console.log('📩 [create-session] Solicitud recibida:', {
-      nombre, apellidos, email, dni, direccion,
-      ciudad, provincia, cp, tipoProducto, nombreProducto
+      nombre,
+      apellidos,
+      email,
+      dni,
+      direccion,
+      ciudad,
+      provincia,
+      cp,
+      tipoProducto,
+      nombreProducto,
     });
 
     if (
@@ -103,9 +112,12 @@ router.post('/create-session', async (req, res) => {
       !producto
     ) {
       console.warn('⚠️ [create-session] Faltan datos obligatorios o producto inválido.', {
-        nombre, email, nombreProducto, tipoProducto, producto
+        nombre,
+        email,
+        nombreProducto,
+        tipoProducto,
+        producto,
       });
-
       // 🔔 Aviso admin (validación 400)
       try {
         await alertAdmin({
@@ -113,90 +125,78 @@ router.post('/create-session', async (req, res) => {
           email: email || '-',
           err: new Error('Faltan datos obligatorios o producto no válido'),
           meta: {
-            nombre, apellidos, email, dni, direccion, ciudad, provincia, cp,
-            tipoProducto, nombreProducto,
-            productoEncontrado: !!producto
-          }
+            nombre,
+            apellidos,
+            email,
+            dni,
+            direccion,
+            ciudad,
+            provincia,
+            cp,
+            tipoProducto,
+            nombreProducto,
+            productoEncontrado: !!producto,
+          },
         });
-      } catch (_) { /* no-op */ }
-
+      } catch (_) {
+        /* no-op */
+      }
       return res.status(400).json({ error: 'Faltan datos obligatorios o producto no válido.' });
     }
 
     const registrado = await emailRegistradoEnWordPress(email);
     if (!registrado) {
       console.warn('🚫 [create-session] Email no registrado en WP:', email);
-
       // 🔔 Aviso admin (403)
       try {
         await alertAdmin({
           area: 'checkout_wp_email_no_registrado',
           email,
           err: new Error('Email no registrado en WordPress'),
-          meta: { tipoProducto, nombreProducto }
+          meta: { tipoProducto, nombreProducto },
         });
-      } catch (_) { /* no-op */ }
-
+      } catch (_) {
+        /* no-op */
+      }
       return res.status(403).json({ error: 'El email no está registrado como usuario.' });
     }
 
     // 💶 Importe para pago único (sin entradas): catálogo > formulario
-    const precioCatalogoCents = Number.isFinite(Number(producto?.precio_cents)) ? Number(producto.precio_cents) : NaN;
-    let importeFinalCents = Math.round(
+    const precioCatalogoCents = Number.isFinite(Number(producto?.precio_cents))
+      ? Number(producto.precio_cents)
+      : NaN;
+
+    const importeFinalCents = Math.round(
       Number.isFinite(importeFormulario) && importeFormulario > 0
         ? importeFormulario * 100
-        : (Number.isFinite(precioCatalogoCents) ? precioCatalogoCents : 0)
+        : Number.isFinite(precioCatalogoCents)
+        ? precioCatalogoCents
+        : 0
     );
+
     // Si no hay price_id válido y el importe no existe, no seguimos
     const candidatePriceId = String(producto?.price_id || producto?.priceId || '').trim();
     if (!candidatePriceId && (!Number.isFinite(importeFinalCents) || importeFinalCents <= 0)) {
       return res.status(400).json({ error: 'Importe inválido y sin price_id de catálogo.' });
     }
-    
+
     // 🖼️ Imagen (catálogo → formulario → fallback global) — fuente única de verdad = catálogo
-    const imagenCanon = ((slug ? getImagenProducto(slug) : (producto?.imagen || '')) || imagenFormulario || DEFAULT_IMAGE).trim();
+    const imagenCanon = (
+      (slug ? getImagenProducto(slug) : producto?.imagen || '') ||
+      imagenFormulario ||
+      DEFAULT_IMAGE
+    ).trim();
 
     // 📛 Nombre/Descripción canónicos desde catálogo (siempre que haya match)
     const nombreCanon = (producto?.nombre || nombreProducto || '').toString().trim();
-    const descripcionCanon = (producto?.descripcion || descripcionFormulario || '').toString().trim();
+    const descripcionCanon = (producto?.descripcion || descripcionFormulario || '')
+      .toString()
+      .trim();
 
     // 💳 Línea de Stripe: prioriza price_id del catálogo (precio “oficial”)
     let line_items;
     let usarPriceId = false;
 
-    /* ==============================================
-     *  DESCUENTOS — validación best-effort (no bloquea)
-     * ============================================== */
-    try {
-      // Solo procesamos si viene un posible código con patrón
-      if (/^DSC-[A-Z0-9]{5}$/.test(codigoDescuentoInput)) {
-        const doc = await firestore.collection('codigosDescuento').doc(codigoDescuentoInput).get();
-        const d = doc.exists ? (doc.data() || {}) : null;
-        const yaUsado = !!d?.usado;
-        const valorEur = Number(d?.valor) || 0; // el generador guarda "valor" en €
-        const candidato = Math.round(Math.max(0, valorEur) * 100);
-
-        if (!doc.exists) {
-          console.warn('🔎 [descuento] código no existe:', codigoDescuentoInput);
-        } else if (yaUsado) {
-          console.warn('🔒 [descuento] código ya usado:', codigoDescuentoInput);
-        } else if (candidato <= 0) {
-          console.warn('⚠️ [descuento] valor inválido para código:', codigoDescuentoInput, d?.valor);
-        } else {
-          // Cap para no dejar importe <= 0 (evitamos sesiones 0€ aquí: decisión conservadora)
-          if (candidato >= importeFinalCents) {
-            console.warn('⚠️ [descuento] supera o iguala el importe; se ignora para no romper el checkout.');
-          } else {
-            descuentoCents = candidato;
-            importeFinalCents = Math.max(0, importeFinalCents - descuentoCents);
-          }
-        }
-      }
-    } catch (e) {
-      // Nunca bloquea el flujo por descuentos
-      console.warn('⚠️ [descuento] error no bloqueante:', e?.message || e);
-      descuentoCents = 0;
-    }
     if (candidatePriceId) {
       try {
         const pr = await stripe.prices.retrieve(candidatePriceId);
@@ -204,34 +204,30 @@ router.post('/create-session', async (req, res) => {
         // Si el price está activo pero trae unit_amount, lo respetamos como importe de referencia
         if (!usarPriceId && typeof pr?.unit_amount === 'number') {
           // solo actualiza si no nos vino importe fiable
-          if (!Number.isFinite(importeFinalCents) || importeFinalCents <= 0) {
-            // nota: no reasignamos importeFinalCents porque es const; usamos variable local al crear price_data
-          }
+          // (no reasignamos importeFinalCents porque es const; se usa en price_data)
         }
       } catch (e) {
         console.warn('⚠️ price_id no recuperable en Stripe:', candidatePriceId, e?.message || e);
       }
     }
-    // Si hay descuento aplicado, forzamos price_data con unit_amount ya descontado
-    if (usarPriceId && descuentoCents > 0) {
-      usarPriceId = false;
-    }
 
     if (usarPriceId) {
       line_items = [{ price: candidatePriceId, quantity: 1 }];
     } else {
-      line_items = [{
-        price_data: {
-          currency: 'eur',
-          unit_amount: importeFinalCents,
-          product_data: {
-            name: nombreCanon || 'Producto Laboroteca',
-            description: descripcionCanon || undefined,
-            images: imagenCanon ? [imagenCanon] : []
-          }
+      line_items = [
+        {
+          price_data: {
+            currency: 'eur',
+            unit_amount: importeFinalCents,
+            product_data: {
+              name: nombreCanon || 'Producto Laboroteca',
+              description: descripcionCanon || undefined,
+              images: imagenCanon ? [imagenCanon] : [],
+            },
+          },
+          quantity: 1,
         },
-        quantity: 1
-      }];
+      ];
     }
 
     console.log('🧪 tipoProducto:', tipoProducto);
@@ -245,7 +241,9 @@ router.post('/create-session', async (req, res) => {
       payment_method_types: ['card'],
       customer_email: email,
       line_items,
-      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(producto?.nombre || nombreProducto)}`,
+      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(
+        nombre
+      )}&producto=${encodeURIComponent(producto?.nombre || nombreProducto)}`,
       cancel_url: 'https://laboroteca.es/error',
       metadata: {
         nombre,
@@ -256,34 +254,27 @@ router.post('/create-session', async (req, res) => {
         ciudad,
         provincia,
         cp,
-        tipoProducto,                             // p.ej. 'libro'
+        tipoProducto, // p.ej. 'libro'
         // 🧾 Metadatos canónicos para el webhook
         nombreProducto: (nombreCanon || nombreProducto),
-        descripcionProducto: (descripcionCanon || `${tipoProducto} "${nombreCanon || nombreProducto}"`).trim(),
+        descripcionProducto: (descripcionCanon ||
+          `${tipoProducto} "${nombreCanon || nombreProducto}"`).trim(),
         // 🔗 Ayudas de resolución
         price_id: (producto?.price_id || producto?.priceId || '') || '',
         slug: slug || '',
         memberpressId: String(producto?.membership_id || ''),
         tipoProductoCanon: producto?.tipo || tipoProducto || '',
         // Auditoría/compat
-        importe: (Number.isFinite(importeFinalCents) ? (importeFinalCents / 100) : 0).toFixed(2),
+        importe: (Number.isFinite(importeFinalCents) ? importeFinalCents / 100 : 0).toFixed(2),
         tipoProductoOriginal: tipoProducto,
         nombreProductoOriginal: nombreProducto,
-        // 🧾 Trazabilidad de descuento (para webhook)
-        codigoDescuento: codigoDescuentoInput || '',
-        descuentoCents: String(descuentoCents || 0),
-        descuentoEur: ((descuentoCents || 0) / 100).toFixed(2),
-        descuentoFuente: descuentoCents > 0 ? 'codigoDescuento' : '',
-        descuentoAplicado: descuentoCents > 0 ? '1' : '0'
-      }
+      },
     });
 
     console.log('✅ [create-session] Sesión Stripe creada:', session.url);
     res.json({ url: session.url });
-
   } catch (err) {
     console.error('❌ [create-session] Error creando sesión de pago:', err?.message || err);
-
     // 🔔 Aviso admin (500)
     try {
       const raw = req?.body || {};
@@ -294,16 +285,27 @@ router.post('/create-session', async (req, res) => {
         meta: {
           tipoProducto: tipoProducto || raw.tipoProducto || null,
           nombreProducto: nombreProducto || raw.nombreProducto || null,
-          esEntrada: typeof esEntrada === 'boolean' ? esEntrada : ((raw.tipoProducto || '').toLowerCase() === 'entrada'),
-          isSuscripcion: typeof isSuscripcion === 'boolean' ? isSuscripcion : ((raw.tipoProducto || '').toLowerCase().includes('suscrip')),
+          esEntrada:
+            typeof esEntrada === 'boolean'
+              ? esEntrada
+              : ((raw.tipoProducto || '').toLowerCase() === 'entrada'),
+          isSuscripcion:
+            typeof isSuscripcion === 'boolean'
+              ? isSuscripcion
+              : (raw.tipoProducto || '').toLowerCase().includes('suscrip'),
           totalAsistentes: totalAsistentes || raw.totalAsistentes || null,
           importeFormulario: importeFormulario || raw.importe || null,
-          productoKey: nombreProducto ? normalizar(nombreProducto) : (raw.nombreProducto ? normalizar(raw.nombreProducto) : null),
-          rawBodyType: typeof raw
-        }
+          productoKey: nombreProducto
+            ? normalizar(nombreProducto)
+            : raw.nombreProducto
+            ? normalizar(raw.nombreProducto)
+            : null,
+          rawBodyType: typeof raw,
+        },
       });
-    } catch (_) { /* no-op */ }
-
+    } catch (_) {
+      /* no-op */
+    }
     return res.status(500).json({ error: 'Error interno al crear la sesión' });
   }
 });

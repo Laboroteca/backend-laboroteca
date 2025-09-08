@@ -57,10 +57,11 @@ async function crearCodigoDescuento({ nombre, email, codigo, valor, otorganteEma
     const authClient = await auth();
     const sheets = google.sheets({ version: 'v4', auth: authClient });
 
-    // Añadir nueva fila al final
+    // 👉 Añadir nueva fila al final
+    //    IMPORTANTE: el nombre de la hoja lleva espacios → hay que entrecomillar el rango.
     await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID,
-      range: SHEET_NAME,
+      range: `'${SHEET_NAME}'!A:E`,
       valueInputOption: 'USER_ENTERED',
       requestBody: {
         values: [
@@ -75,13 +76,21 @@ async function crearCodigoDescuento({ nombre, email, codigo, valor, otorganteEma
       },
     });
 
-    // Estilo visual (verde + bold blanco) en la celda "NO"
+    // 🎯 Localizar la fila real por el código (columna C) y aplicar estilo en E
     const meta = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID });
     const sheet = meta.data.sheets.find((s) => s.properties.title === SHEET_NAME);
 
     if (sheet) {
-      const rowCount = sheet.properties.gridProperties.rowCount;
-      const rowNumber = rowCount; // última fila recién añadida
+      // Leer solo columna C para buscar el código
+      const read = await sheets.spreadsheets.values.get({
+        spreadsheetId: SHEET_ID,
+        range: `'${SHEET_NAME}'!C:C`
+      });
+      const rows = read.data.values || [];
+      const idx  = rows.findIndex(r => (r[0] || '').toString().trim().toUpperCase() === cod);
+
+      if (idx >= 0) {
+        const rowNumber = idx + 1; // A1 notation (1-based)
 
       await sheets.spreadsheets.batchUpdate({
         spreadsheetId: SHEET_ID,
@@ -109,6 +118,9 @@ async function crearCodigoDescuento({ nombre, email, codigo, valor, otorganteEma
         },
       });
     }
+      } else {
+        console.warn(`⚠️ Código ${cod} no localizado en '${SHEET_NAME}' para aplicar estilo`);
+      }
   } catch (e) {
     console.warn(`⚠️ Error actualizando Sheets al crear ${cod}:`, e.message || e);
     await alertAdmin({

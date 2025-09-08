@@ -61,7 +61,7 @@ async function crearCodigoDescuento({ nombre, email, codigo, valor, otorganteEma
     // Añadir nueva fila (A..F). F = "Canjeado"
     await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID,
-      range: `'${SHEET_NAME}'!A1:F1`,
+      range: `'${SHEET_NAME}'!A:F`,
       valueInputOption: 'USER_ENTERED',
       insertDataOption: 'INSERT_ROWS',
       requestBody: {
@@ -77,7 +77,6 @@ async function crearCodigoDescuento({ nombre, email, codigo, valor, otorganteEma
     });
 
     // Estilo verde + texto blanco en la celda F de esa fila
-    // Buscamos la fila por coincidencia exacta del código en la columna C
     const meta = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID });
     const sheet = meta.data.sheets.find((s) => s.properties.title === SHEET_NAME);
 
@@ -102,7 +101,7 @@ async function crearCodigoDescuento({ nombre, email, codigo, valor, otorganteEma
                   sheetId: sheet.properties.sheetId,
                   startRowIndex: rowNumber - 1,
                   endRowIndex: rowNumber,
-                  startColumnIndex: 5, // F (0=A)
+                  startColumnIndex: 5, // Columna F (0=A → F=5)
                   endColumnIndex: 6,
                 },
                 cell: {

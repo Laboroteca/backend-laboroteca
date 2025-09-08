@@ -104,13 +104,20 @@ async function crearCodigoDescuento({ nombre, email, codigo, valor, otorganteEma
   try {
     const authClient = await auth();
     const sheets = google.sheets({ version: 'v4', auth: authClient });
-    const range = `'${SHEET_NAME}'!A2:F`;
+
     await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID,
-      range,
+      range: `'${SHEET_NAME}'!A:F`,  // inserta en columnas A-F
       valueInputOption: 'USER_ENTERED',
       requestBody: {
-        values: [[nombre, email, cod, valor, otorganteEmail || '', 'NO']]
+        values: [[
+          nombre,             // A: Nombre beneficiario
+          email,              // B: Email
+          cod,                // C: Código Descuento
+          valor,              // D: Valor del descuento
+          otorganteEmail || '', // E: Quién ha generado
+          'NO'                // F: Canjeado
+        ]]
       }
     });
   } catch (e) {

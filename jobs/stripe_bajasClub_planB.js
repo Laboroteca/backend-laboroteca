@@ -1,25 +1,27 @@
 // jobs/stripe_bajasClub_planB.js
-// Plan B de resiliencia Stripe ↔ WP (MemberPress).
-// - Replayer de eventos (desde checkpoint)
-// - Reconciliador de suscripciones
-// - Reloj de bajas programadas (Firestore → WP)
+// Plan B de resiliencia Stripe ↔ WP (MemberPress) — MODO AVISO SOLO.
+// - Replayer de eventos (Stripe → desde checkpoint)
+// - Reconciliador de suscripciones (Stripe Search)
+// - Reloj de bajas programadas (Firestore → aviso)
 // - (Opcional) Sanity WP→Stripe
+//
+// REGLA DE ORO: NUNCA DESACTIVAR EN MEMBERPRESS DESDE AQUÍ.
+//               SOLO AVISAR AL ADMIN CUANDO HAY MISMATCH.
 //
 // ENV mínimos:
 //   STRIPE_SECRET_KEY
-//   MP_SYNC_API_URL_CLUB, MP_SYNC_API_KEY, MP_SYNC_HMAC_SECRET
 //
-// Opcionales (recomendado para producción):
-//   MP_SYNC_DEBUG=1
+// Opcionales:
+//   ADMIN_EMAIL=laboroteca@gmail.com
 //   BAJAS_COLL=bajasClub
-//   CLUB_MEMBERSHIP_ID=10663
 //   ENABLE_PLANB_DAEMON=0|1
 //   PLANB_REPLAYER_MS, PLANB_RECONCILER_MS, PLANB_BAJAS_MS, PLANB_SANITY_MS
+//   PLANB_MAX_EVENTS=1000
+//   PLANB_MAX_ACTS=200
+//   PLANB_SLOWDOWN_EVERY=50
+//   PLANB_SLOWDOWN_MS=1000
+//   PLANB_ALERT_TTL_SECONDS=300
 //   PLANB_ENABLE_SANITY=0|1
-//   PLANB_MAX_EVENTS=1000       # límite por ejecución (replayer)
-//   PLANB_MAX_ACTS=200          # límite acciones (reconciler/bajas/sanity)
-//   PLANB_SLOWDOWN_EVERY=50     # cada N operaciones, dormir
-//   PLANB_SLOWDOWN_MS=1000      # milisegundos de pausa
 
 'use strict';
 
@@ -38,7 +40,6 @@ const Stripe = require('stripe');
 const stripe = new Stripe(STRIPE_SECRET_KEY, { maxNetworkRetries: 2 });
 
 /* ===================== Constantes ===================== */
-const CLUB_MEMBERSHIP_ID = parseInt(process.env.CLUB_MEMBERSHIP_ID || '10663', 10);
 const BAJAS_COLL = process.env.BAJAS_COLL || 'bajasClub';
 
 const MAX_EVENTS_PER_RUN  = parseInt(process.env.PLANB_MAX_EVENTS || '1000', 10);
@@ -49,16 +50,16 @@ const SLOWDOWN_MS         = parseInt(process.env.PLANB_SLOWDOWN_MS    || '1000',
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 /* ===================== Firebase (locks / bajas) ===================== */
-// NO loguea secretos; inicialización en ../firebase
 const admin = require('../firebase');
 const db = admin.firestore();
 
-/* ===================== Cliente HMAC hacia WP ===================== */
-// (Se mantiene la importación para compatibilidad, aunque no se usará para desactivar)
-const { syncMemberpressClub } = require('../services/syncMemberpressClub');
+/* ===================== (NO USAR) Cliente HMAC hacia WP ===================== */
+// ❌ No lo importamos para impedir llamadas accidentales a “desactivar”.
+// const { syncMemberpressClub } = require('../services/syncMemberpressClub');
 
 /* ===================== Alertas al administrador ===================== */
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'laboroteca@gmail.com';
 
 /* ===================== Logger seguro ===================== */
 const SENSITIVE_KEYS =
@@ -128,51 +129,34 @@ function verror(area, err, meta = {}) {
 /* ===================== Alertas (helpers) ===================== */
 async function sendAdmin(subject, text, meta = {}) {
   try {
-    // Adaptamos al contrato de utils/alertAdmin.js
     const payload = {
       area: meta.area || String(subject || 'planB').replace(/^\[|\]$/g, ''),
-      email: ADMIN_EMAIL, // ← fuerza destinatario ADMIN siempre
+      email: ADMIN_EMAIL, // fuerza destinatario ADMIN siempre
       err: new Error(text || subject || 'alert'),
       meta,
     };
     await alertAdmin(payload);
-    vlog('alerts', 'sent', { area: payload.area, email: payload.email });
+    vlog('alerts', 'sent', { area: payload.area, email: payload.email, subject });
   } catch (e) {
     verror('alerts.send_fail', e, { subject });
   }
 }
 
+/* ===== Deduplicación ligera (proceso) para avisos genéricos ===== */
 const __alertOnce = new Set();
 async function notifyOnce(area, err, meta = {}, key = null) {
   try {
     const k = key || `${area}:${JSON.stringify(meta).slice(0, 200)}`;
-    if (__alertOnce.has(k)) return;
+    if (__alertOnce.has(k)) {
+      vlog('notifyOnce', 'skip (dedupe)', { area, key: k });
+      return;
+    }
     __alertOnce.add(k);
-    await alertAdmin({ area, email: meta.email, err, meta, dedupeKey: k });
-  } catch {
-    /* silent */
+    vlog('notifyOnce', 'arm (first time)', { area, key: k });
+    await alertAdmin({ area, email: ADMIN_EMAIL, err, meta, dedupeKey: k });
+  } catch (e) {
+    verror('notifyOnce.fail', e, { area });
   }
-}
-
-// éxito “Plan B detectado (sin desactivar)”
-async function alertPlanBNotice(source, { email, subId, reason, extra = {} }) {
-  const key = `planB.notice:${source}:${subId || email}`;
-  return ensureOnce('alertPlanB', key, 6 * 3600, async () => {
-    const subject = 'AVISO: Baja del Club detectada en Stripe — no materializada en WP (NO se ha desactivado)';
-    const text =
-`Se ha detectado una BAJA del CLUB en Stripe que puede no estar materializada en WordPress.
-(No se ha realizado ninguna desactivación automática.)
-
-Usuario:
-- Email: ${email}
-- SubID: ${subId || 'N/D'}
-
-Motivo: ${reason || 'coherencia Stripe→WP (solo aviso)'}
-Origen: ${source}
-
-Revisa manualmente en MemberPress y Stripe.`;
-    await sendAdmin(subject, text, { email, subId, reason, source, ...extra });
-  });
 }
 
 /* ===================== Idempotencia (locks) ===================== */
@@ -185,7 +169,11 @@ async function ensureOnce(ns, key, ttlSeconds, fn) {
     const snap = await tx.get(ref);
     if (snap.exists) {
       const d = snap.data() || {};
-      if ((d.expiresAt || 0) > now) return { skipped: true, reason: 'locked', id };
+      if ((d.expiresAt || 0) > now) {
+        const ttl = Math.max(0, Math.round(((d.expiresAt || 0) - now) / 1000));
+        vlog('ensureOnce', 'skip (locked)', { ns, key, id, ttl_s: ttl });
+        return { skipped: true, reason: 'locked', id, ttl };
+      }
     }
     tx.set(ref, { createdAt: now, expiresAt: now + ttlSeconds * 1000 }, { merge: true });
     return { skipped: false, id };
@@ -230,7 +218,6 @@ async function resolveEmail(sub, evForFallback = null) {
   let email = extractEmailFromSub(sub);
   if (email) return email;
 
-  // 1) Si sub.customer es un ID, traer el customer
   if (typeof sub?.customer === 'string' && sub.customer) {
     try {
       const cust = await stripe.customers.retrieve(sub.customer);
@@ -240,7 +227,6 @@ async function resolveEmail(sub, evForFallback = null) {
     }
   }
 
-  // 2) Si venimos de un evento y hay customer en el payload, úsalo
   if (!email && evForFallback?.data?.object?.customer && typeof evForFallback.data.object.customer === 'string') {
     try {
       const cust2 = await stripe.customers.retrieve(evForFallback.data.object.customer);
@@ -250,7 +236,6 @@ async function resolveEmail(sub, evForFallback = null) {
     }
   }
 
-  // 3) latest_invoice como ID (si no estaba expandida)
   if (!email && typeof sub?.latest_invoice === 'string' && sub.latest_invoice) {
     try {
       const inv = await stripe.invoices.retrieve(sub.latest_invoice, { expand: ['customer'] });
@@ -261,7 +246,6 @@ async function resolveEmail(sub, evForFallback = null) {
     }
   }
 
-  // 4) default_payment_method → billing_details.email
   if (!email && typeof sub?.default_payment_method === 'string' && sub.default_payment_method) {
     try {
       const pm = await stripe.paymentMethods.retrieve(sub.default_payment_method);
@@ -274,22 +258,62 @@ async function resolveEmail(sub, evForFallback = null) {
   return null;
 }
 
-/* ======= “Desactivación” unificada (SOLO AVISO; NO DESACTIVA) ======= */
-async function wpDeactivateOnce(email, subId, source, extraMeta = {}, reason = 'solo_aviso_planB') {
-  const key = subId ? `sub:${subId}` : `email:${email}`;
-  const res = await ensureOnce('wpDeact', key, 24 * 3600, async () => {
-    try {
-      // ❌ NO DESACTIVAR NADA. SOLO AVISAR AL ADMIN.
-      vlog(source, '⚠️ Detectada baja no materializada — NO se desactiva', { email, subId, reason });
-      await alertPlanBNotice(source, { email, subId, reason, extra: extraMeta });
-    } catch (e) {
-      verror(`${source}.notify_fail`, e, { email, subId, reason, ...extraMeta });
-      await notifyOnce(`${source}.notify_fail`, e, { email, subId }, `${source}.notify_fail:${subId || email}`);
-      throw e;
+/* ===================== Comprobación de estado en MemberPress ===================== */
+// Usa services/wpMemberPressList si está disponible (opcional).
+async function tryImport(fnPath) { try { return require(fnPath); } catch { return null; } }
+
+let __mpCache = { at: 0, set: null }; // caché 60s
+async function isMpActive(email) {
+  const svc = await tryImport('../services/wpMemberPressList');
+  if (!svc) { vlog('mp.check', 'skip: no svc'); return null; }
+
+  try {
+    // Si el servicio expone un método directo, úsalo:
+    if (typeof svc.isWpClubActive === 'function') {
+      const active = await svc.isWpClubActive(email);
+      vlog('mp.check', 'direct', { email, active });
+      return !!active;
     }
+
+    // Fallback: listar miembros activos y cachear 60s
+    const now = Date.now();
+    if (!__mpCache.set || (now - __mpCache.at) > 60_000) {
+      const list = await svc.getWpClubMembers(); // debe devolver array de emails activos
+      __mpCache = { at: now, set: new Set((list || []).map(e => String(e || '').toLowerCase())) };
+      vlog('mp.check', 'refreshed', { size: __mpCache.set.size });
+    }
+    const ok = __mpCache.set.has(String(email || '').toLowerCase());
+    vlog('mp.check', 'cached', { email, active: ok });
+    return ok;
+  } catch (e) {
+    verror('mp.check.fail', e, { email });
+    return null; // desconocido
+  }
+}
+
+/* ======= AVISO de mismatch (NO desactiva) ======= */
+async function alertStripeCancelledButMpActive(source, { email, subId, reason, extra = {} }) {
+  const key = `planB.mismatch:${source}:${subId || email || 'noEmail'}`;
+  const ALERT_TTL = Number(process.env.PLANB_ALERT_TTL_SECONDS || 300);
+  return ensureOnce('alertPlanB', key, ALERT_TTL, async () => {
+    const subject = 'AVISO: Stripe CANCELADA pero MemberPress ACTIVO (NO se ha desactivado)';
+    const text =
+`Se ha detectado una incoherencia Stripe→MemberPress.
+
+Estado:
+- Stripe: CANCELADA/NO ACTIVA
+- MemberPress: ACTIVO
+
+Usuario:
+- Email: ${email || 'N/D'}
+- SubID: ${subId || 'N/D'}
+
+Origen: ${source}
+Motivo: ${reason || 'reconciliación/replay'}
+
+Revisa manualmente en MemberPress y Stripe. (Este Plan B NO desactiva).`;
+    await sendAdmin(subject, text, { email, subId, reason, source, ...extra });
   });
-  if (res.skipped) vlog(source, 'skip aviso (recent)', { email, subId });
-  return res;
 }
 
 /* ===================== 1) Replayer ===================== */
@@ -347,7 +371,7 @@ async function jobReplayer() {
           const sub = await stripe.subscriptions.retrieve(subId, {
             expand: ['customer', 'latest_invoice.customer'],
           });
-          let email = await resolveEmail(sub, ev);
+          const email = await resolveEmail(sub, ev);
           const doDeactivate = needsDeactivation(sub);
 
           vlog('replayer', 'evaluated', {
@@ -360,11 +384,19 @@ async function jobReplayer() {
             doDeactivate,
           });
 
-          if (doDeactivate && email) {
-            await wpDeactivateOnce(email, subId, 'replayer', info, 'replayer_detected');
-          } else if (doDeactivate && !email) {
-            await notifyOnce('planB.replayer.no_email', new Error('No email found for subscription'), { ...info, subId });
-            vlog('replayer', 'no-op (missing email)', { subId });
+          if (doDeactivate) {
+            if (!email) {
+              await notifyOnce('planB.replayer.no_email', new Error('No email found for subscription'), { ...info, subId });
+              vlog('replayer', 'no-op (missing email)', { subId });
+              return;
+            }
+            const mpActive = await isMpActive(email);
+            if (mpActive === false) {
+              vlog('replayer', 'ok: MP ya inactivo', { email, subId });
+              return;
+            }
+            // Si MP activo o desconocido -> avisar
+            await alertStripeCancelledButMpActive('replayer', { email, subId, reason: 'replayer_detected', extra: info });
           } else {
             vlog('replayer', 'no-op', { subId, email });
           }
@@ -390,7 +422,6 @@ async function jobReplayer() {
 }
 
 /* ===================== 2) Reconciliación ===================== */
-// ⚠️ Stripe Search no soporta `cancel_at_period_end`; esa parte la cubre el replayer.
 const RECON_QUERY = "status:'canceled' OR status:'unpaid' OR status:'incomplete_expired'";
 
 async function jobReconciler() {
@@ -423,7 +454,7 @@ async function jobReconciler() {
           doDeactivate,
         };
 
-        // Si hay que actuar y falta email, consulta puntual para resolverlo
+        // Si hay que actuar y falta email, intenta resolverlo
         if (doDeactivate && !email) {
           try {
             const subFull = await stripe.subscriptions.retrieve(sub.id, {
@@ -443,8 +474,14 @@ async function jobReconciler() {
           continue;
         }
 
-        const r = await wpDeactivateOnce(email, null, 'reconciler', info, 'reconciler_detected');
-        if (!r.skipped) acted++;
+        const mpActive = await isMpActive(email);
+        if (mpActive === false) {
+          vlog('reconciler', 'ok: MP ya inactivo', { email, subId: sub.id });
+          continue;
+        }
+
+        const r = await alertStripeCancelledButMpActive('reconciler', { email, subId: sub.id, reason: 'reconciler_detected', extra: info });
+        if (!r?.skipped) acted++;
 
         if ((reviewed % SLOWDOWN_EVERY) === 0) { await sleep(SLOWDOWN_MS); }
       }
@@ -473,7 +510,6 @@ async function jobBajasScheduler() {
 
     const docs = snap.docs.filter(d => {
       const data = d.data() || {};
-      // Normaliza fechaEfectosMs si no existe
       let fechaMs = data.fechaEfectosMs;
       if (!fechaMs && data.fechaEfectos) {
         try { fechaMs = new Date(data.fechaEfectos).getTime(); }
@@ -489,7 +525,7 @@ async function jobBajasScheduler() {
       if ((done + skipped) >= MAX_ACTIONS_PER_RUN) break;
 
       const d = doc.data();
-      const email = d.email || doc.id; // fallback al ID del doc
+      const email = d.email || doc.id;
       let fechaMs = d.fechaEfectosMs;
       if (!fechaMs && d.fechaEfectos) {
         try { fechaMs = new Date(d.fechaEfectos).getTime(); }
@@ -498,9 +534,13 @@ async function jobBajasScheduler() {
       const info = { id: doc.id, email, motivo: d.motivo, fechaEfectosMs: fechaMs };
 
       const res = await ensureOnce('bajaScheduler', `bajaProg:${doc.id}`, 6 * 3600, async () => {
-        await wpDeactivateOnce(email, null, 'bajaScheduler', info, 'baja_programada_detectada');
+        // Aquí solo se avisa de que llegó la fecha programada; no comprobamos MP.
+        await sendAdmin(
+          'Aviso: llegó fecha de BAJA programada (NO se desactiva)',
+          `Documento: ${doc.id}\nEmail: ${email}\nMotivo: ${d.motivo || 'N/D'}\nFecha(ms): ${fechaMs}`,
+          { email, docId: doc.id, motivo: d.motivo }
+        );
         try {
-          // ❗ No marcar como 'ejecutada' porque NO se desactiva. Guardamos traza de aviso.
           await doc.ref.set({ estadoBaja: 'avisada', avisadaAt: Date.now() }, { merge: true });
         } catch (e) {
           verror('bajaScheduler.firestore_update_fail', e, info);
@@ -524,10 +564,6 @@ async function jobBajasScheduler() {
 }
 
 /* ===================== 4) (Opcional) Sanity ===================== */
-async function tryImport(fnPath) {
-  try { return require(fnPath); } catch { return null; }
-}
-
 async function jobSanity() {
   try {
     const svc = await tryImport('../services/wpMemberPressList');
@@ -550,8 +586,12 @@ async function jobSanity() {
 
       if (!res.data.length) {
         // Antes: desactivar en WP. Ahora: solo aviso.
-        vlog('sanity', '⚠️ Miembro en WP sin sub activa en Stripe — NO se desactiva', { email });
-        await wpDeactivateOnce(email, null, 'sanity', { email }, 'sin_sub_activa_detectada');
+        vlog('sanity', '⚠️ Miembro en WP sin sub activa en Stripe — aviso', { email });
+        await sendAdmin(
+          'AVISO: WP activo pero sin suscripción activa en Stripe (NO se desactiva)',
+          `Email: ${email}\nOrigen: sanity`,
+          { email }
+        );
         fixed++;
       } else {
         vlog('sanity', 'ok', { email, subId: res.data[0].id });
@@ -567,31 +607,18 @@ async function jobSanity() {
   }
 }
 
-
 /* ===================== Agregador: ejecutar TODO el Plan B ===================== */
 async function runAllPlanB() {
   const out = { ok: true, steps: {} };
-  try {
-    out.steps.reconciler = await jobReconciler();
-  } catch (e) {
-    verror('planB.full.reconciler', e);
-    out.reconcilerError = e?.message || String(e);
-    out.ok = false;
-  }
-  try {
-    out.steps.replayer = await jobReplayer();
-  } catch (e) {
-    verror('planB.full.replayer', e);
-    out.replayerError = e?.message || String(e);
-    out.ok = false;
-  }
-  try {
-    out.steps.scheduler = await jobBajasScheduler();
-  } catch (e) {
-    verror('planB.full.scheduler', e);
-    out.schedulerError = e?.message || String(e);
-    out.ok = false;
-  }
+  try { out.steps.reconciler = await jobReconciler(); }
+  catch (e) { verror('planB.full.reconciler', e); out.reconcilerError = e?.message || String(e); out.ok = false; }
+
+  try { out.steps.replayer = await jobReplayer(); }
+  catch (e) { verror('planB.full.replayer', e); out.replayerError = e?.message || String(e); out.ok = false; }
+
+  try { out.steps.scheduler = await jobBajasScheduler(); }
+  catch (e) { verror('planB.full.scheduler', e); out.schedulerError = e?.message || String(e); out.ok = false; }
+
   vlog('planB.full', 'end', { ok: out.ok });
   return out;
 }
@@ -607,7 +634,7 @@ function makePoller(name, ms, fn) {
     finally { running = false; }
   };
   setInterval(tick, ms);
-  setTimeout(tick, 1000); // primer disparo pronto
+  setTimeout(tick, 1000);
   vlog('planB.daemon', `poller ${name} armado`, { everyMs: ms });
 }
 
@@ -647,7 +674,7 @@ async function main() {
   node jobs/stripe_bajasClub_planB.js sanity
   node jobs/stripe_bajasClub_planB.js full
   node jobs/stripe_bajasClub_planB.js testalert
-  node jobs/stripe_bajasClub_planB.js daemon   # planificador interno`);
+  node jobs/stripe_bajasClub_planB.js daemon`);
       process.exitCode = 2;
     }
   } catch (e) {

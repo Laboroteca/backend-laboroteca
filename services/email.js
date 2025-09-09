@@ -14,7 +14,8 @@ async function enviarEmailPersonalizado({
   text,
   pdfBuffer = null,
   enviarACopy = false,
-  attachments = []
+  attachments = [],
+  includeCredencialesNotice = false
 }) {
   const destinatarios = Array.isArray(to) ? [...to] : [to];
 
@@ -44,13 +45,16 @@ También puede presentar una reclamación ante la autoridad de control competent
 Más información: https://www.laboroteca.es/politica-de-privacidad/
   `;
 
+  const htmlFinal = html + (includeCredencialesNotice ? avisoCredencialesHtml : '') + pieHtml;
+  const textFinal = text + '\n\n' + (includeCredencialesNotice ? (avisoCredencialesText + '\n\n') : '') + pieText;
+
   const body = {
     api_key: process.env.SMTP2GO_API_KEY,
     to: destinatarios,
     sender: `"Laboroteca" <${process.env.SMTP2GO_FROM_EMAIL}>`,
     subject,
-    html_body: html + pieHtml,
-    text_body: text + '\n\n' + pieText
+    html_body: htmlFinal,
+    text_body: textFinal
   };
 
   // Adjuntos: prioriza attachments explícitos; si no, adjunta el PDF si existe
@@ -242,7 +246,8 @@ Abogado`;
     html,
     text,
     pdfBuffer, // adjunta la factura siempre que llegue
-    enviarACopy: false
+    enviarACopy: false,
+    includeCredencialesNotice: true
   });
 }
 
@@ -297,6 +302,20 @@ Tu suscripción seguirá activa hasta el <strong>${FECHA_EFECTOS}</strong>, que 
 En esa fecha tramitaremos la baja y perderás el acceso a los contenidos del Club. 
 Si cambias de opinión puedes volver a darte de alta en cualquier momento y sin ninguna penalización.<br><br>
 Gracias por haber formado parte del Club Laboroteca.<br>
+`.trim();
+
+  const avisoCredencialesHtml = `
+    <div style="margin:18px 0 4px 0;padding:12px;border:1px solid #d9a9a9;border-radius:6px;background:#fff7f7;color:#333;">
+      <p style="margin:0 0 8px 0;">🔑 <strong>Recuerda:</strong> tu cuenta es personal e intransferible.</p>
+      <p style="margin:0;">Está prohibido compartir credenciales de acceso o distribuir el material sin autorización. En caso de uso compartido o actividad sospechosa, puede bloquearse el acceso.</p>
+    </div>
+  `.trim();
+
+  const avisoCredencialesText = `
+------------------------------------------------------------
+RECUERDA: tu cuenta es personal e intransferible.
+Prohibido compartir credenciales o distribuir el material sin autorización.
+En caso de uso compartido o actividad sospechosa, puede bloquearse el acceso.
 `.trim();
   const text = `Hola ${nombre || 'cliente'},
 

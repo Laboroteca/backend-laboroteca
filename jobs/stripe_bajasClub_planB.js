@@ -1,14 +1,13 @@
 // jobs/stripe_bajasClub_planB.js
-// Plan B (AVISO SOLO) — Stripe ↔ Firestore (usuariosClub + bajasClub)
-// AVISA si: Stripe = cancelada/no activa
-// Y en Firestore: usuariosClub/{email}.activo === true
+// Plan B (AVISO SOLO) — Stripe ↔ Firestore (usuariosClub + bajasClub) + MemberPress checker HMAC
+// AVISA si: Stripe = cancelada/no activa  && Firestore: usuariosClub/{email}.activo === true
 // Ignora si en bajasClub hay "programada" o "pendiente" con fecha futura.
-// NO desactiva nada.
+// NO desactiva nada. Incluye logs exhaustivos y resultados de cada sistema en el email.
 
 'use strict';
 
 /* ========= Versión / banner ========= */
-const PLANB_VERSION = 'aviso-only 2025-09-09+discordancia-firestore';
+const PLANB_VERSION = 'aviso-only 2025-09-09 full+logs+hmac';
 function banner() {
   console.log(JSON.stringify({ at: new Date().toISOString(), area: 'boot', msg: `PlanB ${PLANB_VERSION}` }));
 }
@@ -34,7 +33,16 @@ const SLOWDOWN_EVERY      = parseInt(process.env.PLANB_SLOWDOWN_EVERY || '50', 1
 const SLOWDOWN_MS         = parseInt(process.env.PLANB_SLOWDOWN_MS    || '1000', 10);
 const ALERT_TTL           = parseInt(process.env.PLANB_ALERT_TTL_SECONDS || '300', 10);
 
+const REPLAYER_TYPES = ['customer.subscription.deleted','customer.subscription.updated','invoice.payment_failed'];
+const RECON_QUERY = "status:'canceled' OR status:'unpaid' OR status:'incomplete_expired' OR (status:'past_due' AND cancel_at_period_end:'true')";
+
+// MemberPress checker (WordPress) con HMAC
+const MP_CHECK_URL        = process.env.MP_CHECK_URL || 'https://www.laboroteca.es/wp-json/mp/v1/is-active?product_id=10663';
+const MP_CHECK_SECRET     = (process.env.MP_CHECK_SECRET || '').trim();
+const MP_CHECK_TIMEOUT_MS = parseInt(process.env.MP_CHECK_TIMEOUT_MS || '10000', 10);
+
 const fetch = (global.fetch ? global.fetch : require('node-fetch'));
+const crypto = require('crypto');
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 /* ===================== Firebase ===================== */
@@ -118,41 +126,6 @@ async function sendAdmin(subject, text, meta = {}) {
   if (proxyErr && smtpErr) throw new Error('Ambos envíos fallaron');
 }
 
-/* ===== Deduplicación ligera (proceso) ===== */
-const __alertOnce = new Set();
-async function notifyOnce(area, err, meta = {}, key = null) {
-  try {
-    const k = key || `${area}:${JSON.stringify(meta).slice(0, 200)}`;
-    if (__alertOnce.has(k)) { vlog('notifyOnce', 'skip (dedupe)', { area, key: k }); return; }
-    __alertOnce.add(k);
-    vlog('notifyOnce', 'arm (first time)', { area, key: k });
-    await sendViaProxy(`[${area}]`, err?.message || 'notifyOnce', { ...meta, area });
-  } catch (e) { verror('notifyOnce.fail', e, { area }); }
-}
-
-/* ===================== Idempotencia (locks) ===================== */
-async function ensureOnce(ns, key, ttlSeconds, fn) {
-  const id = `${ns}:${key}`;
-  const ref = db.collection('opsLocks').doc(id);
-  const now = Date.now();
-  const res = await db.runTransaction(async (tx) => {
-    const snap = await tx.get(ref);
-    if (snap.exists) {
-      const d = snap.data() || {};
-      if ((d.expiresAt || 0) > now) {
-        const ttl = Math.max(0, Math.round(((d.expiresAt || 0) - now) / 1000));
-        vlog('ensureOnce', 'skip (locked)', { ns, key, id, ttl_s: ttl });
-        return { skipped: true, reason: 'locked', id, ttl };
-      }
-    }
-    tx.set(ref, { createdAt: now, expiresAt: now + ttlSeconds * 1000 }, { merge: true });
-    return { skipped: false, id };
-  });
-  if (res.skipped) return res;
-  try { const out = await fn(); return { ...res, ok: true, out }; }
-  finally { /* expira por TTL */ }
-}
-
 /* ===================== Stripe utils ===================== */
 function extractEmailFromSub(sub) {
   if (sub?.customer && typeof sub.customer === 'object' && sub.customer.email) return sub.customer.email;
@@ -173,12 +146,16 @@ async function resolveEmail(sub, evForFallback = null) {
   let email = extractEmailFromSub(sub);
   if (email) return email;
   if (typeof sub?.customer === 'string' && sub.customer) {
-    try { const cust = await stripe.customers.retrieve(sub.customer); if (cust?.email) return cust.email; }
-    catch (e) { verror('email.resolve.customer', e, { customer: sub.customer, subId: sub?.id }); }
+    try {
+      const cust = await stripe.customers.retrieve(sub.customer);
+      if (cust?.email) return cust.email;
+    } catch (e) { verror('email.resolve.customer', e, { customer: sub.customer, subId: sub?.id }); }
   }
   if (!email && evForFallback?.data?.object?.customer && typeof evForFallback.data.object.customer === 'string') {
-    try { const cust2 = await stripe.customers.retrieve(evForFallback.data.object.customer); if (cust2?.email) return cust2.email; }
-    catch (e) { verror('email.resolve.event_customer', e, { customer: evForFallback.data.object.customer, subId: sub?.id }); }
+    try {
+      const cust2 = await stripe.customers.retrieve(evForFallback.data.object.customer);
+      if (cust2?.email) return cust2.email;
+    } catch (e) { verror('email.resolve.event_customer', e, { customer: evForFallback.data.object.customer, subId: sub?.id }); }
   }
   if (!email && typeof sub?.latest_invoice === 'string' && sub.latest_invoice) {
     try {
@@ -202,78 +179,163 @@ async function isUsuarioClubActivo(email) {
     if (!email) return null;
     const ref = db.collection(USERS_COLL).doc(String(email).toLowerCase());
     const snap = await ref.get();
-    if (!snap.exists) { vlog('usuariosClub.check', 'not_found', { email: email.replace(/@.*/,'@…') }); return null; }
+    if (!snap.exists) {
+      vlog('usuariosClub.check', 'not_found', { email });
+      return null;
+    }
     const d = snap.data() || {};
     const activo = !!d.activo;
-    vlog('usuariosClub.check', 'ok', { email: email.replace(/@.*/,'@…'), activo });
+    vlog('usuariosClub.check', 'ok', { email, activo, raw: d });
     return activo;
   } catch (e) {
-    verror('usuariosClub.check.fail', e, { email: email && email.replace(/@.*/,'@…') });
+    verror('usuariosClub.check.fail', e, { email });
     return null;
   }
 }
-
 async function getBajaEstado(email) {
   try {
     if (!email) return null;
     const ref = db.collection(BAJAS_COLL).doc(String(email).toLowerCase());
     const snap = await ref.get();
-    if (!snap.exists) return null;
+    if (!snap.exists) { vlog('bajasClub.read', 'not_found', { email }); return null; }
     const d = snap.data() || {};
     let fechaMs = d.fechaEfectosMs;
     if (!fechaMs && d.fechaEfectos) { try { fechaMs = new Date(d.fechaEfectos).getTime(); } catch { fechaMs = 0; } }
-    return {
+    const out = {
       estadoBaja: d.estadoBaja || null,                          // programada | pendiente | ejecutada | ...
       fechaEfectosMs: fechaMs || 0,
       motivo: d.motivo || d.motivoFinal || null,
     };
+    vlog('bajasClub.read', 'ok', { email, out });
+    return out;
   } catch (e) { verror('bajasClub.read.fail', e, { email }); return null; }
 }
 
-/* ======= AVISO mismatch (NO desactiva) ======= */
-async function alertDiscordancia(source, { email, subId, reason, extra = {} }) {
+/* ===================== MemberPress checker HMAC ===================== */
+function hmacSha256Hex(secret, msg){ return crypto.createHmac('sha256', secret).update(msg).digest('hex'); }
+function randNonce(){ return Math.random().toString(36).slice(2) + Date.now().toString(36); }
+function buildSignedUrl(email){
+  const baseUrl = MP_CHECK_URL.includes('?') ? MP_CHECK_URL : (MP_CHECK_URL + '?product_id=10663');
+  const u = new URL(baseUrl); u.searchParams.set('email', email); return u.toString();
+}
+function buildHeaders(email){
+  if (!MP_CHECK_SECRET) return { 'user-agent': 'Laboroteca-PlanB/1.0', 'accept': 'application/json' };
+  const ts = Math.floor(Date.now()/1000).toString();
+  const nonce = randNonce();
+  const url = new URL(MP_CHECK_URL);
+  const pid = url.searchParams.get('product_id') || '10663';
+  const canonical = `${email}|${pid}|${ts}|${nonce}`;
+  const sig = hmacSha256Hex(MP_CHECK_SECRET, canonical);
+  return { 'x-mp-ts': ts, 'x-mp-nonce': nonce, 'x-mp-sig': sig, 'user-agent': 'Laboroteca-PlanB/1.0', 'accept': 'application/json' };
+}
+async function isMpActive(email) {
+  if (!MP_CHECK_URL) { vlog('mp.check', 'skip: sin MP_CHECK_URL'); return { ok:false, active:null, reason:'no_url' }; }
+  try {
+    const url = buildSignedUrl(email);
+    const headers = buildHeaders(email);
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), MP_CHECK_TIMEOUT_MS);
+    const start = Date.now();
+    const res = await fetch(url, { method: 'GET', headers, signal: controller.signal });
+    clearTimeout(t);
+    const dt = Date.now()-start;
+    const bodyText = await res.text();
+    let data = {};
+    try { data = JSON.parse(bodyText); } catch {}
+    const active = (typeof data.active === 'boolean') ? data.active : (String(data.status || '').toLowerCase() === 'active');
+    vlog('mp.check', res.ok ? 'ok' : 'non-200', { email, status: res.status, ms: dt, preview: bodyText.slice(0,300), parsedActive: active });
+    return { ok: res.ok, active: res.ok ? !!active : null, reason: res.ok ? 'ok' : `http_${res.status}`, raw: bodyText.slice(0,600) };
+  } catch (e) {
+    verror('mp.check.fail', e, { email });
+    return { ok:false, active:null, reason: e.name === 'AbortError' ? 'timeout' : 'exception' };
+  }
+}
+
+/* ======= Email de discordancia (NO desactiva) ======= */
+async function alertDiscordancia(source, ctx) {
+  const { email, subStatus, subId, ucActivo, baja, mp } = ctx;
   const key = `discord:${source}:${subId || email || 'noEmail'}`;
   return ensureOnce('alertPlanB', key, ALERT_TTL, async () => {
-    const subject = 'AVISO: Discordancia STRIPE (cancelada) ↔ Firestore (usuariosClub activo)';
+    const bajaInfo = baja ? `${baja.estadoBaja || 'N/D'} @ ${baja.fechaEfectosMs || 'N/D'} (motivo: ${baja.motivo || 'N/D'})` : 'sin registro';
+    const mpLine = mp ? `MP: ${mp.active === true ? 'ACTIVO' : (mp.active === false ? 'inactivo' : 'no verificable')} (ok:${mp.ok} reason:${mp.reason})` : 'MP: N/D';
+    const subject = 'AVISO: Discordancia STRIPE ↔ Firestore (usuariosClub activo)';
     const text =
-`Se ha detectado una discordancia entre Stripe y Firestore.
+`Se detectó DISCORDANCIA:
 
-Stripe: CANCELADA / NO ACTIVA
-Firestore: usuariosClub.activo === true
-bajasClub: ${extra.bajaInfo || 'N/D'}
+Stripe: ${subStatus || 'N/D'} (subId: ${subId || 'N/D'})
+usuariosClub.activo: ${ucActivo}
+bajasClub: ${bajaInfo}
+${mpLine}
 
 Email: ${email || 'N/D'}
-SubID: ${subId || 'N/D'}
 Origen: ${source}
-Motivo: ${reason || 'detected'}
 
-Revisa manualmente (NO se desactiva automáticamente).`;
-    vlog('planB.discord', 'alerting', { source, email, subId, reason });
-    await sendAdmin(subject, text, { email, subId, reason, source, ...extra });
+Regla: Stripe no-activa && usuariosClub.activo === true && (sin baja programada/pending futura)
+Acción: Solo AVISO. No se desactiva nada.`;
+    vlog('planB.discord', 'alerting', { source, email, subId, subStatus, ucActivo, baja: baja || null, mp: mp || null });
+    await sendAdmin(subject, text, { email, subId, subStatus, ucActivo, baja, mp, source });
   });
 }
 
-/* ===================== Regla principal de discordancia ===================== */
-async function shouldAlertDiscordancia(email, subId) {
-  const ucActivo = await isUsuarioClubActivo(email);
-  if (ucActivo === false) return { alert: false, reason: 'usuariosClub_inactivo' };
-  if (ucActivo === null)  return { alert: false, reason: 'usuariosClub_desconocido' }; // no alertamos si no hay doc
+/* ===================== Decisor de alerta ===================== */
+function stripeIsNonActiveStatus(status, cancel_at_period_end, current_period_end) {
+  const s = String(status || '').toLowerCase();
+  if (['canceled','unpaid','incomplete_expired'].includes(s)) return true;
+  if (s === 'past_due' && cancel_at_period_end && (current_period_end*1000) <= Date.now()) return true;
+  if (cancel_at_period_end && (current_period_end*1000) <= Date.now()) return true;
+  return false;
+}
 
-  // Si está activo en usuariosClub, comprobar si hay baja programada/pending futura
-  const baja = await getBajaEstado(email);
+async function decideAndMaybeAlert(source, sub) {
+  const subId = sub?.id;
+  const status = sub?.status;
+  const email = await resolveEmail(sub, null);
+  vlog('decision.input', 'stripe', { subId, status, email, cancel_at_period_end: sub?.cancel_at_period_end, current_period_end: sub?.current_period_end });
+
+  if (!stripeIsNonActiveStatus(status, sub?.cancel_at_period_end, sub?.current_period_end)) {
+    vlog('decision', 'skip: stripe still active', { subId, status });
+    return;
+  }
+  if (!email) {
+    await notifyOnce('planB.no_email_for_sub', new Error('Stripe sin email'), { subId, status });
+    return;
+  }
+
+  // Firestore usuariosClub
+  const ucActivo = await isUsuarioClubActivo(email);             // true | false | null
+  // Firestore bajasClub
+  const baja = await getBajaEstado(email);                       // puede ser null
+  let bajaBlocks = false;
   if (baja) {
     const est = String(baja.estadoBaja || '').toLowerCase();
     const now = Date.now();
-    if ((est === 'programada' || est === 'pendiente') && (baja.fechaEfectosMs || 0) > now) {
-      return { alert: false, reason: 'baja_programada_futura', baja };
-    }
+    if ((est === 'programada' || est === 'pendiente') && (baja.fechaEfectosMs || 0) > now) bajaBlocks = true;
   }
-  return { alert: true, reason: 'uc_activo_y_sin_baja_futura', baja };
+
+  // MemberPress (solo para informar; no bloquea el aviso)
+  const mp = await isMpActive(email); // {ok, active, reason}
+
+  // Logs de resumen de los tres sistemas
+  vlog('decision.summary', 'results', {
+    email, subId, stripeStatus: status,
+    usuariosClub_activo: ucActivo,
+    bajasClub: baja || null,
+    bajaBlocks,
+    mp: mp || null
+  });
+
+  // Regla: avisar si Stripe no-activa && usuariosClub.activo === true && NO baja programada futura
+  if (ucActivo === true && !bajaBlocks) {
+    await alertDiscordancia(source, { email, subId, subStatus: status, ucActivo, baja, mp });
+  } else {
+    vlog('decision', 'no-alert', { reason:
+      ucActivo !== true ? 'uc_inactivo_o_desconocido' :
+      (bajaBlocks ? 'baja_programada_futura' : 'otro')
+    });
+  }
 }
 
 /* ===================== 1) Replayer ===================== */
-const REPLAYER_TYPES = ['customer.subscription.deleted','customer.subscription.updated','invoice.payment_failed'];
-
 async function getReplayCheckpoint() {
   const ref = db.collection('system').doc('stripeReplay');
   const snap = await ref.get();
@@ -294,13 +356,11 @@ async function jobReplayer() {
 
     while (hasMore) {
       const page = await stripe.events.list({ types: REPLAYER_TYPES, created: { gt: since }, limit: 100, starting_after });
-
       for (const ev of page.data) {
         if (processed + skipped >= MAX_EVENTS_PER_RUN) { hasMore = false; break; }
 
         maxTs = Math.max(maxTs, ev.created || 0);
         const info = { id: ev.id, type: ev.type, created: ev.created, livemode: ev.livemode };
-
         const res = await ensureOnce('replayer', ev.id, 3600, async () => {
           vlog('replayer', '→ handle', info);
 
@@ -309,22 +369,13 @@ async function jobReplayer() {
           else if (ev.type === 'invoice.payment_failed')   subId = ev.data?.object?.subscription || null;
           if (!subId) { vlog('replayer', 'no subId en evento, skip', info); return; }
 
-          const sub = await stripe.subscriptions.retrieve(subId, { expand: ['customer', 'latest_invoice.customer'] });
-          const email = await resolveEmail(sub, ev);
-          const doDeactivate = needsDeactivation(sub);
+          let sub = null;
+          try {
+            sub = await stripe.subscriptions.retrieve(subId, { expand: ['customer','latest_invoice.customer'] });
+            vlog('replayer.stripe', 'ok', { subId, status: sub.status });
+          } catch (e) { verror('replayer.stripe.fail', e, { subId }); return; }
 
-          vlog('replayer', 'evaluated', { ...info, subId, status: sub.status, cancel_at_period_end: sub.cancel_at_period_end, current_period_end: sub.current_period_end, email, doDeactivate });
-
-          if (!doDeactivate) { vlog('replayer', 'no-op active', { subId }); return; }
-          if (!email) { await notifyOnce('planB.replayer.no_email', new Error('No email for subscription'), { ...info, subId }); return; }
-
-          const { alert, reason, baja } = await shouldAlertDiscordancia(email, subId);
-          if (alert) {
-            const bajaInfo = baja ? `${baja.estadoBaja} @ ${baja.fechaEfectosMs || 'N/D'}` : 'sin registro';
-            await alertDiscordancia('replayer', { email, subId, reason, extra: { ...info, bajaInfo } });
-          } else {
-            vlog('replayer', 'ok/no-alert', { email, subId, reason });
-          }
+          await decideAndMaybeAlert('replayer', sub);
         });
 
         if (res?.skipped) { skipped++; vlog('replayer', 'skip (already handled)', info); }
@@ -344,8 +395,6 @@ async function jobReplayer() {
 }
 
 /* ===================== 2) Reconciliación ===================== */
-const RECON_QUERY = "status:'canceled' OR status:'unpaid' OR status:'incomplete_expired' OR (status:'past_due' AND cancel_at_period_end:'true')";
-
 async function jobReconciler() {
   try {
     vlog('reconciler', 'start', { query: RECON_QUERY });
@@ -354,36 +403,30 @@ async function jobReconciler() {
     let page = null;
 
     do {
-      const res = await stripe.subscriptions.search({ query: RECON_QUERY, limit: 100, page: page || undefined, expand: ['data.customer'] });
+      let res;
+      try {
+        res = await stripe.subscriptions.search({ query: RECON_QUERY, limit: 100, page: page || undefined, expand: ['data.customer'] });
+        vlog('reconciler.stripe', 'search.ok', { count: res.data?.length || 0, page: !!page });
+      } catch (e) { verror('reconciler.stripe.search.fail', e, { page }); break; }
 
       for (const sub of res.data) {
         reviewed++;
         if (acted >= MAX_ACTIONS_PER_RUN) { page = null; break; }
 
-        let email = extractEmailFromSub(sub);
-        const doDeactivate = needsDeactivation(sub);
-        const info = { subId: sub.id, status: sub.status, cancel_at_period_end: sub.cancel_at_period_end, current_period_end: sub.current_period_end, email, doDeactivate };
+        const email = extractEmailFromSub(sub);
+        vlog('reconciler.item', 'stripe', { subId: sub.id, status: sub.status, email });
 
-        if (!doDeactivate) { vlog('reconciler', 'ok/no-op active', info); continue; }
+        if (!needsDeactivation(sub)) { vlog('reconciler', 'no-op active', { subId: sub.id }); continue; }
 
-        if (!email) {
-          try {
-            const subFull = await stripe.subscriptions.retrieve(sub.id, { expand: ['customer', 'latest_invoice.customer'] });
-            email = await resolveEmail(subFull, null);
-            info.email = email;
-          } catch (e) { verror('reconciler.resolve_email', e, { subId: sub.id }); }
-        }
-        if (!email) { await notifyOnce('planB.reconciler.no_email', new Error('No email for subscription'), { subId: sub.id, status: sub.status }); continue; }
+        try {
+          // asegurar email completo si no venía expandido
+          if (!email) {
+            const subFull = await stripe.subscriptions.retrieve(sub.id, { expand: ['customer','latest_invoice.customer'] });
+            sub.customer = subFull.customer; sub.latest_invoice = subFull.latest_invoice;
+          }
+        } catch (e) { verror('reconciler.stripe.retrieve.fail', e, { subId: sub.id }); }
 
-        const { alert, reason, baja } = await shouldAlertDiscordancia(email, sub.id);
-        if (alert) {
-          const bajaInfo = baja ? `${baja.estadoBaja} @ ${baja.fechaEfectosMs || 'N/D'}` : 'sin registro';
-          const r = await alertDiscordancia('reconciler', { email, subId: sub.id, reason, extra: { ...info, bajaInfo } });
-          if (!r?.skipped) acted++;
-        } else {
-          vlog('reconciler', 'ok/no-alert', { email, subId: sub.id, reason });
-        }
-
+        await decideAndMaybeAlert('reconciler', sub);
         if ((reviewed % SLOWDOWN_EVERY) === 0) await sleep(SLOWDOWN_MS);
       }
 
@@ -418,6 +461,40 @@ function startDaemon() {
   makePoller('reconciler', RECONC_MS,   jobReconciler);
 
   vlog('planB.daemon', 'iniciado', { REPLAYER_MS, RECONC_MS });
+}
+
+/* ===================== Main ===================== */
+const __alertOnce = new Set();
+async function notifyOnce(area, err, meta = {}, key = null) {
+  try {
+    const k = key || `${area}:${JSON.stringify(meta).slice(0, 200)}`;
+    if (__alertOnce.has(k)) { vlog('notifyOnce', 'skip (dedupe)', { area, key: k }); return; }
+    __alertOnce.add(k);
+    vlog('notifyOnce', 'arm (first time)', { area, key: k });
+    await sendViaProxy(`[${area}]`, err?.message || 'notifyOnce', { ...meta, area });
+  } catch (e) { verror('notifyOnce.fail', e, { area }); }
+}
+
+async function ensureOnce(ns, key, ttlSeconds, fn) {
+  const id = `${ns}:${key}`;
+  const ref = db.collection('opsLocks').doc(id);
+  const now = Date.now();
+  const res = await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (snap.exists) {
+      const d = snap.data() || {};
+      if ((d.expiresAt || 0) > now) {
+        const ttl = Math.max(0, Math.round(((d.expiresAt || 0) - now) / 1000));
+        vlog('ensureOnce', 'skip (locked)', { ns, key, id, ttl_s: ttl });
+        return { skipped: true, reason: 'locked', id, ttl };
+      }
+    }
+    tx.set(ref, { createdAt: now, expiresAt: now + ttlSeconds * 1000 }, { merge: true });
+    return { skipped: false, id };
+  });
+  if (res.skipped) return res;
+  try { const out = await fn(); return { ...res, ok: true, out }; }
+  finally { /* expira por TTL */ }
 }
 
 async function main() {

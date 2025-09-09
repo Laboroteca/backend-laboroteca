@@ -1,13 +1,14 @@
 // jobs/stripe_bajasClub_planB.js
-// Plan B (AVISO SOLO) — Stripe ↔ MemberPress (checker con HMAC)
-// NUNCA desactiva en MemberPress. AVISA si: Stripe = cancelada/no activa
-// Y en tu sistema: usuariosClub/{email}.activo === true
-// Y además: MemberPress sigue ACTIVO (o el checker no es verificable).
+// Plan B (AVISO SOLO) — Stripe ↔ Firestore (usuariosClub + bajasClub)
+// AVISA si: Stripe = cancelada/no activa
+// Y en Firestore: usuariosClub/{email}.activo === true
+// Ignora si en bajasClub hay "programada" o "pendiente" con fecha futura.
+// NO desactiva nada.
 
 'use strict';
 
 /* ========= Versión / banner ========= */
-const PLANB_VERSION = 'aviso-only 2025-09-09+hmac+usuariosClub';
+const PLANB_VERSION = 'aviso-only 2025-09-09+discordancia-firestore';
 function banner() {
   console.log(JSON.stringify({ at: new Date().toISOString(), area: 'boot', msg: `PlanB ${PLANB_VERSION}` }));
 }
@@ -25,17 +26,13 @@ const stripe = new Stripe(STRIPE_SECRET_KEY, { maxNetworkRetries: 2 });
 /* ===================== Constantes / ENV ===================== */
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'laboroteca@gmail.com';
 const USERS_COLL  = process.env.USERS_COLL  || 'usuariosClub';
+const BAJAS_COLL  = process.env.BAJAS_COLL  || 'bajasClub';
 
 const MAX_EVENTS_PER_RUN  = parseInt(process.env.PLANB_MAX_EVENTS || '1000', 10);
 const MAX_ACTIONS_PER_RUN = parseInt(process.env.PLANB_MAX_ACTS   || '200', 10);
 const SLOWDOWN_EVERY      = parseInt(process.env.PLANB_SLOWDOWN_EVERY || '50', 10);
 const SLOWDOWN_MS         = parseInt(process.env.PLANB_SLOWDOWN_MS    || '1000', 10);
 const ALERT_TTL           = parseInt(process.env.PLANB_ALERT_TTL_SECONDS || '300', 10);
-
-// Checker MU-plugin (WordPress) con HMAC
-const MP_CHECK_URL        = process.env.MP_CHECK_URL || 'https://www.laboroteca.es/wp-json/mp/v1/is-active?product_id=10663';
-const MP_CHECK_SECRET     = (process.env.MP_CHECK_SECRET || '').trim();
-const MP_CHECK_TIMEOUT_MS = parseInt(process.env.MP_CHECK_TIMEOUT_MS || '10000', 10);
 
 const fetch = (global.fetch ? global.fetch : require('node-fetch'));
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -156,7 +153,7 @@ async function ensureOnce(ns, key, ttlSeconds, fn) {
   finally { /* expira por TTL */ }
 }
 
-/* ===================== Util Stripe ===================== */
+/* ===================== Stripe utils ===================== */
 function extractEmailFromSub(sub) {
   if (sub?.customer && typeof sub.customer === 'object' && sub.customer.email) return sub.customer.email;
   if (sub?.metadata?.email) return sub.metadata.email;
@@ -199,7 +196,7 @@ async function resolveEmail(sub, evForFallback = null) {
   return null;
 }
 
-/* ===================== usuariosClub (regla de verdad interna) ===================== */
+/* ===================== Firestore helpers ===================== */
 async function isUsuarioClubActivo(email) {
   try {
     if (!email) return null;
@@ -216,60 +213,62 @@ async function isUsuarioClubActivo(email) {
   }
 }
 
-/* ===================== Checker MemberPress (HMAC) ===================== */
-const crypto = require('crypto');
-function hmacSha256Hex(secret, msg){ return crypto.createHmac('sha256', secret).update(msg).digest('hex'); }
-function randNonce(){ return Math.random().toString(36).slice(2) + Date.now().toString(36); }
-function buildSignedUrl(email){
-  const baseUrl = MP_CHECK_URL.includes('?') ? MP_CHECK_URL : (MP_CHECK_URL + '?product_id=10663');
-  const u = new URL(baseUrl); u.searchParams.set('email', email); return u.toString();
-}
-function buildHeaders(email){
-  if (!MP_CHECK_SECRET) return {};
-  const ts = Math.floor(Date.now()/1000).toString();
-  const nonce = randNonce();
-  const url = new URL(MP_CHECK_URL);
-  const pid = url.searchParams.get('product_id') || '10663';
-  const canonical = `${email}|${pid}|${ts}|${nonce}`;
-  const sig = hmacSha256Hex(MP_CHECK_SECRET, canonical);
-  return { 'x-mp-ts': ts, 'x-mp-nonce': nonce, 'x-mp-sig': sig, 'user-agent': 'Laboroteca-PlanB/1.0', 'accept': 'application/json' };
-}
-async function isMpActive(email) {
-  if (!MP_CHECK_URL) { vlog('mp.check', 'skip: sin MP_CHECK_URL'); return null; }
+async function getBajaEstado(email) {
   try {
-    const url = buildSignedUrl(email);
-    const headers = buildHeaders(email);
-    const controller = new AbortController();
-    const t = setTimeout(() => controller.abort(), MP_CHECK_TIMEOUT_MS);
-    const res = await fetch(url, { method: 'GET', headers, signal: controller.signal });
-    clearTimeout(t);
-    if (!res.ok) { vlog('mp.check.http', 'non-200', { status: res.status }); return null; }
-    const data = await res.json().catch(() => ({}));
-    const active = (typeof data.active === 'boolean') ? data.active : (String(data.status || '').toLowerCase() === 'active');
-    vlog('mp.check', 'ok', { email: email.replace(/@.*/,'@…'), active });
-    return !!active;
-  } catch (e) { verror('mp.check.fail', e, { email: email.replace(/@.*/,'@…') }); return null; }
+    if (!email) return null;
+    const ref = db.collection(BAJAS_COLL).doc(String(email).toLowerCase());
+    const snap = await ref.get();
+    if (!snap.exists) return null;
+    const d = snap.data() || {};
+    let fechaMs = d.fechaEfectosMs;
+    if (!fechaMs && d.fechaEfectos) { try { fechaMs = new Date(d.fechaEfectos).getTime(); } catch { fechaMs = 0; } }
+    return {
+      estadoBaja: d.estadoBaja || null,                          // programada | pendiente | ejecutada | ...
+      fechaEfectosMs: fechaMs || 0,
+      motivo: d.motivo || d.motivoFinal || null,
+    };
+  } catch (e) { verror('bajasClub.read.fail', e, { email }); return null; }
 }
 
 /* ======= AVISO mismatch (NO desactiva) ======= */
-async function alertStripeCancelledButMpActive(source, { email, subId, reason, extra = {} }) {
-  const key = `mismatch:${source}:${subId || email || 'noEmail'}`;
+async function alertDiscordancia(source, { email, subId, reason, extra = {} }) {
+  const key = `discord:${source}:${subId || email || 'noEmail'}`;
   return ensureOnce('alertPlanB', key, ALERT_TTL, async () => {
-    const subject = 'AVISO: Stripe CANCELADA/no activa pero MemberPress ACTIVO (NO se ha desactivado)';
+    const subject = 'AVISO: Discordancia STRIPE (cancelada) ↔ Firestore (usuariosClub activo)';
     const text =
-`Se ha detectado una incoherencia Stripe→MemberPress.
+`Se ha detectado una discordancia entre Stripe y Firestore.
+
 Stripe: CANCELADA / NO ACTIVA
-MemberPress: ACTIVO (o no verificable)
+Firestore: usuariosClub.activo === true
+bajasClub: ${extra.bajaInfo || 'N/D'}
 
 Email: ${email || 'N/D'}
 SubID: ${subId || 'N/D'}
 Origen: ${source}
 Motivo: ${reason || 'detected'}
 
-Revisa manualmente en MemberPress y Stripe. (Este Plan B NO desactiva).`;
-    vlog('planB.mismatch', 'alerting', { source, email, subId, reason });
+Revisa manualmente (NO se desactiva automáticamente).`;
+    vlog('planB.discord', 'alerting', { source, email, subId, reason });
     await sendAdmin(subject, text, { email, subId, reason, source, ...extra });
   });
+}
+
+/* ===================== Regla principal de discordancia ===================== */
+async function shouldAlertDiscordancia(email, subId) {
+  const ucActivo = await isUsuarioClubActivo(email);
+  if (ucActivo === false) return { alert: false, reason: 'usuariosClub_inactivo' };
+  if (ucActivo === null)  return { alert: false, reason: 'usuariosClub_desconocido' }; // no alertamos si no hay doc
+
+  // Si está activo en usuariosClub, comprobar si hay baja programada/pending futura
+  const baja = await getBajaEstado(email);
+  if (baja) {
+    const est = String(baja.estadoBaja || '').toLowerCase();
+    const now = Date.now();
+    if ((est === 'programada' || est === 'pendiente') && (baja.fechaEfectosMs || 0) > now) {
+      return { alert: false, reason: 'baja_programada_futura', baja };
+    }
+  }
+  return { alert: true, reason: 'uc_activo_y_sin_baja_futura', baja };
 }
 
 /* ===================== 1) Replayer ===================== */
@@ -319,27 +318,12 @@ async function jobReplayer() {
           if (!doDeactivate) { vlog('replayer', 'no-op active', { subId }); return; }
           if (!email) { await notifyOnce('planB.replayer.no_email', new Error('No email for subscription'), { ...info, subId }); return; }
 
-          // Regla de verdad interna: usuariosClub.activo === true
-          const ucActivo = await isUsuarioClubActivo(email);
-          if (ucActivo === true) {
-            const mpActive = await isMpActive(email);
-            if (mpActive === true || mpActive === null) {
-              await alertStripeCancelledButMpActive('replayer', {
-                email, subId, reason: mpActive ? 'uc_activo + mp_activo' : 'uc_activo + mp_no_verificado', extra: info
-              });
-            } else {
-              vlog('replayer', 'ok: MP ya inactivo (usuariosClub activo)', { email, subId });
-            }
-            return;
-          }
-          if (ucActivo === false) { vlog('replayer', 'ok: usuariosClub ya inactivo', { email, subId }); return; }
-
-          // Si usuariosClub es desconocido: fallback a MP
-          const mpActive = await isMpActive(email);
-          if (mpActive === true || mpActive === null) {
-            await alertStripeCancelledButMpActive('replayer', { email, subId, reason: mpActive ? 'mp_activo' : 'mp_no_verificado', extra: info });
+          const { alert, reason, baja } = await shouldAlertDiscordancia(email, subId);
+          if (alert) {
+            const bajaInfo = baja ? `${baja.estadoBaja} @ ${baja.fechaEfectosMs || 'N/D'}` : 'sin registro';
+            await alertDiscordancia('replayer', { email, subId, reason, extra: { ...info, bajaInfo } });
           } else {
-            vlog('replayer', 'ok: MP inactivo (fallback)', { email, subId });
+            vlog('replayer', 'ok/no-alert', { email, subId, reason });
           }
         });
 
@@ -391,31 +375,13 @@ async function jobReconciler() {
         }
         if (!email) { await notifyOnce('planB.reconciler.no_email', new Error('No email for subscription'), { subId: sub.id, status: sub.status }); continue; }
 
-        // usuariosClub manda
-        const ucActivo = await isUsuarioClubActivo(email);
-        if (ucActivo === true) {
-          const mpActive = await isMpActive(email);
-          if (mpActive === true || mpActive === null) {
-            const r = await alertStripeCancelledButMpActive('reconciler', {
-              email, subId: sub.id, reason: mpActive ? 'uc_activo + mp_activo' : 'uc_activo + mp_no_verificado', extra: info
-            });
-            if (!r?.skipped) acted++;
-          } else {
-            vlog('reconciler', 'ok: MP inactivo (usuariosClub activo)', { email, subId: sub.id });
-          }
-        } else if (ucActivo === false) {
-          vlog('reconciler', 'ok: usuariosClub ya inactivo', { email, subId: sub.id });
+        const { alert, reason, baja } = await shouldAlertDiscordancia(email, sub.id);
+        if (alert) {
+          const bajaInfo = baja ? `${baja.estadoBaja} @ ${baja.fechaEfectosMs || 'N/D'}` : 'sin registro';
+          const r = await alertDiscordancia('reconciler', { email, subId: sub.id, reason, extra: { ...info, bajaInfo } });
+          if (!r?.skipped) acted++;
         } else {
-          // desconocido en usuariosClub → fallback a MP
-          const mpActive = await isMpActive(email);
-          if (mpActive === true || mpActive === null) {
-            const r = await alertStripeCancelledButMpActive('reconciler', {
-              email, subId: sub.id, reason: mpActive ? 'mp_activo' : 'mp_no_verificado', extra: info
-            });
-            if (!r?.skipped) acted++;
-          } else {
-            vlog('reconciler', 'ok: MP inactivo (fallback)', { email, subId: sub.id });
-          }
+          vlog('reconciler', 'ok/no-alert', { email, subId: sub.id, reason });
         }
 
         if ((reviewed % SLOWDOWN_EVERY) === 0) await sleep(SLOWDOWN_MS);
@@ -428,13 +394,6 @@ async function jobReconciler() {
   } catch (e) {
     verror('reconciler.fatal', e); await notifyOnce('planB.reconciler.fatal', e); throw e;
   }
-}
-
-/* ===================== 3) (Opcional) Sanity ===================== */
-async function jobSanity() {
-  try {
-    vlog('sanity', 'skip (no listado masivo implementado en este modo)');
-  } catch (e) { verror('sanity.fatal', e); await notifyOnce('planB.sanity.fatal', e); throw e; }
 }
 
 /* ===================== Agregador / Daemon / CLI ===================== */
@@ -454,13 +413,11 @@ function makePoller(name, ms, fn) {
 function startDaemon() {
   const REPLAYER_MS   = parseInt(process.env.PLANB_REPLAYER_MS   || '120000', 10);
   const RECONC_MS     = parseInt(process.env.PLANB_RECONCILER_MS || '300000', 10);
-  const ENABLE_SANITY = String(process.env.PLANB_ENABLE_SANITY || '0') === '1';
 
   makePoller('replayer',   REPLAYER_MS, jobReplayer);
   makePoller('reconciler', RECONC_MS,   jobReconciler);
-  if (ENABLE_SANITY) makePoller('sanity', 3600000, jobSanity);
 
-  vlog('planB.daemon', 'iniciado', { REPLAYER_MS, RECONC_MS, ENABLE_SANITY });
+  vlog('planB.daemon', 'iniciado', { REPLAYER_MS, RECONC_MS });
 }
 
 async function main() {
@@ -468,15 +425,13 @@ async function main() {
   try {
     if (cmd === 'replayer')        await jobReplayer();
     else if (cmd === 'reconciler') await jobReconciler();
-    else if (cmd === 'sanity')     await jobSanity();
-    else if (cmd === 'testalert')  await sendAdmin('[PlanB][TEST]', 'Prueba de alertas OK', { service: 'PlanB aviso-only' });
     else if (cmd === 'full')       { const r = await runAllPlanB(); console.log(JSON.stringify({ area: 'planB.full', ...r })); }
+    else if (cmd === 'testalert')  await sendAdmin('[PlanB][TEST]', 'Prueba de alertas OK', { service: 'PlanB aviso-only' });
     else if (cmd === 'daemon')     startDaemon();
     else {
       console.log(`Usage:
   node jobs/stripe_bajasClub_planB.js replayer
   node jobs/stripe_bajasClub_planB.js reconciler
-  node jobs/stripe_bajasClub_planB.js sanity
   node jobs/stripe_bajasClub_planB.js full
   node jobs/stripe_bajasClub_planB.js testalert
   node jobs/stripe_bajasClub_planB.js daemon`);
@@ -495,4 +450,4 @@ else {
   }
 }
 
-module.exports = { jobReplayer, jobReconciler, jobSanity, runAllPlanB, startDaemon };
+module.exports = { jobReplayer, jobReconciler, runAllPlanB, startDaemon };

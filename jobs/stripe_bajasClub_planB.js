@@ -457,59 +457,113 @@ function startDaemon() {
   vlog('planB.daemon', 'iniciado', { REPLAYER_MS, RECONC_MS });
 }
 
-/* ===================== Herramienta de diagnóstico ===================== */
-async function probe(emailRaw) {
-  const email = String(emailRaw || '').trim().toLowerCase();
+/* ===================== Helpers extra para PROBE ===================== */
+// (1) Buscar subs en Stripe por email (metadata y customers.search + fallback a list)
+async function stripeFindSubsByEmail(email) {
+  const out = { byMeta: [], byCustomer: [] };
+
+  // a) metadata['email']
+  try {
+    const q = `metadata['email']:'${email}'`;
+    const r = await stripe.subscriptions.search({ query: q, limit: 100, expand: ['data.customer'] });
+    out.byMeta = r.data || [];
+    vlog('probe.stripe.search', 'ok', { q, found: out.byMeta.length });
+  } catch (e) {
+    verror('probe.stripe.search.fail', e, { email, stage: 'meta' });
+  }
+
+  // b) customers.search -> list subs
+  try {
+    let customers = [];
+    try {
+      const cr = await stripe.customers.search({ query: `email:'${email}'`, limit: 10 });
+      customers = cr.data || [];
+    } catch (e) {
+      // fallback antiguo
+      const cl = await stripe.customers.list({ email, limit: 10 });
+      customers = cl.data || [];
+    }
+    vlog('probe.stripe.customers', 'ok', { customers: customers.map(c => c.id) });
+    for (const c of customers) {
+      const subs = await stripe.subscriptions.list({ customer: c.id, status: 'all', limit: 100, expand: ['data.customer'] });
+      out.byCustomer.push(...(subs.data || []));
+    }
+  } catch (e) {
+    verror('probe.stripe.customers.fail', e, { email });
+  }
+
+  // dedupe por id
+  const map = new Map();
+  for (const s of [...out.byMeta, ...out.byCustomer]) map.set(s.id, s);
+  const list = [...map.values()];
+  vlog('probe.stripe.subs', 'collected', { total: list.length, ids: list.map(s => s.id) });
+  return list;
+}
+
+function summarizeStripe(subs) {
+  const items = subs.map(s => ({
+    id: s.id,
+    status: s.status,
+    cancel_at_period_end: !!s.cancel_at_period_end,
+    current_period_end: s.current_period_end,
+  }));
+  const needs = subs.some(s => needsDeactivation(s));
+  return { needsAlert: needs, items };
+}
+
+// (2) Wrapper para MP checker (reutiliza isMpActive)
+async function mpCheck(email) { return await isMpActive(email); }
+
+/* ===================== Herramienta de diagnóstico (SIEMPRE envía email) ===================== */
+async function cmdProbe(emailRaw){
+  const email = String(emailRaw||'').trim().toLowerCase();
   if (!email) { console.log('Usage: node jobs/stripe_bajasClub_planB.js probe <email>'); return; }
 
-  // 1) Stripe: intenta encontrar la sub por metadata/email o por customer por email
-  let subs = [];
-  try {
-    // Primero: por metadata['email']
-    const q = `metadata['email']:'${email}'`;
-    const res = await stripe.subscriptions.search({ query: q, limit: 5, expand: ['data.customer','data.latest_invoice.customer'] });
-    subs = res.data || [];
-    vlog('probe.stripe.search', 'by_metadata', { query: q, found: subs.length });
-  } catch (e) {
-    verror('probe.stripe.search.fail', e, { stage: 'metadata' });
-  }
-  if (!subs.length) {
-    try {
-      // Segundo: busca customer por email y luego lista sus subs
-      const custs = await stripe.customers.list({ email, limit: 3 });
-      vlog('probe.stripe.search', 'customers.by_email', { hits: custs.data?.length || 0 });
-      for (const c of custs.data || []) {
-        const s = await stripe.subscriptions.list({ customer: c.id, limit: 10 });
-        for (const ss of s.data || []) subs.push(ss);
-      }
-      vlog('probe.stripe.search', 'by_customer', { gathered: subs.length });
-    } catch (e) {
-      verror('probe.stripe.search.fail', e, { stage: 'customers' });
-    }
-  }
-  subs = subs.sort((a,b)=> (b.created||0)-(a.created||0));
-  const sub = subs[0] || null;
-  if (sub) vlog('probe.stripe.sub', 'pick', { subId: sub.id, status: sub.status, cancel_at_period_end: sub.cancel_at_period_end, current_period_end: sub.current_period_end });
-  else vlog('probe.stripe.sub', 'none_found', { email });
+  // Stripe
+  const subs   = await stripeFindSubsByEmail(email);
+  const ssum   = summarizeStripe(subs);
 
-  // 2) Firestore
-  const ucActivo = await isUsuarioClubActivo(email);
-  const baja = await getBajaEstado(email);
+  // Firestore
+  const uc     = await isUsuarioClubActivo(email);
+  const baja   = await getBajaEstado(email);
+  const bajaEst= baja ? (baja.estadoBaja || '').toLowerCase() : 'n/a';
+  const bajaMs = baja ? (baja.fechaEfectosMs || 0) : 0;
+  vlog('probe.firestore.user', uc===null?'not_found':'ok', { email: email.replace(/@.*/,'@…'), activo: uc });
+  vlog('probe.firestore.baja', baja?'ok':'not_found', { estado: bajaEst, fechaEfectosMs: bajaMs });
 
-  // 3) MemberPress
-  const mp = await isMpActive(email);
+  // MemberPress
+  const mp = await mpCheck(email);
 
-  // 4) Resumen
-  vlog('probe.summary', 'final', {
-    email,
-    stripe: sub ? { id: sub.id, status: sub.status, cancel_at_period_end: sub.cancel_at_period_end, current_period_end: sub.current_period_end } : null,
-    usuariosClub_activo: ucActivo,
-    bajasClub: baja || null,
-    mp
+  // Decisión (discordancia Firestore)
+  const now = Date.now();
+  const isBajaFutura = (bajaEst==='programada' || bajaEst==='pendiente') && bajaMs > now;
+  const shouldAlert = (ssum.needsAlert && uc === true && !isBajaFutura);
+
+  vlog('probe.summary','decision', {
+    stripe_needsAlert: ssum.needsAlert, stripe_items: ssum.items,
+    usuariosClub_activo: uc, bajaEst, bajaMs, bajaFutura: isBajaFutura,
+    mp_ok: mp.ok, mp_active: mp.active
   });
 
-  // 5) Si hay sub y está no-activa, ejecuta la lógica de alerta para mostrar el resultado
-  if (sub) await decideAndMaybeAlert('probe', sub);
+  const subject = `[PlanB][PROBE] ${shouldAlert ? 'ALERTA' : 'INFO'} ${email}`;
+  const text = [
+    `Email: ${email}`,
+    `Stripe -> needsDeactivation: ${ssum.needsAlert}`,
+    `Stripe subs: ${ssum.items.map(i => `${i.id}:${i.status}${i.cancel_at_period_end?' (cap_end)':''}`).join(', ') || '—'}`,
+    `Firestore usuariosClub.activo: ${uc}`,
+    `bajasClub: ${baja ? `${bajaEst} @ ${bajaMs}` : 'sin registro'}`,
+    `MemberPress: ${mp.ok ? (mp.active ? 'ACTIVO' : 'INACTIVO') : `NO VERIFICABLE (${mp.reason || 'error'})`}`,
+    ``,
+    `DECISIÓN (discordancia Firestore): ${shouldAlert ? 'ALERTAR' : 'NO ALERTAR'}`,
+  ].join('\n');
+
+  try { await sendViaProxy(subject, text, { area:'probe', email, ssum, uc, baja, mp }); } catch {}
+  try {
+    await sendViaSMTP2GO(subject, text);
+    vlog('probe.alert','sent', { email, shouldAlert });
+  } catch(e){
+    verror('probe.alert.fail', e, { email, shouldAlert });
+  }
 }
 
 /* ===================== Main ===================== */
@@ -551,7 +605,7 @@ async function main() {
   try {
     if (cmd === 'replayer')        await jobReplayer();
     else if (cmd === 'reconciler') await jobReconciler();
-    else if (cmd === 'probe')      await probe(process.argv[3] || '');
+    else if (cmd === 'probe')      await cmdProbe(process.argv[3] || '');
     else if (cmd === 'full')       { const r = await runAllPlanB(); console.log(JSON.stringify({ area: 'planB.full', ...r })); }
     else if (cmd === 'testalert')  await sendAdmin('[PlanB][TEST]', 'Prueba de alertas OK', { service: 'PlanB aviso-only' });
     else if (cmd === 'daemon')     startDaemon();
@@ -578,4 +632,4 @@ else {
   }
 }
 
-module.exports = { jobReplayer, jobReconciler, runAllPlanB, startDaemon, probe };
+module.exports = { jobReplayer, jobReconciler, runAllPlanB, startDaemon, probe: cmdProbe };

@@ -106,6 +106,15 @@ const { jobBajasScheduler: cronBajasClub } = require('./jobs/stripe_bajasClub_pl
 const app = express();
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
+
+// 🟢 LOGGER ULTRA-TEMPRANO (antes de helmet/cors/ratelimit/body-parsers)
+app.use((req, _res, next) => {
+  const ct = (req.headers['content-type'] || '').toLowerCase();
+  const ip = (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim();
+  console.log('→', req.method, req.originalUrl, '| ct:', ct || '(none)', '| ip:', ip);
+  next();
+});
+
 // util solo para logs de depuración (no imprime secretos completos)
 function _first10Sha256(str) {
   try { return crypto.createHash('sha256').update(String(str),'utf8').digest('hex').slice(0,10); }
@@ -598,6 +607,10 @@ async function verificarEmailEnWordPress(email) {
 app.get('/', (req, res) => {
   res.send('✔️ API de Laboroteca activa');
 });
+
+// 🧪 Salud rápida para comprobar que el proceso vive y recibe
+app.get('/_ping', (req, res) => res.json({ ok:true, ts: Date.now() }));
+
 
 // ───────────────────────────────────────────────────────────
 // PAGO ÚNICO: /crear-sesion-pago  (solo productos NO entradas, NO club)
@@ -1301,6 +1314,12 @@ app.use((err, req, res, _next) => {
     }).catch(() => {});
   } catch (_) {}
   res.status(err.status || 500).json({ ok:false, error:'INTERNAL_ERROR' });
+});
+
+// 🚧 404 con traza (DEBE ir justo antes del listen)
+app.use((req, res) => {
+  console.warn('🟡 404', req.method, req.originalUrl);
+  res.status(404).json({ ok:false, error:'NOT_FOUND' });
 });
 
 

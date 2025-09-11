@@ -62,6 +62,7 @@ const DEBUG     = String(process.env.MKT_DEBUG || '').trim() === '1';
 
 const SHEET_ID   = process.env.MKT_SHEET_ID || '1beWTOMlWjJvtmaGAVDegF2mTts16jZ_nKBrksnEg4Co';
 const SHEET_TAB  = process.env.MKT_SHEET_TAB || 'Consents';
+const SHEET_TZ   = process.env.MKT_SHEET_TZ || 'Europe/Madrid';
 
 const BUCKET_NAME =
   (process.env.GOOGLE_CLOUD_BUCKET ||
@@ -332,6 +333,19 @@ async function getSheetsClient(){
   const auth = await google.auth.getClient({ scopes: ['https://www.googleapis.com/auth/spreadsheets'] });
   return google.sheets({ version: 'v4', auth });
 }
+// Fecha: "DD/MM/YYYY - HH:MMh" en zona configurable
+function formatFechaLocal(iso) {
+  try {
+    const d = new Date(iso);
+    const parts = new Intl.DateTimeFormat('es-ES', {
+      timeZone: SHEET_TZ,
+      day: '2-digit', month: '2-digit', year: 'numeric',
+      hour: '2-digit', minute: '2-digit', hour12: false
+    }).formatToParts(d);
+    const v = (t) => parts.find(p => p.type === t)?.value || '';
+    return `${v('day')}/${v('month')}/${v('year')} - ${v('hour')}:${v('minute')}h`;
+  } catch (_) { return iso; }
+}
 
 // —— Helpers A1 seguros + resolución de pestaña ——
 function _needsQuotes(tab){ return /[^A-Za-z0-9_]/.test(String(tab||'')); }
@@ -359,6 +373,7 @@ async function upsertConsentRow({ nombre, email, comercialYES, materiasStr, fech
   const sheets = await getSheetsClient();
   const tab = await resolveSheetTabName(sheets);
   const readRange = _a1(tab, 'A:E');
+  const fechaAltaFmt = formatFechaLocal(fechaAltaISO);
 
   const res = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: readRange });
   const rows = res.data.values || [];
@@ -373,7 +388,7 @@ async function upsertConsentRow({ nombre, email, comercialYES, materiasStr, fech
     const rowNum = targetIdx + 1;
     const currentE = rows[targetIdx][4] || '';
     const values = [
-      [ nombre || (rows[targetIdx][0] || ''), email, comercialYES, materiasStr, currentE || fechaAltaISO ]
+      [ nombre || (rows[targetIdx][0] || ''), email, comercialYES, materiasStr, currentE || fechaAltaFmt ]
     ];
     await sheets.spreadsheets.values.update({
       spreadsheetId: SHEET_ID,
@@ -389,7 +404,7 @@ async function upsertConsentRow({ nombre, email, comercialYES, materiasStr, fech
       valueInputOption: 'RAW',
       insertDataOption: 'INSERT_ROWS',
       requestBody: {
-        values: [[ nombre || '', email, comercialYES, materiasStr, fechaAltaISO ]]
+        values: [[ nombre || '', email, comercialYES, materiasStr, fechaAltaFmt ]]
       }
     });
     return { appended: true };
@@ -751,26 +766,23 @@ router.post('/consent', async (req, res) => {
         const tokens = { NOMBRE: nombreSafe };
 
         const subject = tpl('¡Bienvenido a la newsletter de Laboroteca, {NOMBRE}!', tokens);
-        const bodyTop = tpl(
-          `<p>Hola {NOMBRE},</p>
-           <p>¡Gracias por suscribirte a la newsletter de <strong>Laboroteca</strong>!</p>
-           <p>Desde ahora recibirás novedades por email sobre las materias que has seleccionado.
-           Puedes visitar nuestro <a href="https://www.laboroteca.es/boletin-informativo/">Boletín</a>.</p>
-           <p>Si en algún momento quieres cambiar tus preferencias o darte de baja, podrás hacerlo desde el enlace incluido en cada email.</p>`,
-          tokens
-        );
-        const legal =
+       
+        const bodyTop = tpl(`
+          <p>Hola {NOMBRE},</p>
+          <p><strong>¡Gracias por suscribirte a la newsletter de Laboroteca!</strong></p>
+          <p>Desde ahora recibirás novedades por email sobre las materias que has seleccionado.</p>
+          <p>Y si quieres más novedades, puedes visitar nuestro <a href="https://www.laboroteca.es/boletin-informativo/">Boletín</a>.</p>
+          <p>Un saludo,<br>Ignacio Solsona<br>Abogado</p>
+        `, tokens);
+
+        const avisoEnvio =
           `<hr style="border:0;height:1px;width:100%;background:#e5e5e5;margin:16px 0;">
            <p style="color:#6b6b6b;font-size:12px;line-height:1.5;margin:0 0 8px">
              Este mensaje se ha enviado a <strong>${email}</strong> porque te has dado de alta en la newsletter.
              Si no deseas seguir recibiéndola, puedes <a href="${unsubUrl}">darte de baja aquí</a>.
-           </p>
-           <p style="color:#6b6b6b;font-size:12px;line-height:1.5">
-             En cumplimiento del Reglamento (UE) 2016/679 (RGPD), tu email forma parte de la base de datos de
-             <strong>Ignacio Solsona Fernández-Pedrera</strong>. Puedes ejercer tus derechos en
-             <a href="mailto:ignacio.solsona@icacs.com">ignacio.solsona@icacs.com</a>.
            </p>`;
-        await sendSMTP2GO({ to: email, subject, html: bodyTop + legal });
+
+        await sendSMTP2GO({ to: email, subject, html: bodyTop + avisoEnvio + pieHtml });
         if (DEBUG) console.log('📧 Welcome email OK → %s', email);
       } catch (e) {
         console.warn('Welcome email failed:', e?.message || e);

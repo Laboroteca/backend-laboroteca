@@ -18,7 +18,7 @@
  *    - x-request-id (opcional; activa anti-replay interno)
  *    - x-internal-bridge: 1  (permite saltar HMAC puro si viene por bridge interno)
  *
- * Body (FF típico):
+ * Body (Fluent Forms estándar):
  *   {
  *     email, nombre,
  *     materias: array<Text>|obj booleans|labels (OBLIGATORIO ≥1),
@@ -62,10 +62,7 @@ const DEBUG     = String(process.env.MKT_DEBUG || '').trim() === '1';
 
 const SHEET_ID   = process.env.MKT_SHEET_ID || '1beWTOMlWjJvtmaGAVDegF2mTts16jZ_nKBrksnEg4Co';
 const SHEET_TAB  = process.env.MKT_SHEET_TAB || 'Consents';
-const SHEET_READ_RANGE  = `'${SHEET_TAB}'!A:E`;
-const SHEET_WRITE_RANGE = `'${SHEET_TAB}'!A:E`;
 
-// Bucket: prioriza GOOGLE_CLOUD_BUCKET; mantiene otros alias como fallback
 const BUCKET_NAME =
   (process.env.GOOGLE_CLOUD_BUCKET ||
    process.env.GCS_CONSENTS_BUCKET ||
@@ -81,7 +78,7 @@ const UNSUB_PAGE   = String(process.env.MKT_UNSUB_PAGE   || 'https://www.laborot
 
 const IP_ALLOW  = String(process.env.CONSENT_IP_ALLOW || '').trim(); // ej: "1.2.3.4, 5.6.7.8"
 const MAX_PER_10M = Number(process.env.CONSENT_MAX_PER_10M || 8);    // rate por ip+email
-const HMAC_WINDOW_MS = 5 * 60 * 1000; // ±5 minutos en ms (aceptamos s o ms)
+const HMAC_WINDOW_MS = 5 * 60 * 1000; // ±5 minutos (acepta s o ms)
 
 /* ───────── Materias ───────── */
 
@@ -146,7 +143,7 @@ function requireApiKey(req, res) {
 
   const ok = !!API_KEY && provided === API_KEY;
   if (!ok) {
-    if (DEBUG) console.warn('⛔ API KEY mismatch · expected=%s present=%s', API_KEY ? '(set)' : '(unset)', provided ? '(present)' : '(absent)');
+    if (DEBUG) console.warn('⛔ API KEY mismatch (present=%s env=%s)', provided ? 'yes' : 'no', API_KEY ? 'set' : 'unset');
     res.status(401).json({ ok:false, error:'UNAUTHORIZED' });
     return false;
   }
@@ -163,7 +160,7 @@ function normalizePath(p) {
   } catch { return '/'; }
 }
 function verifyHmacFlexible(req){
-  if (!HMAC_SEC) return true; // si no hay secreto, no bloqueamos
+  if (!HMAC_SEC) return true; // si no hay secreto, no bloqueamos (pero se exige API key)
   const headers = req.headers || {};
   const pick = (h) => headers[h] || headers[h.replace(/-/g,'_')] || headers[h.replace(/_/g,'-')];
 
@@ -336,9 +333,34 @@ async function getSheetsClient(){
   return google.sheets({ version: 'v4', auth });
 }
 
+// —— Helpers A1 seguros + resolución de pestaña ——
+function _needsQuotes(tab){ return /[^A-Za-z0-9_]/.test(String(tab||'')); }
+function _a1(tab, range){
+  const t = String(tab||'').trim();
+  const esc = t.replace(/'/g, "''"); // duplica comillas simples si existen
+  return _needsQuotes(t) ? `'${esc}'!${range}` : `${esc}!${range}`;
+}
+let _resolvedTabName = null;
+async function resolveSheetTabName(sheets){
+  if (_resolvedTabName) return _resolvedTabName;
+  const meta = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID });
+  const tabs = (meta.data.sheets || []).map(s => String(s.properties?.title || '').trim());
+  const wanted = String(SHEET_TAB || '').trim();
+  const found  = tabs.find(t => t === wanted)
+               || tabs.find(t => t.toLowerCase() === wanted.toLowerCase())
+               || tabs[0];
+  if (!found) throw new Error('NO_SHEETS_IN_SPREADSHEET');
+  _resolvedTabName = found;
+  if (DEBUG) console.log('📊 Sheets tab →', _resolvedTabName);
+  return _resolvedTabName;
+}
+
 async function upsertConsentRow({ nombre, email, comercialYES, materiasStr, fechaAltaISO }) {
   const sheets = await getSheetsClient();
-  const res = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: SHEET_READ_RANGE });
+  const tab = await resolveSheetTabName(sheets);
+  const readRange = _a1(tab, 'A:E');
+
+  const res = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: readRange });
   const rows = res.data.values || [];
 
   // Buscar última fila que coincida por email (col B, idx 1)
@@ -355,7 +377,7 @@ async function upsertConsentRow({ nombre, email, comercialYES, materiasStr, fech
     ];
     await sheets.spreadsheets.values.update({
       spreadsheetId: SHEET_ID,
-      range: `'${SHEET_TAB}'!A${rowNum}:E${rowNum}`,
+      range: _a1(tab, `A${rowNum}:E${rowNum}`),
       valueInputOption: 'RAW',
       requestBody: { values }
     });
@@ -363,7 +385,7 @@ async function upsertConsentRow({ nombre, email, comercialYES, materiasStr, fech
   } else {
     await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID,
-      range: SHEET_WRITE_RANGE,
+      range: _a1(tab, 'A:E'),
       valueInputOption: 'RAW',
       insertDataOption: 'INSERT_ROWS',
       requestBody: {
@@ -402,7 +424,7 @@ async function sendSMTP2GO({ to, subject, html }) {
 
   const data = await res.json().catch(()=> ({}));
   const ok = res.ok && (Array.isArray(data?.data?.succeeded) ? data.data.succeeded.length > 0 : true);
-  if (!ok) throw new Error(`SMTP2GO failed: ${JSON.stringify(data)}`);
+  if (!ok) throw new Error(`SMTP2GO failed`);
   return data;
 }
 
@@ -433,9 +455,13 @@ function checkRateLimit(ip, email){
   return true;
 }
 
+/* ───────── Anti-replay opcional por request-id ───────── */
+const REPLAY_WINDOW_MS = 15 * 60 * 1000; // 15 min
+const replaySeen = new Map(); // reqId -> expAt
+function replayGc(){ const now=Date.now(); for (const [k,exp] of replaySeen) if (exp<=now) replaySeen.delete(k); }
+
 /* ───────── Ruta principal ───────── */
 router.post('/consent', async (req, res) => {
-  // Log de entrada SIEMPRE (para diferenciar de registrar-consentimiento)
   const ip0 = (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim();
   const ua0 = (req.headers['user-agent'] || '').slice(0,120);
   const rawLen = Buffer.isBuffer(req.rawBody) ? req.rawBody.length : 0;
@@ -447,36 +473,28 @@ router.post('/consent', async (req, res) => {
   const ip = clientIp(req);
   const ua = (req.headers['user-agent'] || '').slice(0,180);
 
-  // IP allowlist opcional (modo cerrado)
+  // IP allowlist opcional
   if (IP_ALLOW) {
     const allow = new Set(IP_ALLOW.split(',').map(x => x.trim()).filter(Boolean));
     if (!allow.has(ip)) return res.status(403).json({ ok:false, error:'IP_FORBIDDEN' });
   }
 
-
-  // HMAC:
-  // Si viene del bridge interno, bastará con x-internal-bridge: 1
-  // Acepta también el forward del /marketing/consent-bridge (x-bridge: wp)
+  // Bridge / HMAC
   const isInternalBridge =
     req.headers['x-internal-bridge'] === '1' ||
     (s(req.headers['x-bridge']).toLowerCase().startsWith('wp'));
 
-  if (DEBUG) {
-    const hasTs = !!(req.headers['x-lab-ts'] || req.headers['x-lb-ts']);
-    const hasSig = !!(req.headers['x-lab-sig'] || req.headers['x-lb-sig']);
-    console.log('🧪 consent flags →', {
-      apiKeyOk: true, // ya pasó requireApiKey
-      isInternalBridge,
-      hasHmacHeaders: hasTs && hasSig,
-      ip,
-      formId: s(req.body?.formularioId),
-      materiasKeys: Object.keys(req.body?.materias || {}),
-      consent_marketing: toBool(req.body?.consent_marketing, false)
-    });
+  // Anti-replay por request-id (best-effort)
+  const reqId = s(req.headers['x-request-id']);
+  if (reqId) {
+    replayGc();
+    if (replaySeen.has(reqId)) {
+      return res.status(409).json({ ok:false, error:'REPLAY' });
+    }
+    replaySeen.set(reqId, Date.now() + REPLAY_WINDOW_MS);
   }
 
   if (!isInternalBridge && !verifyHmacFlexible(req)) {
-    console.warn('⛔ BAD_HMAC en /marketing/consent ip=%s', ip);
     if (DEBUG) {
       const tsH = s(req.headers['x-lab-ts'] || req.headers['x-lb-ts']);
       const sgH = s(req.headers['x-lab-sig']|| req.headers['x-lb-sig']||'').slice(0,16)+'…';
@@ -484,7 +502,7 @@ router.post('/consent', async (req, res) => {
     }
     return res.status(401).json({ ok:false, error:'BAD_HMAC' });
   }
-  if (DEBUG) console.log('🔐 HMAC check: %s', isInternalBridge ? 'via INTERNAL BRIDGE' : 'verified/exempt');
+  if (DEBUG) console.log('🔐 HMAC check: %s', isInternalBridge ? 'INTERNAL BRIDGE' : 'verified/exempt');
 
   const tsISO = nowISO();
 
@@ -526,7 +544,7 @@ router.post('/consent', async (req, res) => {
 
     const consent_comercial = toBool(req.body?.consent_comercial, false);
 
-    // ConsentData newsletter (acepta alias: consentNewsletter)
+    // ConsentData newsletter (alias: consentNewsletter)
     let consentData = {};
     try {
       const cdRaw = (req.body?.consentData !== undefined)
@@ -559,7 +577,7 @@ router.post('/consent', async (req, res) => {
     const userAgent    = ua;
     const ipAddr       = ip;
 
-    // Snapshots GCS (opcional)
+    // Snapshots GCS (con fallback offline)
     let snapshotIndividualPath = '';
     let snapshotGeneralPath = '';
     let snapshotComercialIndividualPath = '';
@@ -570,7 +588,21 @@ router.post('/consent', async (req, res) => {
         if (DEBUG) console.log('ℹ️ BUCKET no configurado, se omite snapshot');
       } else {
         // Newsletter
-        const rawHtml  = await fetchHtml(consentUrl);
+        let rawHtml;
+        try {
+          rawHtml  = await fetchHtml(consentUrl);
+        } catch (e) {
+          const msg = String(e?.message || e);
+          console.warn('Snapshot fetch error (newsletter):', msg);
+          const offline1 = Buffer.from(
+            `<main style="font-family:system-ui">
+               <h2>Snapshot offline</h2>
+               <p>No fue posible descargar <code>${consentUrl || '-'}</code>.</p>
+               <p>Motivo: <code>${msg}</code></p>
+             </main>`, 'utf8');
+          rawHtml = offline1;
+        }
+
         consentTextHash = `sha256:${sha256HexBuf(rawHtml)}`;
 
         const htmlBuf = buildSnapshotHtml({
@@ -603,7 +635,21 @@ router.post('/consent', async (req, res) => {
 
         // Comercial (si hay URL+versión)
         if (comercialUrl && comercialVersion) {
-          const rawHtmlC = await fetchHtml(comercialUrl);
+          let rawHtmlC;
+          try {
+            rawHtmlC = await fetchHtml(comercialUrl);
+          } catch (e) {
+            const msg = String(e?.message || e);
+            console.warn('Snapshot fetch error (comercial):', msg);
+            const offline2 = Buffer.from(
+              `<main style="font-family:system-ui">
+                 <h2>Snapshot offline</h2>
+                 <p>No fue posible descargar <code>${comercialUrl || '-'}</code>.</p>
+                 <p>Motivo: <code>${msg}</code></p>
+               </main>`, 'utf8');
+            rawHtmlC = offline2;
+          }
+
           comercialTextHash = `sha256:${sha256HexBuf(rawHtmlC)}`;
 
           const htmlBufC = buildSnapshotHtml({
@@ -635,16 +681,13 @@ router.post('/consent', async (req, res) => {
           snapshotComercialIndividualPath = indivPathC;
         }
       }
-} catch (e) {
-  const msg = (e && e.message) ? String(e.message) : String(e);
-  console.warn('Snapshot error:', msg);
-  if (!msg.includes('HTTP_404')) {
-    try {
-      await alertAdmin({ area: 'newsletter_snapshot_error', email, err: e, meta: { consentUrl } });
-    } catch (_) {}
-  }
-}
-
+    } catch (e) {
+      const msg = (e && e.message) ? String(e.message) : String(e);
+      console.warn('Snapshot error (store):', msg);
+      if (!/HTTP_404|TIMEOUT/i.test(msg)) {
+        try { await alertAdmin({ area: 'newsletter_snapshot_error', email, err: e, meta: { consentUrl } }); } catch (_) {}
+      }
+    }
 
     // Firestore: marketingConsents (docId = email) – idempotente
     if (DEBUG) console.log('📝 FS write → marketingConsents/%s materias=%j', email, materiasToList(materias));
@@ -685,10 +728,10 @@ router.post('/consent', async (req, res) => {
       return res.status(500).json({ ok:false, error:'FIRESTORE_WRITE_FAILED' });
     }
 
-    // Aviso de éxito
+    // Aviso de éxito (best-effort)
     try { await alertAdmin({ area:'newsletter_alta_ok', email, err:null, meta:{ materias: materiasToList(materias) } }); } catch {}
 
-    // Sheets: upsert fila A–E (no bloqueante)
+    // Sheets: upsert fila A–E (best-effort, no bloquea)
     const comercialYES = consent_comercial ? 'SÍ' : 'NO';
     const materiasStr  = materiasToString(materias);
     upsertConsentRow({ nombre, email, comercialYES, materiasStr, fechaAltaISO: tsISO })
@@ -698,7 +741,7 @@ router.post('/consent', async (req, res) => {
         try { await alertAdmin({ area:'newsletter_sheets_warn', email, err: e, meta:{} }); } catch {}
       });
 
-    // Email de bienvenida (no bloqueante)
+    // Email de bienvenida (best-effort, no bloquea)
     (async () => {
       try {
         const token   = makeUnsubToken(email);

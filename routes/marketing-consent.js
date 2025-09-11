@@ -506,22 +506,28 @@ router.post('/consent', async (req, res) => {
 
     const consent_comercial = toBool(req.body?.consent_comercial, false);
 
-    // ConsentData newsletter
+    // ConsentData newsletter (acepta alias: consentNewsletter)
     let consentData = {};
     try {
-      if (typeof req.body?.consentData === 'string') consentData = JSON.parse(req.body.consentData);
-      else if (typeof req.body?.consentData === 'object') consentData = (req.body.consentData || {});
+      const cdRaw = (req.body?.consentData !== undefined)
+        ? req.body.consentData
+        : req.body?.consentNewsletter;
+      if (typeof cdRaw === 'string') consentData = JSON.parse(cdRaw);
+      else if (typeof cdRaw === 'object') consentData = (cdRaw || {});
     } catch { consentData = {}; }
 
     const consentUrl     = s(consentData.consentUrl, 'https://www.laboroteca.es/consentimiento-newsletter/');
     const consentVersion = s(consentData.consentVersion, 'v1.0');
     let consentTextHash  = '';
 
-    // Consentimiento comercial (opcional)
+    // Consentimiento comercial (opcional) (alias: consentPublicidad)
     let consentDataComercial = {};
     try {
-      if (typeof req.body?.consentDataComercial === 'string') consentDataComercial = JSON.parse(req.body.consentDataComercial);
-      else if (typeof req.body?.consentDataComercial === 'object') consentDataComercial = (req.body.consentDataComercial || {});
+      const cdcRaw = (req.body?.consentDataComercial !== undefined)
+        ? req.body.consentDataComercial
+        : req.body?.consentPublicidad;
+      if (typeof cdcRaw === 'string') consentDataComercial = JSON.parse(cdcRaw);
+      else if (typeof cdcRaw === 'object') consentDataComercial = (cdcRaw || {});
     } catch { consentDataComercial = {}; }
 
     const comercialUrl     = s(consentDataComercial.consentUrl);

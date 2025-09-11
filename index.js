@@ -276,6 +276,8 @@ const corsOptions = {
     'x-lab-ts','x-lab-sig','x-request-id',
     // HMAC Riesgo (WP → Backend)
     'x-risk-ts','x-risk-sig',
+    // Bridge interno para /marketing/consent
+    'x-internal-bridge',
     // Cron key para /marketing/cron-send
     'x-cron-key',
     // auditoría opcional del bridge

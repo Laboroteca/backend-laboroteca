@@ -1,33 +1,46 @@
-// routes/marketing-consent.js
-// ─────────────────────────────────────────────────────────────────────────────
-// Alta de consentimiento Newsletter (y opcional Comercial) con seguridad
-// de producción: API Key + HMAC (o bridge interno), anti-replay, rate limit,
-// snapshots GCS, upsert en Firestore, upsert en Google Sheets y email de
-// bienvenida por SMTP2GO.
-//
-// POST /marketing/consent
-//  Headers:
-//    - x-api-key  = MKT_API_KEY (siempre)
-//    - x-lb-ts    = epoch seconds (si firmas fuera del bridge)
-//    - x-lb-sig   = hex(HMAC_SHA256( MKT_CONSENT_SECRET, `${ts}.${rawBodySha256}` ))
-//    - x-internal-bridge: 1  (lo pone el bridge interno; permite saltar HMAC puro)
-//
-// Body (FF típico):
-//   { email, nombre, materias:[...]/obj, consent_marketing:true, consent_comercial:false,
-//     consentData:{ consentUrl, consentVersion }, sourceForm?, formularioId? }
-//
-// Entorno mínimo:
-//  - GOOGLE_APPLICATION_CREDENTIALS=... (Sheets/GCS)
-//  - MKT_API_KEY=xxxx
-//  - MKT_CONSENT_SECRET=xxxx
-//  - SMTP2GO_API_KEY=xxxx
-//  - EMAIL_FROM, EMAIL_FROM_NAME
-//  - MKT_UNSUB_SECRET=xxxx
-//  - MKT_UNSUB_PAGE=https://www.laboroteca.es/baja-newsletter/
-//  - GOOGLE_CLOUD_BUCKET o GCS_CONSENTS_BUCKET/GCS_BUCKET/GCLOUD_STORAGE_BUCKET
-//  - MKT_DEBUG=1 (opcional para logs verbosos)
-// ─────────────────────────────────────────────────────────────────────────────
 'use strict';
+
+/**
+ * routes/marketing-consent.js
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Alta de consentimiento Newsletter (y opcional Comercial) con seguridad
+ * de producción: API Key + HMAC (o bridge interno), anti-replay, rate limit,
+ * snapshots GCS, upsert en Firestore, upsert en Google Sheets y email de
+ * bienvenida por SMTP2GO.
+ *
+ * POST /marketing/consent
+ *  Headers:
+ *    - x-api-key  = MKT_API_KEY (siempre; también se acepta Authorization: Bearer ...)
+ *    - x-lab-ts   = epoch seconds|ms   (o x-lb-ts legacy)
+ *    - x-lab-sig  = hex(HMAC_SHA256( base ))  (o x-lb-sig legacy)
+ *      base v2: `${ts}.${METHOD}.${PATH}.${sha256(body)}`
+ *      base v1 legacy: `${ts}.${sha256(body)}`
+ *    - x-request-id (opcional; activa anti-replay interno)
+ *    - x-internal-bridge: 1  (permite saltar HMAC puro si viene por bridge interno)
+ *
+ * Body (FF típico):
+ *   {
+ *     email, nombre,
+ *     materias: array<Text>|obj booleans|labels (OBLIGATORIO ≥1),
+ *     consent_marketing: true  (OBLIGATORIO),
+ *     consent_comercial: false (opcional),
+ *     consentData:{ consentUrl, consentVersion },                 // newsletter
+ *     consentDataComercial?:{ consentUrl, consentVersion },       // publicidad opcional
+ *     sourceForm?, formularioId?, ip?, ua?, skipConsentLogs?
+ *   }
+ *
+ * Entorno mínimo:
+ *  - GOOGLE_APPLICATION_CREDENTIALS=... (Sheets/GCS)
+ *  - MKT_API_KEY=xxxx
+ *  - MKT_CONSENT_SECRET=xxxx
+ *  - SMTP2GO_API_KEY=xxxx
+ *  - EMAIL_FROM, EMAIL_FROM_NAME
+ *  - MKT_UNSUB_SECRET=xxxx
+ *  - MKT_UNSUB_PAGE=https://www.laboroteca.es/baja-newsletter/
+ *  - GOOGLE_CLOUD_BUCKET o GCS_CONSENTS_BUCKET/GCS_BUCKET/GCLOUD_STORAGE_BUCKET
+ *  - MKT_DEBUG=1 (opcional para logs verbosos)
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
 
 const express = require('express');
 const admin   = require('firebase-admin');
@@ -41,7 +54,8 @@ const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
 const router = express.Router();
 
-// ───────── CONFIG ─────────
+/* ───────── CONFIG ───────── */
+
 const API_KEY   = String(process.env.MKT_API_KEY || '').trim();
 const HMAC_SEC  = String(process.env.MKT_CONSENT_SECRET || '').trim();
 const DEBUG     = String(process.env.MKT_DEBUG || '').trim() === '1';
@@ -66,7 +80,9 @@ const UNSUB_PAGE   = String(process.env.MKT_UNSUB_PAGE   || 'https://www.laborot
 
 const IP_ALLOW  = String(process.env.CONSENT_IP_ALLOW || '').trim(); // ej: "1.2.3.4, 5.6.7.8"
 const MAX_PER_10M = Number(process.env.CONSENT_MAX_PER_10M || 8);    // rate por ip+email
-const HMAC_WINDOW_S = 5 * 60; // ±5 minutos
+const HMAC_WINDOW_MS = 5 * 60 * 1000; // ±5 minutos en ms (aceptamos s o ms)
+
+/* ───────── Materias ───────── */
 
 const MATERIAS_ORDER = [
   'derechos',
@@ -88,15 +104,18 @@ const MATERIAS_MATCHERS = [
   ['otras_prestaciones', [/otras/i, /prestac/i]]
 ];
 
-// ───────── Firebase Admin ─────────
+/* ───────── Firebase Admin ───────── */
+
 if (!admin.apps.length) { try { admin.initializeApp(); } catch(_){} }
 const db = admin.firestore();
 
-// ───────── Helpers ─────────
+/* ───────── Helpers ───────── */
+
 const s = (v, def='') => (v===undefined || v===null) ? def : String(v).trim();
 const isEmail = (e) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(e||''));
 const nowISO = () => new Date().toISOString();
-const sha256HexBuf = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+
+const sha256HexBuf = (buf) => crypto.createHash('sha256').update(buf || Buffer.alloc(0)).digest('hex');
 const sha256Hex = (str) => crypto.createHash('sha256').update(String(str||''), 'utf8').digest('hex');
 
 const toBool = (v, def=false) => {
@@ -114,54 +133,91 @@ function clientIp(req){
     .toString().split(',')[0].trim();
 }
 
+/* API key desde múltiples vías: header, bearer, query, body */
 function requireApiKey(req, res) {
-  const key = s(req.headers['x-api-key']);
-  if (!API_KEY || key !== API_KEY) {
-    if (DEBUG) {
-      console.warn('⛔ API KEY mismatch · present=%s match=%s', !!key, key === API_KEY);
-    }
+  let provided = s(req.headers['x-api-key']);
+  if (!provided) {
+    const auth = s(req.headers['authorization']);
+    if (auth.toLowerCase().startsWith('bearer ')) provided = s(auth.slice(7));
+  }
+  if (!provided) provided = s(req.query?.api_key);
+  if (!provided && req.body) provided = s(req.body.api_key);
+
+  const ok = !!API_KEY && provided === API_KEY;
+  if (!ok) {
+    if (DEBUG) console.warn('⛔ API KEY mismatch · expected=%s present=%s', API_KEY ? '(set)' : '(unset)', provided ? '(present)' : '(absent)');
     res.status(401).json({ ok:false, error:'UNAUTHORIZED' });
     return false;
   }
   return true;
 }
 
-// HMAC: x-lb-ts (epoch s) + x-lb-sig = HMAC(ts+'.'+sha256(rawBody))
-function verifyHmac(req){
-  if (!HMAC_SEC) return false; // si no hay secreto, no podemos verificar
-  const ts = Number(s(req.headers['x-lb-ts']));
-  const sig = s(req.headers['x-lb-sig']);
-  if (!ts || !sig) return false;
-
-  const now = Math.floor(Date.now()/1000);
-  if (Math.abs(now - ts) > HMAC_WINDOW_S) return false;
-
-  const raw = Buffer.isBuffer(req.rawBody) ? req.rawBody : Buffer.from(JSON.stringify(req.body || {}),'utf8');
-  const rawHash = sha256HexBuf(raw);
-  const expect = crypto.createHmac('sha256', HMAC_SEC).update(`${ts}.${rawHash}`).digest('hex');
-
+/* HMAC flexible: acepta x-lab-* y x-lb-*; formato v2 (ts.METHOD.PATH.sha256(body)) o v1 (ts.sha256(body)); ts en s o ms */
+function normalizePath(p) {
   try {
-    const ok = crypto.timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(expect, 'hex'));
-    if (!ok && DEBUG) {
-      console.warn('⛔ HMAC BAD · ts=%s · rawLen=%s · providedSigLen=%s', ts, raw.length, sig.length);
+    p = (p || '/').toString();
+    p = p.split('#')[0].split('?')[0];
+    if (p[0] !== '/') p = '/' + p;
+    return p.replace(/\/{2,}/g, '/');
+  } catch { return '/'; }
+}
+function verifyHmacFlexible(req){
+  if (!HMAC_SEC) return true; // si no hay secreto, no bloqueamos
+  const headers = req.headers || {};
+  const pick = (h) => headers[h] || headers[h.replace(/-/g,'_')] || headers[h.replace(/_/g,'-')];
+
+  const tsHeader  = String(pick('x-lab-ts') || pick('x-lb-ts') || '');
+  const sigHeader = String(pick('x-lab-sig') || pick('x-lb-sig') || '');
+  const reqId     = String(pick('x-request-id') || '');
+
+  if (!tsHeader || !sigHeader) return false;
+  if (!/^[0-9a-f]{64}$/i.test(sigHeader)) return false;
+
+  const tsNum = Number(tsHeader);
+  if (!Number.isFinite(tsNum)) return false;
+  const tsMs = tsNum > 1e11 ? tsNum : tsNum * 1000;
+
+  if (Math.abs(Date.now() - tsMs) > HMAC_WINDOW_MS) return false;
+
+  const raw = Buffer.isBuffer(req.rawBody)
+    ? req.rawBody
+    : Buffer.from(JSON.stringify(req.body || {}), 'utf8');
+  const bodyHash = sha256HexBuf(raw);
+
+  const method = String(req.method || 'POST').toUpperCase();
+  const path   = normalizePath(req.path);
+
+  const tsSec = Math.floor(tsMs / 1000);
+  const tsMsInt = Math.floor(tsMs);
+
+  const bases = [
+    `${tsSec}.${method}.${path}.${bodyHash}`,
+    `${tsMsInt}.${method}.${path}.${bodyHash}`,
+    `${tsSec}.${bodyHash}`,
+    `${tsMsInt}.${bodyHash}`,
+  ];
+
+  const sigBuf = Buffer.from(sigHeader, 'hex');
+  for (const base of bases) {
+    const exp = crypto.createHmac('sha256', HMAC_SEC).update(base).digest('hex');
+    const expBuf = Buffer.from(exp, 'hex');
+    if (expBuf.length === sigBuf.length && crypto.timingSafeEqual(expBuf, sigBuf)) {
+      return true;
     }
-    return ok;
-  } catch (e) {
-    if (DEBUG) console.warn('⛔ HMAC compare error (bad hex?): %s', e?.message || e);
-    return false;
   }
+  return false;
 }
 
-// Normaliza materias desde array de textos u objeto booleano (acepta fallback checkboxes[])
+/* Materias: normalización a objeto booleano ordenado + validación any=true */
 function normalizeMaterias(input, bodyFallback = {}) {
   const out = Object.fromEntries(MATERIAS_ORDER.map(k => [k, false]));
 
-  // 0) si viene "checkboxes" como array de labels, mapear
+  // fallback: "checkboxes": array de labels
   if (!input && Array.isArray(bodyFallback.checkboxes)) {
     input = bodyFallback.checkboxes;
   }
 
-  // 1) array de labels
+  // 1) array de labels/strings
   if (Array.isArray(input)) {
     for (const raw of input) {
       const txt = s(raw).toLowerCase();
@@ -172,24 +228,23 @@ function normalizeMaterias(input, bodyFallback = {}) {
     return { obj: out, any: Object.values(out).some(Boolean) };
   }
 
-  // 2) objeto booleano
+  // 2) objeto booleano {slug:true/false}
   if (input && typeof input === 'object') {
     for (const k of MATERIAS_ORDER) out[k] = toBool(input[k], out[k]);
     return { obj: out, any: Object.values(out).some(Boolean) };
   }
 
-  // 3) claves sueltas en body (materias_x)
+  // 3) claves sueltas en body (materias_k)
   for (const k of MATERIAS_ORDER) out[k] = toBool(bodyFallback[k] ?? bodyFallback[`materias_${k}`], out[k]);
   return { obj: out, any: Object.values(out).some(Boolean) };
 }
-
 const materiasToList   = (obj) => MATERIAS_ORDER.filter(k => !!obj[k]);
 const materiasToString = (obj) => {
   const list = materiasToList(obj);
   return list.length ? list.join(' / ') : '—';
 };
 
-// Descargar HTML (con redirecciones) para snapshot
+/* Descargar HTML (con redirecciones) para snapshot */
 function fetchHtml(rawUrl, hops=0) {
   return new Promise((resolve, reject) => {
     if (!rawUrl) return reject(new Error('NO_URL'));
@@ -274,7 +329,7 @@ async function uploadHtmlToGCS({ path, htmlBuffer, metadata, skipIfExists=false 
   return path;
 }
 
-// Sheets
+/* Sheets */
 async function getSheetsClient(){
   const auth = await google.auth.getClient({ scopes: ['https://www.googleapis.com/auth/spreadsheets'] });
   return google.sheets({ version: 'v4', auth });
@@ -318,7 +373,7 @@ async function upsertConsentRow({ nombre, email, comercialYES, materiasStr, fech
   }
 }
 
-// Email
+/* Email via SMTP2GO */
 function tpl(str, data = {}) {
   if (!str) return str;
   return str
@@ -350,7 +405,7 @@ async function sendSMTP2GO({ to, subject, html }) {
   return data;
 }
 
-// Token de baja: base64url(email.ts).firma(hmac)
+/* Token de baja */
 function makeUnsubToken(email) {
   const ts = Math.floor(Date.now()/1000);
   const base = `${String(email||'').toLowerCase()}.${ts}`;
@@ -359,7 +414,7 @@ function makeUnsubToken(email) {
   return `${payload}.${sig}`;
 }
 
-// ───────── Rate limit básico (IP + email) ─────────
+/* ───────── Rate limit básico (IP + email) ───────── */
 const RATE_WINDOW_MS = 10 * 60 * 1000; // 10 minutos
 const rlStore = new Map(); // clave: ip|email → { count, resetAt }
 
@@ -377,18 +432,13 @@ function checkRateLimit(ip, email){
   return true;
 }
 
-// ───────── Ruta principal ─────────
+/* ───────── Ruta principal ───────── */
 router.post('/consent', async (req, res) => {
-  // Log de entrada muy temprano
-  if (DEBUG) {
-    const ip0 = (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim();
-    console.log('🟢 [/marketing/consent] ENTER ip=%s ua=%s rawLen=%s hasAPI=%s hasHMAC=%s',
-      ip0, (req.headers['user-agent'] || '').slice(0,120),
-      Buffer.isBuffer(req.rawBody) ? req.rawBody.length : 0,
-      !!req.headers['x-api-key'],
-      !!req.headers['x-lb-sig']
-    );
-  }
+  // Log de entrada SIEMPRE (para diferenciar de registrar-consentimiento)
+  const ip0 = (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim();
+  const ua0 = (req.headers['user-agent'] || '').slice(0,120);
+  const rawLen = Buffer.isBuffer(req.rawBody) ? req.rawBody.length : 0;
+  console.log('🟢 [/marketing/consent] ENTER ip=%s ua=%s rawLen=%s', ip0, ua0, rawLen);
 
   // API Key
   if (!requireApiKey(req, res)) return;
@@ -403,18 +453,20 @@ router.post('/consent', async (req, res) => {
   }
 
   // HMAC:
-  // Si viene del bridge interno, bastará con x-internal-bridge: 1 (no exigimos ip 127.x por si trust proxy altera ip).
+  // Si viene del bridge interno, bastará con x-internal-bridge: 1
   const isInternalBridge = req.headers['x-internal-bridge'] === '1';
-  if (HMAC_SEC && !isInternalBridge && !verifyHmac(req)) {
+  if (!isInternalBridge && !verifyHmacFlexible(req)) {
     console.warn('⛔ BAD_HMAC en /marketing/consent ip=%s', ip);
     if (DEBUG) {
-      console.warn('⛔ BAD_HMAC detail · ts=%s sig=%s', req.headers['x-lb-ts'], (req.headers['x-lb-sig']||'').slice(0,16)+'…');
+      const tsH = s(req.headers['x-lab-ts'] || req.headers['x-lb-ts']);
+      const sgH = s(req.headers['x-lab-sig']|| req.headers['x-lb-sig']||'').slice(0,16)+'…';
+      console.warn('⛔ BAD_HMAC detail · ts=%s sig=%s', tsH, sgH);
     }
     return res.status(401).json({ ok:false, error:'BAD_HMAC' });
   }
   if (DEBUG) console.log('🔐 HMAC check: %s', isInternalBridge ? 'via INTERNAL BRIDGE' : 'verified/exempt');
 
-  const ts = nowISO();
+  const tsISO = nowISO();
 
   try {
     // Parsing básico
@@ -429,15 +481,15 @@ router.post('/consent', async (req, res) => {
       console.log('🧾 Raw sha256:', req.rawBody ? sha256HexBuf(req.rawBody) : '(no-raw)');
     }
 
-    console.log(`🟢 [/marketing/consent] email=${email} formId=${s(req.body?.formularioId)} ip=${ip} internal=${isInternalBridge}`);
+    console.log(`🟢 [/marketing/consent] email=${email} formId=${s(req.body?.formularioId)} ip=${ip}`);
 
     // Rate limit (IP+email)
     if (!checkRateLimit(ip || '0.0.0.0', email)) {
-      await alertAdmin({ area:'newsletter_rate_limit', email, err: new Error('RATE_LIMIT'), meta:{ ip } });
+      try { await alertAdmin({ area:'newsletter_rate_limit', email, err: new Error('RATE_LIMIT'), meta:{ ip } }); } catch {}
       return res.status(429).json({ ok:false, error:'RATE_LIMIT' });
     }
 
-    // Materias
+    // Materias (OBLIGATORIO any=true)
     const { obj: materias, any } = normalizeMaterias(req.body?.materias, req.body || {});
     if (!any) {
       if (DEBUG) console.warn('⛔ MATERIAS_REQUIRED para %s (body puede no traer materias)', email);
@@ -445,8 +497,7 @@ router.post('/consent', async (req, res) => {
     }
     if (DEBUG) console.log('📚 Materias:', materiasToList(materias));
 
-    // Consentimiento marketing
-    // Ahora: SOLO vale consent_marketing
+    // Consentimiento marketing (OBLIGATORIO)
     const consent_marketing = toBool(req.body?.consent_marketing, false);
     if (!consent_marketing) {
       if (DEBUG) console.warn('⛔ CONSENT_MARKETING_REQUIRED para %s', email);
@@ -455,7 +506,7 @@ router.post('/consent', async (req, res) => {
 
     const consent_comercial = toBool(req.body?.consent_comercial, false);
 
-    // ConsentData (JSON plano desde formulario)
+    // ConsentData newsletter
     let consentData = {};
     try {
       if (typeof req.body?.consentData === 'string') consentData = JSON.parse(req.body.consentData);
@@ -466,7 +517,7 @@ router.post('/consent', async (req, res) => {
     const consentVersion = s(consentData.consentVersion, 'v1.0');
     let consentTextHash  = '';
 
-    // Consentimiento comercial (URL + versión)
+    // Consentimiento comercial (opcional)
     let consentDataComercial = {};
     try {
       if (typeof req.body?.consentDataComercial === 'string') consentDataComercial = JSON.parse(req.body.consentDataComercial);
@@ -478,27 +529,28 @@ router.post('/consent', async (req, res) => {
     let comercialTextHash  = '';
 
     const sourceForm   = s(req.body?.sourceForm, 'preferencias_marketing');
-    const formularioId = s(req.body?.formularioId);
+    const formularioId = s(req.body?.formularioId, '45');
     const userAgent    = ua;
     const ipAddr       = ip;
 
-    // Snapshot GCS (opcional)
+    // Snapshots GCS (opcional)
     let snapshotIndividualPath = '';
     let snapshotGeneralPath = '';
     let snapshotComercialIndividualPath = '';
     let snapshotComercialGeneralPath = '';
+
     try {
       if (!BUCKET_NAME) {
-        await alertAdmin({ area:'newsletter_snapshot', email, err: new Error('BUCKET_MISSING'), meta:{} });
         if (DEBUG) console.log('ℹ️ BUCKET no configurado, se omite snapshot');
       } else {
+        // Newsletter
         const rawHtml  = await fetchHtml(consentUrl);
         consentTextHash = `sha256:${sha256HexBuf(rawHtml)}`;
 
         const htmlBuf = buildSnapshotHtml({
           rawHtmlBuffer: rawHtml,
           title: `Consentimiento Newsletter ${consentVersion}`,
-          acceptedAtISO: ts, email, ip: ipAddr, userAgent,
+          acceptedAtISO: tsISO, email, ip: ipAddr, userAgent,
           extra: { consentVersion, sourceForm, formularioId }
         });
 
@@ -511,7 +563,7 @@ router.post('/consent', async (req, res) => {
         });
         snapshotGeneralPath = generalPath;
 
-        const individualId = sha256Hex(`${email}.${ts}.${Math.random()}`);
+        const individualId = sha256Hex(`${email}.${tsISO}.${Math.random()}`);
         const indivPath = `consents/newsletter/${consentVersion}/${individualId}.html`;
         await uploadHtmlToGCS({
           path: indivPath,
@@ -523,41 +575,39 @@ router.post('/consent', async (req, res) => {
         });
         snapshotIndividualPath = indivPath;
 
-        if (DEBUG) console.log('🗂  Snapshots GCS → general=%s individual=%s', snapshotGeneralPath, snapshotIndividualPath);
-      }
+        // Comercial (si hay URL+versión)
+        if (comercialUrl && comercialVersion) {
+          const rawHtmlC = await fetchHtml(comercialUrl);
+          comercialTextHash = `sha256:${sha256HexBuf(rawHtmlC)}`;
 
-      // COMERCIAL
-      if (comercialUrl && comercialVersion) {
-        const rawHtmlC = await fetchHtml(comercialUrl);
-        comercialTextHash = `sha256:${sha256HexBuf(rawHtmlC)}`;
+          const htmlBufC = buildSnapshotHtml({
+            rawHtmlBuffer: rawHtmlC,
+            title: `Consentimiento Comercial ${comercialVersion}`,
+            acceptedAtISO: tsISO, email, ip: ipAddr, userAgent,
+            extra: { comercialVersion, sourceForm, formularioId }
+          });
 
-        const htmlBufC = buildSnapshotHtml({
-          rawHtmlBuffer: rawHtmlC,
-          title: `Consentimiento Comercial ${comercialVersion}`,
-          acceptedAtISO: ts, email, ip: ipAddr, userAgent,
-          extra: { comercialVersion, sourceForm, formularioId }
-        });
+          const generalPathC = `consents/comercial/${comercialVersion}.html`;
+          await uploadHtmlToGCS({
+            path: generalPathC,
+            htmlBuffer: htmlBufC,
+            metadata: { kind:'comercial-general', version: comercialVersion },
+            skipIfExists: true
+          });
+          snapshotComercialGeneralPath = generalPathC;
 
-        const generalPathC = `consents/comercial/${comercialVersion}.html`;
-        await uploadHtmlToGCS({
-          path: generalPathC,
-          htmlBuffer: htmlBufC,
-          metadata: { kind:'comercial-general', version: comercialVersion },
-          skipIfExists: true
-        });
-        snapshotComercialGeneralPath = generalPathC;
-
-        const individualIdC = sha256Hex(`${email}.${ts}.${Math.random()}`);
-        const indivPathC = `consents/comercial/${comercialVersion}/${individualIdC}.html`;
-        await uploadHtmlToGCS({
-          path: indivPathC,
-          htmlBuffer: htmlBufC,
-          metadata: {
-            kind:'comercial',
-            email, comercialVersion, sourceForm, formularioId, ip: ipAddr, userAgent
-          }
-        });
-        snapshotComercialIndividualPath = indivPathC;
+          const individualIdC = sha256Hex(`${email}.${tsISO}.${Math.random()}`);
+          const indivPathC = `consents/comercial/${comercialVersion}/${individualIdC}.html`;
+          await uploadHtmlToGCS({
+            path: indivPathC,
+            htmlBuffer: htmlBufC,
+            metadata: {
+              kind:'comercial',
+              email, comercialVersion, sourceForm, formularioId, ip: ipAddr, userAgent
+            }
+          });
+          snapshotComercialIndividualPath = indivPathC;
+        }
       }
     } catch (e) {
       console.warn('Snapshot error:', e?.message || e);
@@ -567,7 +617,6 @@ router.post('/consent', async (req, res) => {
     // Firestore: marketingConsents (docId = email) – idempotente
     const mcRef = db.collection('marketingConsents').doc(email);
     let createdAt = admin.firestore.Timestamp.fromDate(new Date());
-
     try {
       await db.runTransaction(async (tx) => {
         const snap = await tx.get(mcRef);
@@ -596,7 +645,7 @@ router.post('/consent', async (req, res) => {
           createdAt
         }, { merge: true });
       });
-      if (DEBUG) console.log('🔥 Firestore upsert OK → marketingConsents/%s', email);
+      console.log('🔥 Firestore upsert OK → marketingConsents/%s', email);
     } catch (e) {
       console.error('Firestore set error:', e?.message || e);
       try { await alertAdmin({ area:'newsletter_firestore_error', email, err: e, meta:{} }); } catch {}
@@ -609,7 +658,7 @@ router.post('/consent', async (req, res) => {
     // Sheets: upsert fila A–E (no bloqueante)
     const comercialYES = consent_comercial ? 'SÍ' : 'NO';
     const materiasStr  = materiasToString(materias);
-    upsertConsentRow({ nombre, email, comercialYES, materiasStr, fechaAltaISO: ts })
+    upsertConsentRow({ nombre, email, comercialYES, materiasStr, fechaAltaISO: tsISO })
       .then((r) => { if (DEBUG) console.log('📊 Sheets upsert OK →', r); })
       .catch(async (e) => {
         console.warn('Sheets upsert warn:', e?.message || e);
@@ -645,8 +694,8 @@ router.post('/consent', async (req, res) => {
              <strong>Ignacio Solsona Fernández-Pedrera</strong>. Puedes ejercer tus derechos en
              <a href="mailto:ignacio.solsona@icacs.com">ignacio.solsona@icacs.com</a>.
            </p>`;
-        const smtpRes = await sendSMTP2GO({ to: email, subject, html: bodyTop + legal });
-        if (DEBUG) console.log('📧 Welcome email OK → %s (%s)', email, smtpRes?.request_id || 'no-id');
+        await sendSMTP2GO({ to: email, subject, html: bodyTop + legal });
+        if (DEBUG) console.log('📧 Welcome email OK → %s', email);
       } catch (e) {
         console.warn('Welcome email failed:', e?.message || e);
         try { await alertAdmin({ area:'newsletter_welcome_fail', email, err: e, meta:{} }); } catch {}
@@ -682,8 +731,9 @@ module.exports = router;
   • nombre
   • materias (array de textos o {derechos,cotizaciones,desempleo,bajas_ip,jubilacion,ahorro_privado,otras_prestaciones})
     (también acepta fallback desde checkboxes[])
-  • consent_marketing (obligatorio; alias aceptado: privacy)
+  • consent_marketing (obligatorio)
   • consent_comercial (opcional)
   • consentData (JSON) → { consentUrl, consentVersion }
+  • consentDataComercial (JSON) → { consentUrl, consentVersion } (opcional)
   • sourceForm, formularioId (opcionales)
 */

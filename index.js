@@ -44,6 +44,8 @@ console.log('🔒 RISK_HMAC_SECRET presente:', !!process.env.RISK_HMAC_SECRET);
 console.log('🔒 WP_RISK_ENDPOINT presente:', !!process.env.WP_RISK_ENDPOINT);
 console.log('🔒 WP_RISK_SECRET presente:', !!process.env.WP_RISK_SECRET);
 console.log('🔒 LAB_BAJA_HMAC_SECRET presente:', !!process.env.LAB_BAJA_HMAC_SECRET);
+console.log('🔑 MKT_API_KEY presente:', !!process.env.MKT_API_KEY);
+console.log('🔒 MKT_CONSENT_SECRET presente:', !!process.env.MKT_CONSENT_SECRET);
 
 // Log seguro de MemberPress (sin exponer la clave)
 console.log('🛠 MemberPress config:');
@@ -427,24 +429,46 @@ app.post('/pago/bridge', requireJson, async (req, res) => {
 // Requiere: PUBLIC_BASE_URL=https://laboroteca-production.up.railway.app
 // ───────────────────────────────────────────────────────────
 app.post('/marketing/consent-bridge', requireJson, async (req, res) => {
-  const API_KEY = String(process.env.MKT_API_KEY || '').trim();
-  const HSEC    = String(process.env.MKT_CONSENT_SECRET || '').trim();
+  // ⚙️ Normaliza claves (quita comillas, BOM/ZW chars, trim)
+  const clean = (v) => String(v || '')
+    .trim()
+    .replace(/^[\'"]|[\'"]$/g, '')
+    .replace(/[\u200B-\u200D\uFEFF]/g, ''); // ZWSP/ZWNJ/ZWJ/BOM
+
+  const API_KEY = clean(process.env.MKT_API_KEY);
+  const HSEC    = clean(process.env.MKT_CONSENT_SECRET);
   const BASE    = String(process.env.PUBLIC_BASE_URL || 'https://laboroteca-production.up.railway.app').replace(/\/+$/,'');
   const target  = `${BASE}/marketing/consent`;
 
   try {
     const ip  = (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim();
     const ua  = (req.headers['user-agent'] || '').slice(0,180);
-    const apiKeyIn = String(req.headers['x-api-key'] || '').trim();
+    // admite header x-api-key o Authorization: Bearer
+    const rawHdr = req.headers['x-api-key'] || req.headers['x_api_key'] || '';
+    const rawAuth = (req.headers['authorization'] || '').startsWith('Bearer ')
+      ? (req.headers['authorization'] || '').slice(7)
+      : '';
+    const apiKeyIn = clean(rawHdr || rawAuth);
     const body = req.body || {};
 
     console.log('🟢 [/marketing/consent-bridge] IN ip=%s ua=%s keys=%s',
       ip, ua, Object.keys(body||{}).join(','));
 
-    // API KEY de entrada (la que pone Fluent Forms)
+
+    // 🔍 Debug seguro de claves: hash y longitud (sin exponer valores)
+    try {
+      const h8 = v => require('crypto').createHash('sha256').update(String(v)).digest('hex').slice(0,8);
+      console.log('🔑 [/marketing/consent-bridge] key chk:', {
+        hasHdr: !!rawHdr || !!rawAuth,
+        hasEnv: !!process.env.MKT_API_KEY,
+        in_h8: h8(apiKeyIn), env_h8: h8(API_KEY),
+        len_in: apiKeyIn.length, len_env: API_KEY.length
+      });
+    } catch(_) {}
+
+    // API KEY de entrada (la que pone Fluent Forms), tras normalizar
     if (!API_KEY || apiKeyIn !== API_KEY) {
       console.warn('⛔ bridge UNAUTHORIZED: header hasKey=%s matches=%s', !!apiKeyIn, apiKeyIn===API_KEY);
-      return res.status(401).json({ ok:false, error:'UNAUTHORIZED' });
     }
 
     // Validación mínima

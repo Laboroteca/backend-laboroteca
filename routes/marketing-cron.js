@@ -219,11 +219,8 @@ async function processJob(ref) {
       nextAttemptAtISO: next.toISOString()
     });
 
-    try {
-      await alertAdmin(`❌ Cron newsletter: fallo enviando job ${ref.id}`, {
-        attempts, retry, error: e?.message || String(e)
-      });
-    } catch (_) {}
+    
+try { await alertAdmin({ area:'cron_send_fail', err:e, meta:{ jobId:ref.id, attempts, retry } }); } catch {}
 
     return { ok:false, error: e?.message || 'SEND_FAIL', attempts, retry };
   }
@@ -248,9 +245,7 @@ router.post('/cron-send', async (req, res) => {
     return res.json({ ok:true, startedAtISO, processed: results.length, results });
   } catch (e) {
     console.error('❌ marketing/cron-send error:', e?.message || e);
-    try {
-      await alertAdmin(`❌ Error en /marketing/cron-send: ${e?.message || e}`, {});
-    } catch (_) {}
+    try { await alertAdmin({ area:'cron_send_unexpected', err:e, meta:{} }); } catch {}
     return res.status(500).json({ ok:false, error:'SERVER_ERROR' });
   }
 });

@@ -745,8 +745,8 @@ router.post('/consent', async (req, res) => {
       return res.status(500).json({ ok:false, error:'FIRESTORE_WRITE_FAILED' });
     }
 
-    // Aviso de éxito (best-effort)
-    try { await alertAdmin({ area:'newsletter_alta_ok', email, err:null, meta:{ materias: materiasToList(materias) } }); } catch {}
+    // Aviso de éxito desactivado: no enviamos "newsletter_alta_ok"
+    if (DEBUG) console.log('ℹ️ Alta newsletter OK (alert silenciado) → %s', email);    
 
     // Sheets: upsert fila A–E (best-effort, no bloquea)
     const comercialYES = consent_comercial ? 'SÍ' : 'NO';

@@ -23,6 +23,7 @@ const router = express.Router();
 
 // ───────── CONFIG ─────────
 const SECRET = process.env.MKT_SEND_SECRET || '';
+const HMAC_WINDOW_MS = 5 * 60 * 1000; // ±5 min
 const FROM_EMAIL = process.env.EMAIL_FROM || 'newsletter@laboroteca.es';
 const FROM_NAME = process.env.EMAIL_FROM_NAME || 'Laboroteca Newsletter';
 const SMTP2GO_API_KEY = process.env.SMTP2GO_API_KEY || '';
@@ -34,13 +35,42 @@ const db = admin.firestore();
 const s = v => (v === undefined || v === null) ? '' : String(v);
 const nowISO = () => new Date().toISOString();
 
+function timingEq(a, b) {
+  try { return a.length === b.length && crypto.timingSafeEqual(a, b); }
+  catch { return false; }
+}
+function b64urlToBuf(str){
+  const s = String(str).replace(/-/g,'+').replace(/_/g,'/');
+  const pad = s.length % 4 ? '='.repeat(4 - (s.length % 4)) : '';
+  return Buffer.from(s + pad, 'base64');
+}
 function verifyHmac(req) {
-  const ts = s(req.headers['x-lb-ts']);
+  const tsRaw = s(req.headers['x-lb-ts']);
   const sig = s(req.headers['x-lb-sig']);
-  if (!ts || !sig) return false;
-  const body = req.rawBody || JSON.stringify(req.body || {});
-  const h = crypto.createHmac('sha256', SECRET).update(`${ts}.${body}`).digest('hex');
-  return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(h));
+  if (!tsRaw || !sig || !SECRET) return false;
+  const tsNum = Number(tsRaw);
+  const tsMs  = tsNum > 1e11 ? tsNum : tsNum * 1000;
+  if (!Number.isFinite(tsNum)) return false;
+  if (Math.abs(Date.now() - tsMs) > HMAC_WINDOW_MS) return false;
+
+  const raw = Buffer.isBuffer(req.rawBody)
+    ? req.rawBody
+    : Buffer.from(JSON.stringify(req.body || {}), 'utf8');
+
+  // HMAC(ts "." body) – calculamos binario, y comparamos contra hex o base64/base64url
+  const macBin = crypto.createHmac('sha256', SECRET)
+    .update(String(tsRaw)).update('.').update(raw).digest();
+  const macHex = Buffer.from(macBin.toString('hex'), 'utf8');
+
+  // hex (64 chars)
+  if (/^[0-9a-f]{64}$/i.test(sig)) {
+    return timingEq(Buffer.from(sig, 'utf8'), macHex);
+  }
+  // base64 / base64url
+  try {
+    const sigBin = b64urlToBuf(sig);
+    return timingEq(sigBin, macBin);
+  } catch { return false; }
 }
 
 async function sendSMTP2GO({ to, subject, html }) {
@@ -68,7 +98,8 @@ async function sendSMTP2GO({ to, subject, html }) {
 }
 
 // ───────── Ruta principal ─────────
-router.post('/send', async (req, res) => {
+// Alias: aceptamos /send y /send-newsletter para el panel WP
+router.post(['/send', '/send-newsletter'], async (req, res) => {
   const ts = nowISO();
   try {
     if (!SECRET) return res.status(500).json({ ok: false, error: 'MKT_SEND_SECRET missing' });
@@ -130,13 +161,16 @@ router.post('/send', async (req, res) => {
 
       // Enviar
       let sent = 0;
-      for (const chunk of [recipients]) {
+      // Enviar (chunk simple para no exceder SMTP2GO)
+      const CHUNK = 80;
+      for (let i = 0; i < recipients.length; i += CHUNK) {
+        const slice = recipients.slice(i, i + CHUNK);
         try {
-          await sendSMTP2GO({ to: chunk, subject, html });
-          sent += chunk.length;
+          await sendSMTP2GO({ to: slice, subject, html });
+          sent += slice.length;
         } catch (e) {
-          console.error('❌ sendSMTP2GO error:', e.message);
-          await alertAdmin(`❌ Error envío newsletter: ${e.message}`, { subject, testOnly });
+          console.error('❌ sendSMTP2GO error:', e?.message || e);
+          try { await alertAdmin({ area:'newsletter_send_fail', err: e, meta:{ subject, testOnly } }); } catch {}
           return res.status(500).json({ ok: false, error: 'SEND_FAIL' });
         }
       }
@@ -152,10 +186,8 @@ router.post('/send', async (req, res) => {
       return res.json({ ok: true, sent });
     }
   } catch (e) {
-    console.error('❌ marketing/send error:', e.message);
-    try {
-      await alertAdmin(`❌ Error en /marketing/send: ${e.message}`, { body: req.body });
-    } catch (_) {}
+    console.error('❌ marketing/send error:', e?.message || e);
+    try { await alertAdmin({ area:'newsletter_send_unexpected', err: e, meta:{} }); } catch {}
     return res.status(500).json({ ok: false, error: 'SERVER_ERROR' });
   }
 });

@@ -452,9 +452,28 @@ router.post('/consent', async (req, res) => {
     if (!allow.has(ip)) return res.status(403).json({ ok:false, error:'IP_FORBIDDEN' });
   }
 
+
   // HMAC:
   // Si viene del bridge interno, bastará con x-internal-bridge: 1
-  const isInternalBridge = req.headers['x-internal-bridge'] === '1';
+  // Acepta también el forward del /marketing/consent-bridge (x-bridge: wp)
+  const isInternalBridge =
+    req.headers['x-internal-bridge'] === '1' ||
+    (s(req.headers['x-bridge']).toLowerCase().startsWith('wp'));
+
+  if (DEBUG) {
+    const hasTs = !!(req.headers['x-lab-ts'] || req.headers['x-lb-ts']);
+    const hasSig = !!(req.headers['x-lab-sig'] || req.headers['x-lb-sig']);
+    console.log('🧪 consent flags →', {
+      apiKeyOk: true, // ya pasó requireApiKey
+      isInternalBridge,
+      hasHmacHeaders: hasTs && hasSig,
+      ip,
+      formId: s(req.body?.formularioId),
+      materiasKeys: Object.keys(req.body?.materias || {}),
+      consent_marketing: toBool(req.body?.consent_marketing, false)
+    });
+  }
+
   if (!isInternalBridge && !verifyHmacFlexible(req)) {
     console.warn('⛔ BAD_HMAC en /marketing/consent ip=%s', ip);
     if (DEBUG) {

@@ -485,7 +485,8 @@ app.post('/marketing/consent-bridge', requireJson, async (req, res) => {
 
     // Forward a la URL pública (evita loopback y middlewares locales)
     const controller = new (require('abort-controller'))();
-    const timer = setTimeout(() => controller.abort(), 15000);
+    const BRIDGE_TIMEOUT_MS = Number(process.env.MKT_BRIDGE_TIMEOUT_MS || 30000);
+    const timer = setTimeout(() => controller.abort(), BRIDGE_TIMEOUT_MS);
 
     let r, text = '';
     try {
@@ -518,9 +519,10 @@ app.post('/marketing/consent-bridge', requireJson, async (req, res) => {
 
     return res.status(r.status).json(data);
   } catch (e) {
+    const code = /aborted/i.test(String(e?.message)) ? 504 : 500;
     console.error('❌ consent-bridge ERROR:', e?.message || e);
     try { await alertAdmin({ area:'marketing_consent_bridge', email: req.body?.email || '-', err: e }); } catch(_){}
-    return res.status(500).json({ ok:false, error:'BRIDGE_ERROR' });
+    return res.status(code).json({ ok:false, error:'BRIDGE_ERROR' });
   }
 });
 

@@ -60,9 +60,10 @@ const API_KEY   = String(process.env.MKT_API_KEY || '').trim();
 const HMAC_SEC  = String(process.env.MKT_CONSENT_SECRET || '').trim();
 const DEBUG     = String(process.env.MKT_DEBUG || '').trim() === '1';
 
-const SHEET_ID   = '1beWTOMlWjJvtmaGAVDegF2mTts16jZ_nKBrksnEg4Co';
-const SHEET_READ_RANGE  = 'Consents!A:E'; // A Nombre, B Email, C Comercial, D Materias, E Fecha alta
-const SHEET_WRITE_RANGE = 'Consents!A:E';
+const SHEET_ID   = process.env.MKT_SHEET_ID || '1beWTOMlWjJvtmaGAVDegF2mTts16jZ_nKBrksnEg4Co';
+const SHEET_TAB  = process.env.MKT_SHEET_TAB || 'Consents';
+const SHEET_READ_RANGE  = `'${SHEET_TAB}'!A:E`;
+const SHEET_WRITE_RANGE = `'${SHEET_TAB}'!A:E`;
 
 // Bucket: prioriza GOOGLE_CLOUD_BUCKET; mantiene otros alias como fallback
 const BUCKET_NAME =
@@ -354,7 +355,7 @@ async function upsertConsentRow({ nombre, email, comercialYES, materiasStr, fech
     ];
     await sheets.spreadsheets.values.update({
       spreadsheetId: SHEET_ID,
-      range: `Consents!A${rowNum}:E${rowNum}`,
+      range: `'${SHEET_TAB}'!A${rowNum}:E${rowNum}`,
       valueInputOption: 'RAW',
       requestBody: { values }
     });
@@ -634,12 +635,19 @@ router.post('/consent', async (req, res) => {
           snapshotComercialIndividualPath = indivPathC;
         }
       }
-    } catch (e) {
-      console.warn('Snapshot error:', e?.message || e);
-      try { await alertAdmin({ area:'newsletter_snapshot_error', email, err: e, meta:{ consentUrl } }); } catch {}
-    }
+} catch (e) {
+  const msg = (e && e.message) ? String(e.message) : String(e);
+  console.warn('Snapshot error:', msg);
+  if (!msg.includes('HTTP_404')) {
+    try {
+      await alertAdmin({ area: 'newsletter_snapshot_error', email, err: e, meta: { consentUrl } });
+    } catch (_) {}
+  }
+}
+
 
     // Firestore: marketingConsents (docId = email) – idempotente
+    if (DEBUG) console.log('📝 FS write → marketingConsents/%s materias=%j', email, materiasToList(materias));
     const mcRef = db.collection('marketingConsents').doc(email);
     let createdAt = admin.firestore.Timestamp.fromDate(new Date());
     try {

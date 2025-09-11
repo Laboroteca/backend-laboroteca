@@ -446,7 +446,8 @@ router.post('/consent', async (req, res) => {
     if (DEBUG) console.log('📚 Materias:', materiasToList(materias));
 
     // Consentimiento marketing
-    const consent_marketing = toBool(req.body?.consent_marketing ?? req.body?.privacy, false);
+    // Ahora: SOLO vale consent_marketing
+    const consent_marketing = toBool(req.body?.consent_marketing, false);
     if (!consent_marketing) {
       if (DEBUG) console.warn('⛔ CONSENT_MARKETING_REQUIRED para %s', email);
       return res.status(400).json({ ok:false, error:'CONSENT_MARKETING_REQUIRED' });
@@ -465,6 +466,17 @@ router.post('/consent', async (req, res) => {
     const consentVersion = s(consentData.consentVersion, 'v1.0');
     let consentTextHash  = '';
 
+    // Consentimiento comercial (URL + versión)
+    let consentDataComercial = {};
+    try {
+      if (typeof req.body?.consentDataComercial === 'string') consentDataComercial = JSON.parse(req.body.consentDataComercial);
+      else if (typeof req.body?.consentDataComercial === 'object') consentDataComercial = (req.body.consentDataComercial || {});
+    } catch { consentDataComercial = {}; }
+
+    const comercialUrl     = s(consentDataComercial.consentUrl);
+    const comercialVersion = s(consentDataComercial.consentVersion);
+    let comercialTextHash  = '';
+
     const sourceForm   = s(req.body?.sourceForm, 'preferencias_marketing');
     const formularioId = s(req.body?.formularioId);
     const userAgent    = ua;
@@ -473,6 +485,8 @@ router.post('/consent', async (req, res) => {
     // Snapshot GCS (opcional)
     let snapshotIndividualPath = '';
     let snapshotGeneralPath = '';
+    let snapshotComercialIndividualPath = '';
+    let snapshotComercialGeneralPath = '';
     try {
       if (!BUCKET_NAME) {
         await alertAdmin({ area:'newsletter_snapshot', email, err: new Error('BUCKET_MISSING'), meta:{} });
@@ -511,6 +525,40 @@ router.post('/consent', async (req, res) => {
 
         if (DEBUG) console.log('🗂  Snapshots GCS → general=%s individual=%s', snapshotGeneralPath, snapshotIndividualPath);
       }
+
+      // COMERCIAL
+      if (comercialUrl && comercialVersion) {
+        const rawHtmlC = await fetchHtml(comercialUrl);
+        comercialTextHash = `sha256:${sha256HexBuf(rawHtmlC)}`;
+
+        const htmlBufC = buildSnapshotHtml({
+          rawHtmlBuffer: rawHtmlC,
+          title: `Consentimiento Comercial ${comercialVersion}`,
+          acceptedAtISO: ts, email, ip: ipAddr, userAgent,
+          extra: { comercialVersion, sourceForm, formularioId }
+        });
+
+        const generalPathC = `consents/comercial/${comercialVersion}.html`;
+        await uploadHtmlToGCS({
+          path: generalPathC,
+          htmlBuffer: htmlBufC,
+          metadata: { kind:'comercial-general', version: comercialVersion },
+          skipIfExists: true
+        });
+        snapshotComercialGeneralPath = generalPathC;
+
+        const individualIdC = sha256Hex(`${email}.${ts}.${Math.random()}`);
+        const indivPathC = `consents/comercial/${comercialVersion}/${individualIdC}.html`;
+        await uploadHtmlToGCS({
+          path: indivPathC,
+          htmlBuffer: htmlBufC,
+          metadata: {
+            kind:'comercial',
+            email, comercialVersion, sourceForm, formularioId, ip: ipAddr, userAgent
+          }
+        });
+        snapshotComercialIndividualPath = indivPathC;
+      }
     } catch (e) {
       console.warn('Snapshot error:', e?.message || e);
       try { await alertAdmin({ area:'newsletter_snapshot_error', email, err: e, meta:{ consentUrl } }); } catch {}
@@ -537,6 +585,9 @@ router.post('/consent', async (req, res) => {
           consentVersion,
           consentTextHash,
           newsletterUrl: consentUrl,
+          comercialVersion,
+          comercialUrl,
+          comercialTextHash,
           sourceForm,
           formularioId,
           lastIp: ipAddr,
@@ -611,7 +662,10 @@ router.post('/consent', async (req, res) => {
       materias: materiasToList(materias),
       consentVersion,
       snapshotGeneralPath,
-      snapshotIndividualPath
+      snapshotIndividualPath,
+      comercialVersion,
+      snapshotComercialGeneralPath,
+      snapshotComercialIndividualPath
     });
 
   } catch (err) {

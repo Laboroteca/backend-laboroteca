@@ -75,7 +75,9 @@ const FROM_EMAIL      = String(process.env.EMAIL_FROM || 'newsletter@laboroteca.
 const FROM_NAME       = String(process.env.EMAIL_FROM_NAME || 'Laboroteca Newsletter').trim();
 
 const UNSUB_SECRET = String(process.env.MKT_UNSUB_SECRET || 'laboroteca-unsub').trim();
-const UNSUB_PAGE   = String(process.env.MKT_UNSUB_PAGE   || 'https://www.laboroteca.es/baja-newsletter/').trim();
+// Nueva URL de bajas
+const UNSUB_PAGE   = String(process.env.MKT_UNSUB_PAGE   || 'https://www.laboroteca.es/unsubscribe/').trim();
+
 
 const IP_ALLOW  = String(process.env.CONSENT_IP_ALLOW || '').trim(); // ej: "1.2.3.4, 5.6.7.8"
 const MAX_PER_10M = Number(process.env.CONSENT_MAX_PER_10M || 8);    // rate por ip+email
@@ -766,23 +768,28 @@ router.post('/consent', async (req, res) => {
         const tokens = { NOMBRE: nombreSafe };
 
         const subject = tpl('¡Bienvenido a la newsletter de Laboroteca, {NOMBRE}!', tokens);
-       
-        const bodyTop = tpl(`
-          <p>Hola {NOMBRE},</p>
-          <p><strong>¡Gracias por suscribirte a la newsletter de Laboroteca!</strong></p>
-          <p>Desde ahora recibirás novedades por email sobre las materias que has seleccionado.</p>
-          <p>Y si quieres más novedades, puedes visitar nuestro <a href="https://www.laboroteca.es/boletin-informativo/">Boletín</a>.</p>
-          <p>Un saludo,<br>Ignacio Solsona<br>Abogado</p>
-        `, tokens);
 
-        const avisoEnvio =
-          `<hr style="border:0;height:1px;width:100%;background:#e5e5e5;margin:16px 0;">
-           <p style="color:#6b6b6b;font-size:12px;line-height:1.5;margin:0 0 8px">
-             Este mensaje se ha enviado a <strong>${email}</strong> porque te has dado de alta en la newsletter.
-             Si no deseas seguir recibiéndola, puedes <a href="${unsubUrl}">darte de baja aquí</a>.
-           </p>`;
+        // Pie legal corporativo unificado
+        const pieHtml = `
+          <hr style="margin-top:40px;margin-bottom:10px;" />
+          <div style="font-size:12px;color:#777;line-height:1.5;">
+            En cumplimiento del Reglamento (UE) 2016/679 (RGPD) y la LOPDGDD, le informamos de que su dirección de correo electrónico forma parte de la base de datos de Ignacio Solsona Fernández-Pedrera (DNI 20481042W), con domicilio en calle Enmedio nº 22, 3.º E, 12001 Castellón de la Plana (España).<br /><br />
+            Finalidades: prestación de servicios jurídicos, venta de infoproductos, gestión de entradas a eventos, emisión y envío de facturas por email y, en su caso, envío de newsletter y comunicaciones comerciales si usted lo ha consentido. Base jurídica: ejecución de contrato y/o consentimiento. Puede retirar su consentimiento en cualquier momento.<br /><br />
+            Puede ejercer sus derechos de acceso, rectificación, supresión, portabilidad, limitación y oposición escribiendo a <a href="mailto:laboroteca@gmail.com">laboroteca@gmail.com</a>. También puede presentar una reclamación ante la autoridad de control competente. Más información en nuestra política de privacidad: <a href="https://www.laboroteca.es/politica-de-privacidad/" target="_blank" rel="noopener">https://www.laboroteca.es/politica-de-privacidad/</a>.
+          </div>
+        `;
 
-        await sendSMTP2GO({ to: email, subject, html: bodyTop + avisoEnvio + pieHtml });
+        const bodyTop = tpl(
+          `<p>Hola {NOMBRE},</p>
+           <p><strong>¡Gracias por suscribirte a la newsletter de Laboroteca!</strong></p>
+           <p>Desde ahora recibirás novedades por email sobre las materias que has seleccionado.</p>
+           <p>Y si quieres más novedades, puedes visitar nuestro <a href="https://www.laboroteca.es/boletin-informativo/">Boletín</a>.</p>
+           <p>Si en algún momento quieres cambiar tus preferencias o darte de baja, puedes hacerlo desde <a href="${unsubUrl}">este enlace</a>.</p>
+           <p>Un saludo,<br>Ignacio Solsona<br>Abogado</p>`,
+          tokens
+        );
+
+        await sendSMTP2GO({ to: email, subject, html: bodyTop + pieHtml });
         if (DEBUG) console.log('📧 Welcome email OK → %s', email);
       } catch (e) {
         console.warn('Welcome email failed:', e?.message || e);

@@ -46,15 +46,6 @@ function b64urlToBuf(str){
   const pad = ss.length % 4 ? '='.repeat(4 - (ss.length % 4)) : '';
   return Buffer.from(ss + pad, 'base64');
 }
-
-/**
- * Verifica HMAC del panel WP:
- *   firma = HMAC_SHA256( ts + "." + body_crudo )
- * Acepta firma en hex (64 chars) o base64/url.
- * Considera dos candidatos de cuerpo:
- *   A) raw tal cual (wp_json_encode)
- *   B) raw con slashes des-escapados (JSON_UNESCAPED_SLASHES)
- */
 function normalizePath(p) {
   try {
     p = (p || '/').toString().split('#')[0].split('?')[0];
@@ -62,6 +53,13 @@ function normalizePath(p) {
     return p.replace(/\/{2,}/g, '/');
   } catch { return '/'; }
 }
+
+/**
+ * Verifica HMAC del panel WP. Acepta:
+ *  - v0 crudo:   HMAC(ts + "." + rawBody)              (ts en s o ms, firma hex/base64)
+ *  - v1 hash:    HMAC(ts + "." + sha256(body))
+ *  - v2 path:    HMAC(ts + ".POST." + <path> + "." + sha256(body))
+ */
 function verifyHmac(req) {
   const tsRaw = s(req.headers['x-lb-ts']);
   const sig   = s(req.headers['x-lb-sig']);
@@ -71,17 +69,16 @@ function verifyHmac(req) {
   if (!Number.isFinite(tsNum)) return { ok:false, error:'bad_ts' };
   const tsMs  = tsNum > 1e11 ? tsNum : tsNum * 1000;
   if (Math.abs(Date.now() - tsMs) > HMAC_WINDOW_MS) return { ok:false, error:'skew' };
+  const tsSec = Math.floor(tsMs / 1000);
+  const tsMsStr  = String(Math.floor(tsMs));
+  const tsSecStr = String(tsSec);
 
   if (!Buffer.isBuffer(req.rawBody) || req.rawBody.length === 0) {
     return { ok:false, error:'no_raw_body' };
   }
   const raw      = req.rawBody;
   const bodyHash = crypto.createHash('sha256').update(raw).digest('hex');
-  const tsSec    = Math.floor(tsMs / 1000);
-  const tsMsStr  = String(Math.floor(tsMs));
-  const tsSecStr = String(tsSec);
 
-  // Posibles paths que pudo firmar WP
   const paths = Array.from(new Set([
     normalizePath((req.baseUrl || '') + (req.path || '')),
     normalizePath((req.originalUrl || '').split('?')[0]),
@@ -91,9 +88,8 @@ function verifyHmac(req) {
     '/send-newsletter'
   ].filter(Boolean)));
 
-  // Construimos candidatos:
   const candidates = [];
-  // v0: ts.rawBody  (segundos y milisegundos)
+  // v0: ts.rawBody
   candidates.push({ label:'v0_raw_s',  bin: crypto.createHmac('sha256', SECRET).update(tsSecStr).update('.').update(raw).digest() });
   candidates.push({ label:'v0_raw_ms', bin: crypto.createHmac('sha256', SECRET).update(tsMsStr ).update('.').update(raw).digest() });
   // v1: ts.sha256(body)
@@ -107,11 +103,9 @@ function verifyHmac(req) {
     candidates.push({ label:`v2_${p}_ms`, hex: crypto.createHmac('sha256', SECRET).update(baseMs).digest('hex') });
   }
 
-  // Comprobamos contra firma en hex o base64/base64url
   const isHex = /^[0-9a-f]{64}$/i.test(sig);
   if (isHex) {
     const sigHexBuf = Buffer.from(sig, 'utf8');
-    // compara candidatos hex y bin (bin → hex) con timingSafeEqual
     for (const c of candidates) {
       const expHex = c.hex || (c.bin && c.bin.toString('hex'));
       if (!expHex) continue;
@@ -119,7 +113,6 @@ function verifyHmac(req) {
       if (timingEq(sigHexBuf, expHexBuf)) return { ok:true, variant:c.label, bodyHash };
     }
   } else {
-    // base64/base64url → comparar binarios
     try {
       const sigBin = b64urlToBuf(sig);
       for (const c of candidates) {
@@ -159,7 +152,6 @@ async function sendSMTP2GO({ to, subject, html }) {
 }
 
 // ───────── Ruta principal ─────────
-// Alias: aceptamos /send y /send-newsletter para el panel WP
 router.post(['/send', '/send-newsletter'], async (req, res) => {
   const ts = nowISO();
   try {
@@ -168,7 +160,6 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
       return res.status(500).json({ ok: false, error: 'MKT_SEND_SECRET missing' });
     }
 
-    // Content-Type debe ser JSON
     const ct = String(req.headers['content-type'] || '').toLowerCase();
     if (!ct.startsWith('application/json')) {
       return res.status(415).json({ ok:false, error:'UNSUPPORTED_MEDIA_TYPE' });
@@ -187,7 +178,6 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
       console.log('[marketing/send] ✅ HMAC ok (%s) · sha256(body)=%s', v.variant, (v.bodyHash||'').slice(0,12));
     }
 
-    // Parseamos el JSON ya que la firma usa raw; express.json lo habrá hidratado
     const subject = s(req.body?.subject).trim();
     const html = s(req.body?.html).trim();
     const scheduledAt = s(req.body?.scheduledAt);
@@ -202,15 +192,14 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
     const materiasNorm = {};
     let anyMateria = false;
     for (const k of allowedKeys) {
-      const v = !!(materias && materias[k]);
-      materiasNorm[k] = v;
-      if (v) anyMateria = true;
+      const vv = !!(materias && materias[k]);
+      materiasNorm[k] = vv;
+      if (vv) anyMateria = true;
     }
     if (!testOnly && !anyMateria) {
       return res.status(400).json({ ok: false, error: 'MATERIAS_REQUIRED' });
     }
 
-    // Construye job/base
     const job = {
       subject,
       html,
@@ -221,7 +210,6 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
       status: 'pending'
     };
 
-    // Programado → cola
     if (scheduledAt) {
       const when = new Date(scheduledAt);
       if (isNaN(when.getTime())) {
@@ -233,12 +221,11 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
       return res.json({ ok: true, scheduled: true, queueId: ref.id });
     }
 
-    // Inmediato
+    // Envío inmediato
     let recipients = [];
     if (testOnly) {
       recipients = ['ignacio.solsona@icacs.com', 'laboroteca@gmail.com'];
     } else {
-      // Buscar consentimientos
       const snap = await db.collection('marketingConsents')
         .where('consent_marketing', '==', true)
         .get();
@@ -255,18 +242,16 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
         }
       });
 
-      // Filtrar suppressionList
       const supSnap = await db.collection('suppressionList').get();
       const sup = new Set(supSnap.docs.map(d => (d.id || '').toLowerCase()));
       recipients = Array.from(set).filter(e => !sup.has(e));
     }
 
-    // Nada que enviar (poco probable, pero mejor responder limpio)
     if (!testOnly && recipients.length === 0) {
       return res.status(200).json({ ok: true, sent: 0, note: 'NO_RECIPIENTS' });
     }
 
-    // Envío por trozos
+    // Envío en chunks
     let sent = 0;
     const CHUNK = 80;
     for (let i = 0; i < recipients.length; i += CHUNK) {
@@ -281,7 +266,6 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
       }
     }
 
-    // Log en emailSends
     try {
       await db.collection('emailSends').add({
         subject, html, materias: materiasNorm, testOnly,
@@ -290,7 +274,6 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
         createdAtISO: ts
       });
     } catch (e) {
-      // No bloquea la respuesta al cliente
       console.warn(`${LOG_PREFIX} ⚠️ log emailSends`, e?.message || e);
     }
 
@@ -303,4 +286,3 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
 });
 
 module.exports = router;
-

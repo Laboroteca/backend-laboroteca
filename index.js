@@ -304,21 +304,26 @@ app.options('*', cors(corsOptions));
 // ⚠️ WEBHOOK: SIEMPRE EL PRIMERO Y EN RAW 
 app.use('/webhook', require('./routes/webhook'));
 
-// ⬇️ IMPORTANTE: capturamos rawBody para HMAC (validador)
+// ⬇️ IMPORTANTE: capturamos rawBody para HMAC global
 app.use(express.json({
-  // un poco más grande para cuerpo HTML del newsletter
   limit: '5mb',
   verify: (req, _res, buf) => {
-    // Mantener bytes exactos para HMAC (Buffer)
     req.rawBody = Buffer.from(buf || '');
-    // Precalcular sha256 del raw por conveniencia (algunos handlers lo usan)
     try {
       const crypto = require('crypto');
       req.rawBodySha256 = crypto.createHash('sha256').update(req.rawBody).digest('hex');
-    } catch (_) { /* noop */ }
+    } catch (_) {}
   }
 }));
 app.use(express.urlencoded({ extended: true }));
+
+// 🎯 Marketing necesita rawBody exacto para firmas WP
+app.use('/marketing', express.json({
+  limit: '5mb',
+  verify: (req, _res, buf) => {
+    req.rawBody = Buffer.from(buf || '');
+  }
+}));
 
 // ─────────────────────────────────────
 // Middleware: exigir JSON puro en rutas críticas

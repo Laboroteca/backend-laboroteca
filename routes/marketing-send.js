@@ -46,31 +46,48 @@ function b64urlToBuf(str){
 }
 function verifyHmac(req) {
   const tsRaw = s(req.headers['x-lb-ts']);
-  const sig = s(req.headers['x-lb-sig']);
+  const sig   = s(req.headers['x-lb-sig']);
   if (!tsRaw || !sig || !SECRET) return false;
   const tsNum = Number(tsRaw);
   const tsMs  = tsNum > 1e11 ? tsNum : tsNum * 1000;
   if (!Number.isFinite(tsNum)) return false;
   if (Math.abs(Date.now() - tsMs) > HMAC_WINDOW_MS) return false;
 
-  const raw = Buffer.isBuffer(req.rawBody)
-    ? req.rawBody
-    : Buffer.from(JSON.stringify(req.body || {}), 'utf8');
-
-  // HMAC(ts "." body) – calculamos binario, y comparamos contra hex o base64/base64url
-  const macBin = crypto.createHmac('sha256', SECRET)
-    .update(String(tsRaw)).update('.').update(raw).digest();
-  const macHex = Buffer.from(macBin.toString('hex'), 'utf8');
-
-  // hex (64 chars)
-  if (/^[0-9a-f]{64}$/i.test(sig)) {
-    return timingEq(Buffer.from(sig, 'utf8'), macHex);
+  // Candidatos de cuerpo para igualar la firma de WP:
+  //  1) rawBody (ideal)
+  //  2) JSON.stringify (JS)
+  //  3) "PHP-like": JSON con slashes escapados (\/) para acercarnos a wp_json_encode()
+  const candidates = [];
+  if (Buffer.isBuffer(req.rawBody)) {
+    candidates.push(req.rawBody);
+  } else {
+    try {
+      const js = Buffer.from(JSON.stringify(req.body || {}), 'utf8');
+      candidates.push(js);
+      const phpLike = Buffer.from(
+        JSON.stringify(req.body || {}).replace(/\//g, '\\/'),
+        'utf8'
+      );
+      candidates.push(phpLike);
+    } catch { /* ignore */ }
   }
-  // base64 / base64url
-  try {
-    const sigBin = b64urlToBuf(sig);
-    return timingEq(sigBin, macBin);
-  } catch { return false; }
+
+  // Comprobamos contra firma en hex o en base64/base64url
+  const isHex = /^[0-9a-f]{64}$/i.test(sig);
+  for (const raw of candidates) {
+    const macBin = crypto.createHmac('sha256', SECRET)
+      .update(String(tsRaw)).update('.').update(raw).digest();
+    if (isHex) {
+      const macHex = Buffer.from(macBin.toString('hex'), 'utf8');
+      if (timingEq(Buffer.from(sig, 'utf8'), macHex)) return true;
+    } else {
+      try {
+        const sigBin = b64urlToBuf(sig);
+        if (timingEq(sigBin, macBin)) return true;
+      } catch { /* ignore */ }
+    }
+  }
+  return false;
 }
 
 async function sendSMTP2GO({ to, subject, html }) {
@@ -103,7 +120,18 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
   const ts = nowISO();
   try {
     if (!SECRET) return res.status(500).json({ ok: false, error: 'MKT_SEND_SECRET missing' });
-    if (!verifyHmac(req)) return res.status(401).json({ ok: false, error: 'BAD_HMAC' });
+    if (!verifyHmac(req)) {
+      const tsRaw = String(req.headers['x-lb-ts'] || '');
+      const sig   = String(req.headers['x-lb-sig'] || '');
+      console.warn('⛔ BAD_HMAC send-newsletter · ts=%s · sig=%s… · sha256(body)=%s',
+        tsRaw,
+        sig.slice(0,12),
+        require('crypto').createHash('sha256')
+          .update(Buffer.isBuffer(req.rawBody) ? req.rawBody : Buffer.from(JSON.stringify(req.body||{}),'utf8'))
+          .digest('hex').slice(0,12)
+      );
+      return res.status(401).json({ ok: false, error: 'BAD_HMAC' });
+    }
 
     const subject = s(req.body?.subject).trim();
     const html = s(req.body?.html).trim();

@@ -29,6 +29,7 @@ const FROM_EMAIL = process.env.EMAIL_FROM || 'newsletter@laboroteca.es';
 const FROM_NAME = process.env.EMAIL_FROM_NAME || 'Laboroteca Newsletter';
 const SMTP2GO_API_KEY = String(process.env.SMTP2GO_API_KEY || '').trim();
 const LOG_PREFIX = '[marketing/send]';
+const LAB_DEBUG = process.env.LAB_DEBUG === '1';
 
 if (!admin.apps.length) { try { admin.initializeApp(); } catch (_) {} }
 const db = admin.firestore();
@@ -46,19 +47,27 @@ function b64urlToBuf(str){
   const pad = ss.length % 4 ? '='.repeat(4 - (ss.length % 4)) : '';
   return Buffer.from(ss + pad, 'base64');
 }
+// normaliza path, quita query/hash y barra final (salvo raíz)
 function normalizePath(p) {
   try {
     p = (p || '/').toString().split('#')[0].split('?')[0];
     if (p[0] !== '/') p = '/' + p;
-    return p.replace(/\/{2,}/g, '/');
+    p = p.replace(/\/{2,}/g, '/');
+    if (p.length > 1 && p.endsWith('/')) p = p.slice(0, -1);
+    return p;
   } catch { return '/'; }
+}
+function withVariants(path) {
+  const base = normalizePath(path);
+  return base === '/' ? ['/'] : [base, base + '/'];
 }
 
 /**
- * Verifica HMAC del panel WP. Acepta:
- *  - v0 crudo:   HMAC(ts + "." + rawBody)              (ts en s o ms, firma hex/base64)
+ * Verifica HMAC aceptando variantes:
+ *  - v0 crudo:   HMAC(ts + "." + rawBody)                      (ts en s o ms, firma hex/base64url)
+ *  - v0u crudo*: HMAC(ts + "." + rawBody_unescapedSlashes)     (tolerancia `\/` ↔ `/`)
  *  - v1 hash:    HMAC(ts + "." + sha256(body))
- *  - v2 path:    HMAC(ts + ".POST." + <path> + "." + sha256(body))
+ *  - v2 path:    HMAC(ts + ".POST." + <path> + "." + sha256(body))  (con/sin slash final, alias)
  */
 function verifyHmac(req) {
   const tsRaw = s(req.headers['x-lb-ts']);
@@ -76,31 +85,53 @@ function verifyHmac(req) {
   if (!Buffer.isBuffer(req.rawBody) || req.rawBody.length === 0) {
     return { ok:false, error:'no_raw_body' };
   }
-  const raw      = req.rawBody;
-  const bodyHash = crypto.createHash('sha256').update(raw).digest('hex');
 
+  const raw = req.rawBody;
+  const rawStr = raw.toString('utf8');
+  const rawUnesc = Buffer.from(rawStr.replace(/\\\//g, '/'), 'utf8'); // tolerancia JSON_UNESCAPED_SLASHES
+  const bodyHashRaw  = crypto.createHash('sha256').update(raw).digest('hex');
+  const bodyHashUnes = crypto.createHash('sha256').update(rawUnesc).digest('hex');
+
+  // posibles paths que puede firmar WP (con/sin slash final)
   const paths = Array.from(new Set([
-    normalizePath((req.baseUrl || '') + (req.path || '')),
-    normalizePath((req.originalUrl || '').split('?')[0]),
-    '/marketing/send',
-    '/marketing/send-newsletter',
-    '/send',
-    '/send-newsletter'
-  ].filter(Boolean)));
+    ...withVariants((req.baseUrl || '') + (req.path || '')),
+    ...withVariants((req.originalUrl || '').split('?')[0]),
+    ...withVariants('/marketing/send'),
+    ...withVariants('/marketing/send-newsletter'),
+    ...withVariants('/send'),
+    ...withVariants('/send-newsletter'),
+  ]));
+
+  const mk = (tsStr, bufOrHex, isBin) =>
+    isBin
+      ? crypto.createHmac('sha256', SECRET).update(tsStr).update('.').update(bufOrHex).digest()
+      : crypto.createHmac('sha256', SECRET).update(`${tsStr}.${bufOrHex}`).digest('hex');
 
   const candidates = [];
   // v0: ts.rawBody
-  candidates.push({ label:'v0_raw_s',  bin: crypto.createHmac('sha256', SECRET).update(tsSecStr).update('.').update(raw).digest() });
-  candidates.push({ label:'v0_raw_ms', bin: crypto.createHmac('sha256', SECRET).update(tsMsStr ).update('.').update(raw).digest() });
+  candidates.push({ label:'v0_raw_s',  bin: mk(tsSecStr, raw, true) });
+  candidates.push({ label:'v0_raw_ms', bin: mk(tsMsStr,  raw, true) });
+  // v0u: ts.rawBody(unescaped)
+  candidates.push({ label:'v0u_raw_s',  bin: mk(tsSecStr, rawUnesc, true) });
+  candidates.push({ label:'v0u_raw_ms', bin: mk(tsMsStr,  rawUnesc, true) });
   // v1: ts.sha256(body)
-  candidates.push({ label:'v1_hash_s',  hex: crypto.createHmac('sha256', SECRET).update(`${tsSecStr}.${bodyHash}`).digest('hex') });
-  candidates.push({ label:'v1_hash_ms', hex: crypto.createHmac('sha256', SECRET).update(`${tsMsStr}.${bodyHash}` ).digest('hex') });
+  candidates.push({ label:'v1_hash_s',  hex: mk(tsSecStr, bodyHashRaw, false) });
+  candidates.push({ label:'v1_hash_ms', hex: mk(tsMsStr,  bodyHashRaw, false) });
+  // v1u: ts.sha256(body_unescaped)
+  candidates.push({ label:'v1u_hash_s',  hex: mk(tsSecStr, bodyHashUnes, false) });
+  candidates.push({ label:'v1u_hash_ms', hex: mk(tsMsStr,  bodyHashUnes, false) });
   // v2: ts.POST.<path>.sha256(body)
   for (const p of paths) {
-    const baseS  = `${tsSecStr}.POST.${p}.${bodyHash}`;
-    const baseMs = `${tsMsStr}.POST.${p}.${bodyHash}`;
+    const baseS  = `${tsSecStr}.POST.${normalizePath(p)}.${bodyHashRaw}`;
+    const baseMs = `${tsMsStr}.POST.${normalizePath(p)}.${bodyHashRaw}`;
     candidates.push({ label:`v2_${p}_s`,  hex: crypto.createHmac('sha256', SECRET).update(baseS ).digest('hex') });
     candidates.push({ label:`v2_${p}_ms`, hex: crypto.createHmac('sha256', SECRET).update(baseMs).digest('hex') });
+
+    // también con el hash de "unescaped" por si el firmante lo usa
+    const baseS2  = `${tsSecStr}.POST.${normalizePath(p)}.${bodyHashUnes}`;
+    const baseMs2 = `${tsMsStr}.POST.${normalizePath(p)}.${bodyHashUnes}`;
+    candidates.push({ label:`v2u_${p}_s`,  hex: crypto.createHmac('sha256', SECRET).update(baseS2 ).digest('hex') });
+    candidates.push({ label:`v2u_${p}_ms`, hex: crypto.createHmac('sha256', SECRET).update(baseMs2).digest('hex') });
   }
 
   const isHex = /^[0-9a-f]{64}$/i.test(sig);
@@ -110,7 +141,9 @@ function verifyHmac(req) {
       const expHex = c.hex || (c.bin && c.bin.toString('hex'));
       if (!expHex) continue;
       const expHexBuf = Buffer.from(expHex, 'utf8');
-      if (timingEq(sigHexBuf, expHexBuf)) return { ok:true, variant:c.label, bodyHash };
+      if (timingEq(sigHexBuf, expHexBuf)) {
+        return { ok:true, variant:c.label, bodyHash:bodyHashRaw };
+      }
     }
   } else {
     try {
@@ -118,13 +151,15 @@ function verifyHmac(req) {
       for (const c of candidates) {
         const expBin = c.bin || (c.hex && Buffer.from(c.hex, 'hex'));
         if (!expBin) continue;
-        if (timingEq(sigBin, expBin)) return { ok:true, variant:c.label, bodyHash };
+        if (timingEq(sigBin, expBin)) {
+          return { ok:true, variant:c.label, bodyHash:bodyHashRaw };
+        }
       }
     } catch {
-      return { ok:false, error:'bad_sig_format' };
+      return { ok:false, error:'bad_sig_format', bodyHash:bodyHashRaw };
     }
   }
-  return { ok:false, error:'no_variant_match', bodyHash };
+  return { ok:false, error:'no_variant_match', bodyHash:bodyHashRaw };
 }
 
 async function sendSMTP2GO({ to, subject, html }) {
@@ -174,7 +209,8 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
       console.warn('[marketing/send] ⛔ BAD_HMAC · ts=%s · sig=%s… · hasRaw=%s · sha256(body)=%s · err=%s',
         tsRaw, sig.slice(0,12), hasRaw, bodyHash12, v.error);
       return res.status(401).json({ ok: false, error: 'BAD_HMAC' });
-    } else if (process.env.LAB_DEBUG === '1') {
+    } else if (LAB_DEBUG) {
+      try { res.setHeader('X-HMAC-Variant', v.variant); } catch {}
       console.log('[marketing/send] ✅ HMAC ok (%s) · sha256(body)=%s', v.variant, (v.bodyHash||'').slice(0,12));
     }
 
@@ -210,6 +246,7 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
       status: 'pending'
     };
 
+    // Programado → cola
     if (scheduledAt) {
       const when = new Date(scheduledAt);
       if (isNaN(when.getTime())) {
@@ -221,7 +258,7 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
       return res.json({ ok: true, scheduled: true, queueId: ref.id });
     }
 
-    // Envío inmediato
+    // Inmediato
     let recipients = [];
     if (testOnly) {
       recipients = ['ignacio.solsona@icacs.com', 'laboroteca@gmail.com'];
@@ -251,7 +288,7 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
       return res.status(200).json({ ok: true, sent: 0, note: 'NO_RECIPIENTS' });
     }
 
-    // Envío en chunks
+    // Envío por trozos
     let sent = 0;
     const CHUNK = 80;
     for (let i = 0; i < recipients.length; i += CHUNK) {

@@ -55,47 +55,83 @@ function b64urlToBuf(str){
  *   A) raw tal cual (wp_json_encode)
  *   B) raw con slashes des-escapados (JSON_UNESCAPED_SLASHES)
  */
+function normalizePath(p) {
+  try {
+    p = (p || '/').toString().split('#')[0].split('?')[0];
+    if (p[0] !== '/') p = '/' + p;
+    return p.replace(/\/{2,}/g, '/');
+  } catch { return '/'; }
+}
 function verifyHmac(req) {
   const tsRaw = s(req.headers['x-lb-ts']);
   const sig   = s(req.headers['x-lb-sig']);
-  if (!tsRaw || !sig || !SECRET) return false;
+  if (!tsRaw || !sig || !SECRET) return { ok:false, error:'missing_headers_or_secret' };
 
-  // Ventana temporal
   const tsNum = Number(tsRaw);
+  if (!Number.isFinite(tsNum)) return { ok:false, error:'bad_ts' };
   const tsMs  = tsNum > 1e11 ? tsNum : tsNum * 1000;
-  if (!Number.isFinite(tsNum)) return false;
-  if (Math.abs(Date.now() - tsMs) > HMAC_WINDOW_MS) return false;
+  if (Math.abs(Date.now() - tsMs) > HMAC_WINDOW_MS) return { ok:false, error:'skew' };
 
-  // Debe existir rawBody (capturado en index.js con express.json({ verify }))
-  if (!Buffer.isBuffer(req.rawBody) || req.rawBody.length === 0) return false;
+  if (!Buffer.isBuffer(req.rawBody) || req.rawBody.length === 0) {
+    return { ok:false, error:'no_raw_body' };
+  }
+  const raw      = req.rawBody;
+  const bodyHash = crypto.createHash('sha256').update(raw).digest('hex');
+  const tsSec    = Math.floor(tsMs / 1000);
+  const tsMsStr  = String(Math.floor(tsMs));
+  const tsSecStr = String(tsSec);
 
-  // Candidatos de cuerpo
-  const candidates = [ req.rawBody ];
-  try {
-    const unescaped = Buffer.from(
-      req.rawBody.toString('utf8').replace(/\\\//g, '/'),
-      'utf8'
-    );
-    if (!unescaped.equals(req.rawBody)) candidates.push(unescaped);
-  } catch (_) {}
+  // Posibles paths que pudo firmar WP
+  const paths = Array.from(new Set([
+    normalizePath((req.baseUrl || '') + (req.path || '')),
+    normalizePath((req.originalUrl || '').split('?')[0]),
+    '/marketing/send',
+    '/marketing/send-newsletter',
+    '/send',
+    '/send-newsletter'
+  ].filter(Boolean)));
 
+  // Construimos candidatos:
+  const candidates = [];
+  // v0: ts.rawBody  (segundos y milisegundos)
+  candidates.push({ label:'v0_raw_s',  bin: crypto.createHmac('sha256', SECRET).update(tsSecStr).update('.').update(raw).digest() });
+  candidates.push({ label:'v0_raw_ms', bin: crypto.createHmac('sha256', SECRET).update(tsMsStr ).update('.').update(raw).digest() });
+  // v1: ts.sha256(body)
+  candidates.push({ label:'v1_hash_s',  hex: crypto.createHmac('sha256', SECRET).update(`${tsSecStr}.${bodyHash}`).digest('hex') });
+  candidates.push({ label:'v1_hash_ms', hex: crypto.createHmac('sha256', SECRET).update(`${tsMsStr}.${bodyHash}` ).digest('hex') });
+  // v2: ts.POST.<path>.sha256(body)
+  for (const p of paths) {
+    const baseS  = `${tsSecStr}.POST.${p}.${bodyHash}`;
+    const baseMs = `${tsMsStr}.POST.${p}.${bodyHash}`;
+    candidates.push({ label:`v2_${p}_s`,  hex: crypto.createHmac('sha256', SECRET).update(baseS ).digest('hex') });
+    candidates.push({ label:`v2_${p}_ms`, hex: crypto.createHmac('sha256', SECRET).update(baseMs).digest('hex') });
+  }
+
+  // Comprobamos contra firma en hex o base64/base64url
   const isHex = /^[0-9a-f]{64}$/i.test(sig);
-
-  for (const raw of candidates) {
-    const macBin = crypto.createHmac('sha256', SECRET)
-      .update(String(tsRaw)).update('.').update(raw).digest();
-
-    if (isHex) {
-      const macHex = Buffer.from(macBin.toString('hex'), 'utf8');
-      if (timingEq(Buffer.from(sig, 'utf8'), macHex)) return true;
-    } else {
-      try {
-        const sigBin = b64urlToBuf(sig);
-        if (timingEq(sigBin, macBin)) return true;
-      } catch { /* ignore */ }
+  if (isHex) {
+    const sigHexBuf = Buffer.from(sig, 'utf8');
+    // compara candidatos hex y bin (bin → hex) con timingSafeEqual
+    for (const c of candidates) {
+      const expHex = c.hex || (c.bin && c.bin.toString('hex'));
+      if (!expHex) continue;
+      const expHexBuf = Buffer.from(expHex, 'utf8');
+      if (timingEq(sigHexBuf, expHexBuf)) return { ok:true, variant:c.label, bodyHash };
+    }
+  } else {
+    // base64/base64url → comparar binarios
+    try {
+      const sigBin = b64urlToBuf(sig);
+      for (const c of candidates) {
+        const expBin = c.bin || (c.hex && Buffer.from(c.hex, 'hex'));
+        if (!expBin) continue;
+        if (timingEq(sigBin, expBin)) return { ok:true, variant:c.label, bodyHash };
+      }
+    } catch {
+      return { ok:false, error:'bad_sig_format' };
     }
   }
-  return false;
+  return { ok:false, error:'no_variant_match', bodyHash };
 }
 
 async function sendSMTP2GO({ to, subject, html }) {
@@ -138,21 +174,17 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
       return res.status(415).json({ ok:false, error:'UNSUPPORTED_MEDIA_TYPE' });
     }
 
-    if (!verifyHmac(req)) {
+    const v = verifyHmac(req);
+    if (!v.ok) {
       const tsRaw = String(req.headers['x-lb-ts'] || '');
       const sig   = String(req.headers['x-lb-sig'] || '');
       const hasRaw = Buffer.isBuffer(req.rawBody);
-      let rawHash = 'no-raw', rawUnescHash = '-';
-      try {
-        if (hasRaw) {
-          const c = require('crypto');
-          rawHash = c.createHash('sha256').update(req.rawBody).digest('hex').slice(0,12);
-          rawUnescHash = c.createHash('sha256').update(req.rawBody.toString('utf8').replace(/\\\//g,'/'),'utf8').digest('hex').slice(0,12);
-        }
-      } catch(_) {}
-      console.warn(`${LOG_PREFIX} ⛔ BAD_HMAC · ts=%s · sig=%s… · hasRaw=%s · sha256(raw)=%s · sha256(unesc)=%s`,
-        tsRaw, sig.slice(0,12), hasRaw, rawHash, rawUnescHash);
+      const bodyHash12 = (v.bodyHash || '').slice(0,12);
+      console.warn('[marketing/send] ⛔ BAD_HMAC · ts=%s · sig=%s… · hasRaw=%s · sha256(body)=%s · err=%s',
+        tsRaw, sig.slice(0,12), hasRaw, bodyHash12, v.error);
       return res.status(401).json({ ok: false, error: 'BAD_HMAC' });
+    } else if (process.env.LAB_DEBUG === '1') {
+      console.log('[marketing/send] ✅ HMAC ok (%s) · sha256(body)=%s', v.variant, (v.bodyHash||'').slice(0,12));
     }
 
     // Parseamos el JSON ya que la firma usa raw; express.json lo habrá hidratado

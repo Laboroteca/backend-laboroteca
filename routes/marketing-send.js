@@ -19,6 +19,7 @@
 // - Firestore: registra en emailQueue (si programado) o emailSends (si inmediato)
 // - Respeta suppressionList y segmentación por materias
 // - Usa SMTP2GO API
+// - SIEMPRE añade pie legal + enlace de baja con token único
 // ──────────────────────────────────────────────────────────────
 
 'use strict';
@@ -41,6 +42,11 @@ const HMAC_WINDOW_MS = (Number.isFinite(SKEW_SECS) && SKEW_SECS >= 0 ? SKEW_SECS
 const FROM_EMAIL = process.env.EMAIL_FROM || process.env.SMTP2GO_FROM_EMAIL || 'newsletter@laboroteca.es';
 const FROM_NAME  = process.env.EMAIL_FROM_NAME || process.env.SMTP2GO_FROM_NAME || 'Laboroteca Newsletter';
 const SMTP2GO_API_KEY = String(process.env.SMTP2GO_API_KEY || '').trim();
+const SMTP2GO_API_URL = String(process.env.SMTP2GO_API_URL || 'https://api.smtp2go.com/v3/email/send');
+
+// Baja obligatoria
+const UNSUB_SECRET = String(process.env.MKT_UNSUB_SECRET || 'laboroteca-unsub').trim();
+const UNSUB_PAGE   = String(process.env.MKT_UNSUB_PAGE || 'https://www.laboroteca.es/unsubscribe/').trim();
 
 const LOG_PREFIX = '[marketing/send]';
 const LAB_DEBUG  = process.env.LAB_DEBUG === '1';
@@ -215,7 +221,42 @@ function verifyHmac(req) {
   return { ok:false, error:'no_variant_match', bodyHash:bodyHashRaw };
 }
 
-async function sendSMTP2GO({ to, subject, html }) {
+// ── Baja por token (idéntico a /marketing/consent)
+function makeUnsubToken(email) {
+  const ts = Math.floor(Date.now()/1000);
+  const base = `${String(email||'').toLowerCase()}.${ts}`;
+  const sig  = crypto.createHmac('sha256', UNSUB_SECRET).update(base).digest('hex').slice(0,32);
+  const payload = Buffer.from(base).toString('base64url');
+  return `${payload}.${sig}`;
+}
+
+// Pie legal + bloque de baja (siempre se añade)
+function buildLegalFooter({ email }) {
+  const token = makeUnsubToken(email);
+  const unsubUrl = `${UNSUB_PAGE}${UNSUB_PAGE.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
+
+  const unsubBlock = `
+    <hr style="margin-top:32px;margin-bottom:12px" />
+    <p style="font-size:13px;color:#555;line-height:1.5">
+      Para dejar de recibir esta newsletter, puedes darte de baja desde
+      <a href="${unsubUrl}" target="_blank" rel="noopener">este enlace seguro</a>.
+    </p>
+  `;
+
+  const legalBlock = `
+    <div style="font-size:12px;color:#777;line-height:1.5">
+      En cumplimiento del Reglamento (UE) 2016/679 (RGPD) y la LOPDGDD, le informamos de que su dirección de correo electrónico forma parte de la base de datos de Ignacio Solsona Fernández-Pedrera (DNI 20481042W), con domicilio en calle Enmedio nº 22, 3.º E, 12001 Castellón de la Plana (España).<br /><br />
+      Finalidades: prestación de servicios jurídicos, venta de infoproductos, gestión de entradas a eventos, emisión y envío de facturas por email y, en su caso, envío de newsletter y comunicaciones comerciales si usted lo ha consentido. Base jurídica: ejecución de contrato y/o consentimiento. Puede retirar su consentimiento en cualquier momento.<br /><br />
+      Puede ejercer sus derechos de acceso, rectificación, supresión, portabilidad, limitación y oposición escribiendo a
+      <a href="mailto:laboroteca@gmail.com">laboroteca@gmail.com</a>. También puede presentar una reclamación ante la autoridad de control competente. Más información en nuestra política de privacidad:
+      <a href="https://www.laboroteca.es/politica-de-privacidad/" target="_blank" rel="noopener">https://www.laboroteca.es/politica-de-privacidad/</a>.
+    </div>
+  `;
+
+  return { unsubUrl, html: `${unsubBlock}${legalBlock}` };
+}
+
+async function sendSMTP2GO({ to, subject, html, headers = [] }) {
   if (!SMTP2GO_API_KEY) throw new Error('SMTP2GO_API_KEY missing');
 
   const payload = {
@@ -226,17 +267,37 @@ async function sendSMTP2GO({ to, subject, html }) {
     html_body: html
   };
 
-  const res = await fetch('https://api.smtp2go.com/v3/email/send', {
+  if (headers && headers.length) {
+    payload.custom_headers = headers.map(({ header, value }) => ({ header, value }));
+  }
+
+  const res = await fetch(SMTP2GO_API_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   });
 
   const data = await res.json().catch(() => ({}));
-  if (!res.ok || !(data?.data?.succeeded?.length > 0)) {
-    throw new Error(`SMTP2GO send failed: ${JSON.stringify(data).slice(0,400)}`);
+
+  // SMTP2GO devuelve { data: { succeeded: number|[], failed: number, failures: [], email_id: string } }
+  const failuresLen  = Array.isArray(data?.data?.failures) ? data.data.failures.length : 0;
+  const succeededNum = typeof data?.data?.succeeded === 'number' ? data.data.succeeded : NaN;
+  const succeededArr = Array.isArray(data?.data?.succeeded) ? data.data.succeeded : null;
+  const hasSucceeded = (Number.isFinite(succeededNum) && succeededNum > 0) ||
+                       (Array.isArray(succeededArr) && succeededArr.length > 0);
+  const hasEmailId   = Boolean(data?.data?.email_id);
+
+  if (res.ok && failuresLen === 0 && (hasSucceeded || hasEmailId)) {
+    if (LAB_DEBUG) {
+      console.log('%s 📬 SMTP2GO OK: succeeded=%s email_id=%s',
+        LOG_PREFIX, (Number.isFinite(succeededNum) ? succeededNum : (succeededArr ? succeededArr.length : '-')),
+        data?.data?.email_id || '-'
+      );
+    }
+    return data;
   }
-  return data;
+
+  throw new Error(`SMTP2GO send failed: ${JSON.stringify(data).slice(0,400)}`);
 }
 
 // ───────── Ruta principal ─────────
@@ -297,10 +358,8 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
           res.setHeader('X-Debug-TsS', tsS);
           res.setHeader('X-Debug-TsMS', tsMS);
           res.setHeader('X-Debug-Expected', Object.entries(exp).map(([k,v])=>`${k}=${v}`).join(','));
-
-          console.warn('%s ⛔ BAD_HMAC · ts=%s · sig=%s… · hasRaw=%s · body=%s · exp={ %s } · err=%s',
-            LOG_PREFIX, tsRaw, sig.slice(0,12), hasRaw, (bHash||'').slice(0,12),
-            Object.entries(exp).map(([k,v])=>`${k}:${v}`).join(' '), v.error);
+          console.warn('%s ⛔ BAD_HMAC · ts=%s · sig=%s… · hasRaw=%s · body=%s · err=%s',
+            LOG_PREFIX, tsRaw, sig.slice(0,12), hasRaw, (bHash||'').slice(0,12), v.error);
         } catch(e) {
           console.warn('%s debug calc err: %s', LOG_PREFIX, e?.message || e);
         }
@@ -308,7 +367,6 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
         console.warn('%s ⛔ BAD_HMAC · ts=%s · sig=%s… · hasRaw=%s · sha256(body)=%s · err=%s',
           LOG_PREFIX, tsRaw, sig.slice(0,12), hasRaw, bodyHash12, v.error);
       }
-
       return res.status(401).json({ ok: false, error: 'BAD_HMAC' });
     } else if (LAB_DEBUG) {
       try {
@@ -320,13 +378,13 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
 
     // -------- Validación de payload --------
     const subject = s(req.body?.subject).trim();
-    const html = s(req.body?.html).trim();
+    const htmlBase = s(req.body?.html).trim();
     const scheduledAt = s(req.body?.scheduledAt);
     const materias = (req.body && typeof req.body === 'object' && req.body.materias) ? req.body.materias : {};
     const testOnly = !!req.body?.testOnly;
 
     if (!subject) return res.status(400).json({ ok: false, error: 'SUBJECT_REQUIRED' });
-    if (!html)    return res.status(400).json({ ok: false, error: 'HTML_REQUIRED' });
+    if (!htmlBase) return res.status(400).json({ ok: false, error: 'HTML_REQUIRED' });
 
     // Normaliza materias válidas
     const allowedKeys = ['derechos','cotizaciones','desempleo','bajas_ip','jubilacion','ahorro_privado','otras_prestaciones'];
@@ -343,13 +401,14 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
 
     const job = {
       subject,
-      html,
+      html: htmlBase,            // guardamos el HTML base (el worker añadirá pie+unsub al enviar)
       materias: materiasNorm,
       testOnly,
       createdAt: admin.firestore.Timestamp.fromDate(new Date()),
       createdAtISO: ts,
       status: 'pending',
-      authVariant: 'hmac'
+      authVariant: 'hmac',
+      needsFooter: true          // marca para workers
     };
 
     // Programado → cola
@@ -394,28 +453,36 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
       return res.status(200).json({ ok: true, sent: 0, note: 'NO_RECIPIENTS' });
     }
 
-    // Envío por trozos
+    // Envío INDIVIDUAL para poder personalizar el token de baja por destinatario
     let sent = 0;
-    const CHUNK = 80;
-    for (let i = 0; i < recipients.length; i += CHUNK) {
-      const slice = recipients.slice(i, i + CHUNK);
+    for (const rcpt of recipients) {
       try {
-        await sendSMTP2GO({ to: slice, subject, html });
-        sent += slice.length;
+        const { unsubUrl, html: footerHtml } = buildLegalFooter({ email: rcpt });
+
+        // Header List-Unsubscribe para Gmail/Outlook (mejora deliverability)
+        const headers = [
+          { header: 'List-Unsubscribe',      value: `<${unsubUrl}>` },
+          { header: 'List-Unsubscribe-Post', value: 'List-Unsubscribe=One-Click' }
+        ];
+
+        const finalHtml = `${htmlBase}${footerHtml}`;
+        await sendSMTP2GO({ to: rcpt, subject, html: finalHtml, headers });
+        sent += 1;
       } catch (e) {
-        console.error(`${LOG_PREFIX} ❌ SMTP2GO:`, e?.message || e);
-        try { await alertAdmin({ area:'newsletter_send_fail', err: e, meta:{ subject, testOnly } }); } catch {}
-        return res.status(500).json({ ok: false, error: 'SEND_FAIL' });
+        console.error(`${LOG_PREFIX} ❌ SMTP2GO (${rcpt}):`, e?.message || e);
+        try { await alertAdmin({ area:'newsletter_send_fail', err: e, meta:{ subject, testOnly, rcpt } }); } catch {}
+        // continuamos con el resto
       }
     }
 
     try {
       await db.collection('emailSends').add({
-        subject, html, materias: materiasNorm, testOnly,
+        subject, html: htmlBase, materias: materiasNorm, testOnly,
         recipients, count: sent,
         createdAt: admin.firestore.Timestamp.fromDate(new Date()),
         createdAtISO: ts,
-        authVariant: 'hmac'
+        authVariant: 'hmac',
+        needsFooter: true
       });
     } catch (e) {
       console.warn(`${LOG_PREFIX} ⚠️ log emailSends`, e?.message || e);

@@ -87,8 +87,8 @@ function verifyHmac(req) {
   }
 
   const raw = req.rawBody;
-  theRawStr = raw.toString('utf8');
-  const rawUnesc = Buffer.from(theRawStr.replace(/\\\//g, '/'), 'utf8'); // tolerancia JSON_UNESCAPED_SLASHES
+  const rawStr = raw.toString('utf8');
+  const rawUnesc = Buffer.from(rawStr.replace(/\\\//g, '/'), 'utf8'); // tolerancia JSON_UNESCAPED_SLASHES
   const bodyHashRaw  = crypto.createHash('sha256').update(raw).digest('hex');
   const bodyHashUnes = crypto.createHash('sha256').update(rawUnesc).digest('hex');
 
@@ -101,6 +101,7 @@ function verifyHmac(req) {
     ...withVariants('/send'),
     ...withVariants('/send-newsletter'),
   ]));
+
   const mk = (tsStr, bufOrHex, isBin) =>
     isBin
       ? crypto.createHmac('sha256', SECRET).update(tsStr).update('.').update(bufOrHex).digest()
@@ -238,7 +239,7 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
 
         console.warn('[marketing/send] 🔍 server sha256(body)=%s sha256(unesc)=%s', hex12(hRaw), hex12(hUn));
         for (const [label, pre] of variants) {
-          console.warn('[marketing/send]   cand %-12s -> %s', label, pre);
+          console.warn('[marketing/send]   cand %s -> %s', label, pre);
         }
       } catch (e) {
         console.warn('[marketing/send] (debug variants) error:', e?.message || e);

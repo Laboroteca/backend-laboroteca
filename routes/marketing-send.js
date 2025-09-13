@@ -20,6 +20,9 @@
 // - Respeta suppressionList y segmentación por materias
 // - Usa SMTP2GO API
 // - SIEMPRE añade pie legal + enlace de baja con token único
+// - Idempotencia:
+//     · Programados: dedupe de job por hash de contenido+fecha (docId determinista)
+//     · Inmediatos: dedupe por campaña+destinatario (reserva "create" antes de enviar)
 // ──────────────────────────────────────────────────────────────
 
 'use strict';
@@ -33,12 +36,13 @@ const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 const router = express.Router();
 
 // ───────── CONFIG ─────────
-// Coherente con WP: usa MKT_SEND_HMAC_SECRET (fallback a MKT_SEND_SECRET por compat)
+// Secreto HMAC (coherente con WP)
 const SECRET = String(process.env.MKT_SEND_HMAC_SECRET || process.env.MKT_SEND_SECRET || '').trim();
 // Ventana de tiempo (por defecto 300s). Permite override con LAB_HMAC_SKEW_SECS (en segundos)
 const SKEW_SECS = Number(process.env.LAB_HMAC_SKEW_SECS || 300);
 const HMAC_WINDOW_MS = (Number.isFinite(SKEW_SECS) && SKEW_SECS >= 0 ? SKEW_SECS : 300) * 1000;
 
+// Remitente / SMTP
 const FROM_EMAIL = process.env.EMAIL_FROM || process.env.SMTP2GO_FROM_EMAIL || 'newsletter@laboroteca.es';
 const FROM_NAME  = process.env.EMAIL_FROM_NAME || process.env.SMTP2GO_FROM_NAME || 'Laboroteca Newsletter';
 const SMTP2GO_API_KEY = String(process.env.SMTP2GO_API_KEY || '').trim();
@@ -47,6 +51,9 @@ const SMTP2GO_API_URL = String(process.env.SMTP2GO_API_URL || 'https://api.smtp2
 // Baja obligatoria
 const UNSUB_SECRET = String(process.env.MKT_UNSUB_SECRET || 'laboroteca-unsub').trim();
 const UNSUB_PAGE   = String(process.env.MKT_UNSUB_PAGE || 'https://www.laboroteca.es/unsubscribe/').trim();
+
+// Rate opcional para inmediatos (ms entre emails)
+const SEND_RATE_DELAY_MS = Number(process.env.SEND_RATE_DELAY_MS || 0);
 
 const LOG_PREFIX = '[marketing/send]';
 const LAB_DEBUG  = process.env.LAB_DEBUG === '1';
@@ -58,6 +65,9 @@ const db = admin.firestore();
 // ───────── Helpers ─────────
 const s = v => (v === undefined || v === null) ? '' : String(v);
 const nowISO = () => new Date().toISOString();
+const sleep = (ms)=> new Promise(r=>setTimeout(r, ms));
+const sha256 = (str) => crypto.createHash('sha256').update(String(str||''), 'utf8').digest('hex');
+const sha256Buf = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 
 function timingEq(a, b) {
   try { return a.length === b.length && crypto.timingSafeEqual(a, b); }
@@ -146,8 +156,8 @@ function verifyHmac(req) {
   const binVariants = Array.from(binVariantsSet.values());
 
   // Hashes v1
-  const bodyHashRaw  = crypto.createHash('sha256').update(raw).digest('hex');
-  const bodyHashUnes = crypto.createHash('sha256').update(rawUnesc).digest('hex');
+  const bodyHashRaw  = sha256Buf(raw);
+  const bodyHashUnes = sha256Buf(rawUnesc);
 
   // posibles paths firmables (con/sin slash final, alias)
   const paths = Array.from(new Set([
@@ -221,7 +231,7 @@ function verifyHmac(req) {
   return { ok:false, error:'no_variant_match', bodyHash:bodyHashRaw };
 }
 
-// ── Baja por token (idéntico a /marketing/consent)
+// ── Baja por token
 function makeUnsubToken(email) {
   const ts = Math.floor(Date.now()/1000);
   const base = `${String(email||'').toLowerCase()}.${ts}`;
@@ -331,8 +341,8 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
           const body  = req.rawBody;
           const hHex  = (s) => crypto.createHmac('sha256', SECRET).update(s).digest('hex');
           const hBin  = (tsStr, buf) => crypto.createHmac('sha256', SECRET).update(tsStr).update('.').update(buf).digest('hex');
-          const bHash = crypto.createHash('sha256').update(body).digest('hex');
-          const bHashU= crypto.createHash('sha256').update(body.toString('utf8').replace(/\\\//g,'/')).digest('hex');
+          const bHash = sha256Buf(body);
+          const bHashU= sha256(String(body.toString('utf8').replace(/\\\//g,'/')));
           const path  = (req.originalUrl||req.url||'/').split('?')[0];
           const norm  = (p)=>{ p=String(p).split('#')[0].split('?')[0]; if(p[0]!=='/')p='/'+p; p=p.replace(/\/{2,}/g,'/'); return p.length>1&&p.endsWith('/')?p.slice(0,-1):p; };
           const p1 = norm(path), p2 = p1 === '/' ? '/' : p1 + '/';
@@ -383,7 +393,7 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
     const materias = (req.body && typeof req.body === 'object' && req.body.materias) ? req.body.materias : {};
     const testOnly = !!req.body?.testOnly;
 
-    if (!subject) return res.status(400).json({ ok: false, error: 'SUBJECT_REQUIRED' });
+    if (!subject)  return res.status(400).json({ ok: false, error: 'SUBJECT_REQUIRED' });
     if (!htmlBase) return res.status(400).json({ ok: false, error: 'HTML_REQUIRED' });
 
     // Normaliza materias válidas
@@ -399,31 +409,47 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
       return res.status(400).json({ ok: false, error: 'MATERIAS_REQUIRED' });
     }
 
-    const job = {
-      subject,
-      html: htmlBase,            // guardamos el HTML base (el worker añadirá pie+unsub al enviar)
-      materias: materiasNorm,
-      testOnly,
-      createdAt: admin.firestore.Timestamp.fromDate(new Date()),
-      createdAtISO: ts,
-      status: 'pending',
-      authVariant: 'hmac',
-      needsFooter: true          // marca para workers
-    };
-
-    // Programado → cola
+    // ───────── Programado → cola (job idempotente con docId determinista) ─────────
     if (scheduledAt) {
       const when = new Date(scheduledAt);
       if (isNaN(when.getTime())) {
         return res.status(400).json({ ok:false, error:'SCHEDULED_AT_INVALID' });
       }
-      job.scheduledAt = admin.firestore.Timestamp.fromDate(when);
-      job.scheduledAtISO = when.toISOString();
-      const ref = await db.collection('emailQueue').add(job);
-      return res.json({ ok: true, scheduled: true, queueId: ref.id });
+
+      const jobPayload = {
+        subject,
+        html: htmlBase, // el worker añadirá pie+unsub al enviar
+        materias: materiasNorm,
+        testOnly,
+        createdAt: admin.firestore.Timestamp.fromDate(new Date()),
+        createdAtISO: ts,
+        status: 'pending',
+        authVariant: 'hmac',
+        needsFooter: true,
+        scheduledAt: admin.firestore.Timestamp.fromDate(when),
+        scheduledAtISO: when.toISOString()
+      };
+
+      // Idempotencia de job: docId = sha256(subject|html|materias|testOnly|scheduledAtISO)
+      const jobId = 'job:' + sha256(JSON.stringify({
+        subject,
+        bodyHash: sha256(htmlBase),
+        materias: materiasNorm,
+        testOnly: !!testOnly,
+        scheduledAtISO: jobPayload.scheduledAtISO
+      }));
+
+      const ref = db.collection('emailQueue').doc(jobId);
+      const exists = await ref.get().then(s=>s.exists);
+      if (exists) {
+        return res.json({ ok:true, scheduled:true, queueId: jobId, dedup:true });
+      }
+      await ref.set(jobPayload, { merge: false });
+      return res.json({ ok:true, scheduled:true, queueId: jobId });
     }
 
-    // Inmediato
+    // ───────── Inmediato (idempotente por campaña+destinatario) ─────────
+    // Destinatarios
     let recipients = [];
     if (testOnly) {
       recipients = ['ignacio.solsona@icacs.com', 'laboroteca@gmail.com'];
@@ -453,13 +479,44 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
       return res.status(200).json({ ok: true, sent: 0, note: 'NO_RECIPIENTS' });
     }
 
-    // Envío INDIVIDUAL para poder personalizar el token de baja por destinatario
-    let sent = 0;
-    for (const rcpt of recipients) {
+    // Clave de campaña estable
+    const campaignKey = sha256(JSON.stringify({
+      subject,
+      bodyHash: sha256(htmlBase),
+      materias: materiasNorm,
+      testOnly: !!testOnly,
+      scheduledAt: '' // inmediato
+    }));
+
+    // Envío INDIVIDUAL con dedupe (reserva "create" antes de enviar)
+    let sent = 0, skipped = 0, failed = 0;
+    for (const rcptRaw of recipients) {
+      const rcpt = String(rcptRaw||'').toLowerCase();
+      const dedupId = `immediate:${campaignKey}:${sha256(rcpt)}`;
+      const dedupRef = db.collection('emailSendDedup').doc(dedupId);
+
+      // Reserva atómica: si existe → ya enviado/reservado
+      try {
+        await dedupRef.create({
+          mode: 'immediate',
+          status: 'pending',
+          campaignKey,
+          email: rcpt,
+          subjectHash: sha256(subject),
+          bodyHash: sha256(htmlBase),
+          createdAt: admin.firestore.Timestamp.fromDate(new Date()),
+          createdAtISO: nowISO()
+        });
+      } catch (e) {
+        // ya existe → saltamos
+        skipped++;
+        continue;
+      }
+
       try {
         const { unsubUrl, html: footerHtml } = buildLegalFooter({ email: rcpt });
 
-        // Header List-Unsubscribe para Gmail/Outlook (mejora deliverability)
+        // Header List-Unsubscribe (mejora deliverability)
         const headers = [
           { header: 'List-Unsubscribe',      value: `<${unsubUrl}>` },
           { header: 'List-Unsubscribe-Post', value: 'List-Unsubscribe=One-Click' }
@@ -467,28 +524,39 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
 
         const finalHtml = `${htmlBase}${footerHtml}`;
         await sendSMTP2GO({ to: rcpt, subject, html: finalHtml, headers });
-        sent += 1;
+
+        await dedupRef.set({
+          status: 'sent',
+          sentAt: admin.firestore.Timestamp.fromDate(new Date()),
+          sentAtISO: nowISO()
+        }, { merge: true });
+
+        sent++;
+        if (SEND_RATE_DELAY_MS > 0) await sleep(SEND_RATE_DELAY_MS);
       } catch (e) {
+        failed++;
+        // liberar la reserva para permitir reintento futuro
+        try { await dedupRef.delete(); } catch (_) {}
         console.error(`${LOG_PREFIX} ❌ SMTP2GO (${rcpt}):`, e?.message || e);
         try { await alertAdmin({ area:'newsletter_send_fail', err: e, meta:{ subject, testOnly, rcpt } }); } catch {}
-        // continuamos con el resto
       }
     }
 
     try {
       await db.collection('emailSends').add({
         subject, html: htmlBase, materias: materiasNorm, testOnly,
-        recipients, count: sent,
+        recipients, count: sent, skipped, failed,
         createdAt: admin.firestore.Timestamp.fromDate(new Date()),
         createdAtISO: ts,
         authVariant: 'hmac',
-        needsFooter: true
+        needsFooter: true,
+        campaignKey
       });
     } catch (e) {
       console.warn(`${LOG_PREFIX} ⚠️ log emailSends`, e?.message || e);
     }
 
-    return res.json({ ok: true, sent });
+    return res.json({ ok: true, sent, skipped, failed });
   } catch (e) {
     console.error(`${LOG_PREFIX} ❌ error:`, e?.message || e);
     try { await alertAdmin({ area:'newsletter_send_unexpected', err: e, meta:{} }); } catch {}
@@ -497,3 +565,4 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
 });
 
 module.exports = router;
+

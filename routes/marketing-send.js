@@ -5,7 +5,8 @@
 //
 // Autenticación (dos modos):
 //   1) BRIDGE INTERNO (recomendado para WP):
-//        - Headers: X-Internal-Bridge: 1  y  X-API-Key: <MKT_INTERNAL_BRIDGE_KEY>
+//        - Headers: X-Internal-Bridge: 1  y  X-API-Key: <clave>
+//        - Acepta: process.env.MKT_INTERNAL_BRIDGE_KEY **o** process.env.MKT_BRIDGE_API_KEY
 //        - Si es correcto, se OMITE HMAC.
 //   2) HMAC (retrocompatible):
 //        - Headers: X-Lb-Ts / X-Lb-Sig  (compat: X-Lab-Ts / X-Lab-Sig)
@@ -28,22 +29,23 @@
 'use strict';
 
 const express = require('express');
-const crypto = require('crypto');
-const admin = require('firebase-admin');
-const fetch = require('node-fetch');
+const crypto  = require('crypto');
+const admin   = require('firebase-admin');
+const fetch   = require('node-fetch');
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
 const router = express.Router();
 
 // ───────── CONFIG ─────────
-const SECRET = String(process.env.MKT_SEND_SECRET || '').trim();
-const BRIDGE_KEY = String(process.env.MKT_INTERNAL_BRIDGE_KEY || '').trim(); // <-- clave del puente interno
+const SECRET      = String(process.env.MKT_SEND_SECRET || '').trim();
+const BRIDGE_KEY1 = String(process.env.MKT_INTERNAL_BRIDGE_KEY || '').trim(); // clave interna preferente
+const BRIDGE_KEY2 = String(process.env.MKT_BRIDGE_API_KEY || '').trim();      // alternativa compatible
 const HMAC_WINDOW_MS = 5 * 60 * 1000; // ±5 min
-const FROM_EMAIL = process.env.EMAIL_FROM || 'newsletter@laboroteca.es';
-const FROM_NAME = process.env.EMAIL_FROM_NAME || 'Laboroteca Newsletter';
+const FROM_EMAIL  = process.env.EMAIL_FROM || 'newsletter@laboroteca.es';
+const FROM_NAME   = process.env.EMAIL_FROM_NAME || 'Laboroteca Newsletter';
 const SMTP2GO_API_KEY = String(process.env.SMTP2GO_API_KEY || '').trim();
-const LOG_PREFIX = '[marketing/send]';
-const LAB_DEBUG = process.env.LAB_DEBUG === '1';
+const LOG_PREFIX  = '[marketing/send]';
+const LAB_DEBUG   = process.env.LAB_DEBUG === '1';
 
 // Firebase
 if (!admin.apps.length) { try { admin.initializeApp(); } catch (_) {} }
@@ -74,38 +76,45 @@ function normalizePath(p) {
     return p;
   } catch { return '/'; }
 }
-
 function withVariants(path) {
   const base = normalizePath(path);
   return base === '/' ? ['/'] : [base, base + '/'];
 }
 
-// ¿Viene por el puente interno y con la API key correcta?
+// ¿Viene por el puente interno y con una API key válida?
 function isInternalBridge(req) {
   const flag = String(req.headers['x-internal-bridge'] || '').trim().toLowerCase();
   const apiKey = String(req.headers['x-api-key'] || '').trim();
-  if (!BRIDGE_KEY) return false;
   const flagOk = (flag === '1' || flag === 'true' || flag === 'yes');
-  const keyOk = (apiKey && crypto.timingSafeEqual(Buffer.from(apiKey), Buffer.from(BRIDGE_KEY)));
-  return flagOk && keyOk;
+
+  // Lista de claves aceptadas (permite rotación / compat)
+  const candidates = [BRIDGE_KEY1, BRIDGE_KEY2].filter(Boolean);
+  if (!flagOk || !apiKey || candidates.length === 0) return false;
+
+  const apiBuf = Buffer.from(apiKey);
+  for (const k of candidates) {
+    if (timingEq(apiBuf, Buffer.from(k))) return true;
+  }
+  return false;
 }
 
-// 🔎 Huella del secreto (solo debug; no expone el valor)
+// 🔎 Huella de secretos (solo debug; no expone los valores)
 if (LAB_DEBUG) {
   try {
-    const sh = SECRET ? crypto.createHash('sha256').update(SECRET, 'utf8').digest('hex') : '';
-    const bh = BRIDGE_KEY ? crypto.createHash('sha256').update(BRIDGE_KEY, 'utf8').digest('hex') : '';
-    console.warn('%s 🪪 hmac_secret_len=%d hmac_sha=%s bridge_key_len=%d bridge_sha=%s',
+    const sh  = SECRET     ? crypto.createHash('sha256').update(SECRET, 'utf8').digest('hex')     : '';
+    const bh1 = BRIDGE_KEY1? crypto.createHash('sha256').update(BRIDGE_KEY1,'utf8').digest('hex') : '';
+    const bh2 = BRIDGE_KEY2? crypto.createHash('sha256').update(BRIDGE_KEY2,'utf8').digest('hex') : '';
+    console.warn('%s 🪪 hmac_secret_len=%d hmac_sha=%s bridge1_len=%d bridge1_sha=%s bridge2_len=%d bridge2_sha=%s',
       LOG_PREFIX,
-      SECRET.length, sh ? sh.slice(0,12) : '-',
-      BRIDGE_KEY.length, bh ? bh.slice(0,12) : '-'
+      SECRET.length,  sh  ? sh.slice(0,12)  : '-',
+      BRIDGE_KEY1.length, bh1 ? bh1.slice(0,12) : '-',
+      BRIDGE_KEY2.length, bh2 ? bh2.slice(0,12) : '-'
     );
   } catch (_) {}
 }
 
 /**
  * Verifica HMAC aceptando variantes v0/v1/v1u/v2.
- * (idéntico a tu verifyHmac robusto anterior)
  */
 function verifyHmac(req) {
   const tsRaw = s(
@@ -132,14 +141,13 @@ function verifyHmac(req) {
 
   const raw = req.rawBody;
   const rawStr = raw.toString('utf8');
-  const rawUnesc = Buffer.from(rawStr.replace(/\\\//g, '/'), 'utf8'); // tolerancia JSON_UNESCAPED_SLASHES
+  const rawUnesc = Buffer.from(rawStr.replace(/\\\//g, '/'), 'utf8'); // tolera JSON_UNESCAPED_SLASHES
 
-  // Helpers de variantes binarias
+  // Variantes binarias
   const withBOM = buf => Buffer.concat([Buffer.from([0xEF,0xBB,0xBF]), buf]);
   const withoutBOM = buf => (buf[0]===0xEF && buf[1]===0xBB && buf[2]===0xBF) ? buf.slice(3) : buf;
   const dropTail = (buf, byte) => (buf.length && buf[buf.length-1]===byte) ? buf.slice(0, -1) : buf;
 
-  // Candidatos de cuerpo binario a probar en v0/v0u
   const binVariantsSet = new Map();
   const pushVar = b => { const k = b.toString('hex'); if (!binVariantsSet.has(k)) binVariantsSet.set(k, b); };
 
@@ -148,8 +156,8 @@ function verifyHmac(req) {
     pushVar(base);
     pushVar(Buffer.concat([base, Buffer.from('\n')]));
     pushVar(Buffer.concat([base, Buffer.from('\r\n')]));
-    pushVar(dropTail(base, 0x0A)); // sin \n
-    pushVar(dropTail(base, 0x0D)); // sin \r
+    pushVar(dropTail(base, 0x0A));
+    pushVar(dropTail(base, 0x0D));
     pushVar(withoutBOM(base));
     pushVar(withBOM(base));
   }
@@ -159,7 +167,7 @@ function verifyHmac(req) {
   const bodyHashRaw  = crypto.createHash('sha256').update(raw).digest('hex');
   const bodyHashUnes = crypto.createHash('sha256').update(rawUnesc).digest('hex');
 
-  // posibles paths que puede firmar el emisor (con/sin slash final)
+  // posibles paths firmables
   const paths = Array.from(new Set([
     ...withVariants((req.baseUrl || '') + (req.path || '')),
     ...withVariants((req.originalUrl || '').split('?')[0]),
@@ -180,18 +188,15 @@ function verifyHmac(req) {
     candidates.push({ label:'v0_raw_s',  bin: mk(tsSecStr, b, true) });
     candidates.push({ label:'v0_raw_ms', bin: mk(tsMsStr,  b, true) });
   }
-
   // v1
   candidates.push({ label:'v1_hash_s',  hex: mk(tsSecStr, bodyHashRaw, false) });
   candidates.push({ label:'v1_hash_ms', hex: mk(tsMsStr,  bodyHashRaw, false) });
   // v1u
   candidates.push({ label:'v1u_hash_s',  hex: mk(tsSecStr, bodyHashUnes, false) });
   candidates.push({ label:'v1u_hash_ms', hex: mk(tsMsStr,  bodyHashUnes, false) });
-
   // v2
   for (const p of paths) {
     const np = normalizePath(p);
-
     const baseS  = `${tsSecStr}.POST.${np}.${bodyHashRaw}`;
     const baseMs = `${tsMsStr}.POST.${np}.${bodyHashRaw}`;
     candidates.push({ label:`v2_${np}_s`,  hex: crypto.createHmac('sha256', SECRET).update(baseS ).digest('hex') });
@@ -203,7 +208,7 @@ function verifyHmac(req) {
     candidates.push({ label:`v2u_${np}_ms`, hex: crypto.createHmac('sha256', SECRET).update(baseMs2).digest('hex') });
   }
 
-  // Comparación segura
+  // Comparación
   const isHex = /^[0-9a-f]{64}$/i.test(sig);
   if (isHex) {
     try {
@@ -214,7 +219,7 @@ function verifyHmac(req) {
           return { ok:true, variant:c.label, bodyHash:bodyHashRaw };
         }
       }
-    } catch { /* probaremos base64url */ }
+    } catch {}
   }
   try {
     const sigBin = b64urlToBuf(sig);
@@ -353,9 +358,8 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
     const testOnly = !!req.body?.testOnly;
 
     if (!subject) return res.status(400).json({ ok: false, error: 'SUBJECT_REQUIRED' });
-    if (!html) return res.status(400).json({ ok: false, error: 'HTML_REQUIRED' });
+    if (!html)    return res.status(400).json({ ok: false, error: 'HTML_REQUIRED' });
 
-    // Normaliza materias válidas
     const allowedKeys = ['derechos','cotizaciones','desempleo','bajas_ip','jubilacion','ahorro_privado','otras_prestaciones'];
     const materiasNorm = {};
     let anyMateria = false;
@@ -376,7 +380,7 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
       createdAt: admin.firestore.Timestamp.fromDate(new Date()),
       createdAtISO: ts,
       status: 'pending',
-      authVariant // bridge | hmac
+      authVariant // 'bridge' | 'hmac'
     };
 
     // Programado → cola

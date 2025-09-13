@@ -2,10 +2,22 @@
 // ──────────────────────────────────────────────────────────────
 // Endpoint seguro para enviar / programar newsletters.
 // POST /marketing/send  (alias: /marketing/send-newsletter)
-//   Headers: x-lb-ts, x-lb-sig  (HMAC sha256 con MKT_SEND_SECRET)
-//   Body: { subject, html, materias:{...}, scheduledAt?, testOnly? }
 //
-// - testOnly: fuerza envío solo a lista restringida (Ignacio + Laboroteca)
+// Headers (HMAC con MKT_SEND_SECRET):
+//   - X-Lb-Ts / X-Lb-Sig      ← recomendado
+//   - (compat) X-Lab-Ts / X-Lab-Sig
+//   - (opcional) X-Request-Id para anti-replay (se gestiona fuera)
+//
+// Firmas aceptadas (retrocompatible):
+//   v0 : HMAC(ts + "." + rawBody)                 (binario; hex/base64url)
+//   v1 : HMAC(ts + "." + sha256(body))            (hex/base64url)
+//   v1u: HMAC(ts + "." + sha256(body_unescaped))  (tolerancia \/ ↔ /)
+//   v2 : HMAC(ts + ".POST." + path + "." + sha256(body))  (con/sin slash final)
+//
+// Body JSON:
+//   { subject, html, materias:{...}, scheduledAt?, testOnly? }
+//
+// - testOnly: envío solo a la lista restringida
 // - scheduledAt vacío = envío inmediato
 // - Firestore: registra en emailQueue (si programado) o emailSends (si inmediato)
 // - Respeta suppressionList y segmentación por materias
@@ -88,14 +100,14 @@ if (LAB_DEBUG) {
  *      - con BOM inicial añadido (raro, pero inocuo)
  */
 function verifyHmac(req) {
- const tsRaw = s(
-   req.headers['x-lb-ts']  || req.headers['x_lb_ts']  ||
-   req.headers['x-lab-ts'] || req.headers['x_lab_ts']
- );
- const sig = s(
-   req.headers['x-lb-sig']  || req.headers['x_lb_sig']  ||
-   req.headers['x-lab-sig'] || req.headers['x_lab_sig']
- );
+  const tsRaw = s(
+    req.headers['x-lb-ts']  || req.headers['x_lb_ts']  ||
+    req.headers['x-lab-ts'] || req.headers['x_lab_ts']
+  );
+  const sig = s(
+    req.headers['x-lb-sig']  || req.headers['x_lb_sig']  ||
+    req.headers['x-lab-sig'] || req.headers['x_lab_sig']
+  );
   if (!tsRaw || !sig || !SECRET) return { ok:false, error:'missing_headers_or_secret' };
 
   const tsNum = Number(tsRaw);
@@ -255,15 +267,15 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
 
     const v = verifyHmac(req);
     if (!v.ok) {
-      const tsRaw = String(req.headers['x-lb-ts'] || '');
-      const sig   = String(req.headers['x-lb-sig'] || '');
+      const tsRaw = String(req.headers['x-lb-ts'] || req.headers['x-lab-ts'] || '');
+      const sig   = String(req.headers['x-lb-sig'] || req.headers['x-lab-sig'] || '');
       const hasRaw = Buffer.isBuffer(req.rawBody);
       const bodyHash12 = (v.bodyHash || '').slice(0,12);
       console.warn('[marketing/send] ⛔ BAD_HMAC · ts=%s · sig=%s… · hasRaw=%s · sha256(body)=%s · err=%s',
         tsRaw, sig.slice(0,12), hasRaw, bodyHash12, v.error);
       return res.status(401).json({ ok: false, error: 'BAD_HMAC' });
     } else if (LAB_DEBUG) {
-      try { 
+      try {
         res.setHeader('X-HMAC-Variant', v.variant);
         res.setHeader('X-Body-SHA256', (v.bodyHash||'').slice(0,64));
       } catch {}

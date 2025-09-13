@@ -87,8 +87,8 @@ function verifyHmac(req) {
   }
 
   const raw = req.rawBody;
-  const rawStr = raw.toString('utf8');
-  const rawUnesc = Buffer.from(rawStr.replace(/\\\//g, '/'), 'utf8'); // tolerancia JSON_UNESCAPED_SLASHES
+  theRawStr = raw.toString('utf8');
+  const rawUnesc = Buffer.from(theRawStr.replace(/\\\//g, '/'), 'utf8'); // tolerancia JSON_UNESCAPED_SLASHES
   const bodyHashRaw  = crypto.createHash('sha256').update(raw).digest('hex');
   const bodyHashUnes = crypto.createHash('sha256').update(rawUnesc).digest('hex');
 
@@ -101,7 +101,6 @@ function verifyHmac(req) {
     ...withVariants('/send'),
     ...withVariants('/send-newsletter'),
   ]));
-
   const mk = (tsStr, bufOrHex, isBin) =>
     isBin
       ? crypto.createHmac('sha256', SECRET).update(tsStr).update('.').update(bufOrHex).digest()
@@ -208,6 +207,43 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
       const bodyHash12 = (v.bodyHash || '').slice(0,12);
       console.warn('[marketing/send] ⛔ BAD_HMAC · ts=%s · sig=%s… · hasRaw=%s · sha256(body)=%s · err=%s',
         tsRaw, sig.slice(0,12), hasRaw, bodyHash12, v.error);
+
+      // 🔎 Dump de candidatos (12 chars) para aislar divergencias de firma
+      try {
+        const cryptoDbg = require('crypto');
+        const SECRET_DBG = String(process.env.MKT_SEND_SECRET || '').trim();
+        const raw    = req.rawBody || Buffer.from('', 'utf8');
+        const rawStr = raw.toString('utf8');
+        const rawUn  = Buffer.from(rawStr.replace(/\\\//g, '/'), 'utf8');
+        const hRaw   = cryptoDbg.createHash('sha256').update(raw).digest('hex');
+        const hUn    = cryptoDbg.createHash('sha256').update(rawUn).digest('hex');
+        const tsMs   = Number(tsRaw) > 1e11 ? String(Math.floor(Number(tsRaw))) : String(Number(tsRaw) * 1000);
+        const tsSec  = String(Math.floor(Number(tsMs) / 1000));
+        const hex12  = h => (h||'').slice(0,12);
+
+        const variants = [];
+        const hmacHex  = (s) => cryptoDbg.createHmac('sha256', SECRET_DBG).update(s).digest('hex');
+        // v1 / v1u
+        variants.push(['v1_hash_s',  hex12(hmacHex(`${tsSec}.${hRaw}`))]);
+        variants.push(['v1_hash_ms', hex12(hmacHex(`${tsMs}.${hRaw}`))]);
+        variants.push(['v1u_hash_s', hex12(hmacHex(`${tsSec}.${hUn}`))]);
+        variants.push(['v1u_hash_ms',hex12(hmacHex(`${tsMs}.${hUn}`))]);
+
+        // v0 / v0u (hex de la versión binaria para comparación rápida)
+        const hmacBin = (t, buf) => cryptoDbg.createHmac('sha256', SECRET_DBG).update(t).update('.').update(buf).digest('hex');
+        variants.push(['v0_raw_s',  hex12(hmacBin(tsSec, raw))]);
+        variants.push(['v0_raw_ms', hex12(hmacBin(tsMs,  raw))]);
+        variants.push(['v0u_raw_s', hex12(hmacBin(tsSec, rawUn))]);
+        variants.push(['v0u_raw_ms',hex12(hmacBin(tsMs,  rawUn))]);
+
+        console.warn('[marketing/send] 🔍 server sha256(body)=%s sha256(unesc)=%s', hex12(hRaw), hex12(hUn));
+        for (const [label, pre] of variants) {
+          console.warn('[marketing/send]   cand %-12s -> %s', label, pre);
+        }
+      } catch (e) {
+        console.warn('[marketing/send] (debug variants) error:', e?.message || e);
+      }
+
       return res.status(401).json({ ok: false, error: 'BAD_HMAC' });
     } else if (LAB_DEBUG) {
       try { res.setHeader('X-HMAC-Variant', v.variant); } catch {}

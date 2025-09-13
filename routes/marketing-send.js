@@ -78,7 +78,7 @@ function withVariants(path) {
 if (LAB_DEBUG) {
   try {
     const sh = crypto.createHash('sha256').update(SECRET, 'utf8').digest('hex');
-    console.warn('[marketing/send] 🪪 secret_len=%d sec_sha256=%s', SECRET.length, sh.slice(0,12));
+    console.warn('%s 🪪 secret_len=%d sec_sha256=%s', LOG_PREFIX, SECRET.length, sh.slice(0,12));
   } catch (_) {}
 }
 
@@ -271,15 +271,63 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
       const sig   = String(req.headers['x-lb-sig'] || req.headers['x-lab-sig'] || '');
       const hasRaw = Buffer.isBuffer(req.rawBody);
       const bodyHash12 = (v.bodyHash || '').slice(0,12);
-      console.warn('[marketing/send] ⛔ BAD_HMAC · ts=%s · sig=%s… · hasRaw=%s · sha256(body)=%s · err=%s',
-        tsRaw, sig.slice(0,12), hasRaw, bodyHash12, v.error);
+
+      // 🔍 DEBUG FUERTE (LAB_DEBUG): calcula y expone prefijos de firmas esperadas
+      if (LAB_DEBUG && hasRaw && SECRET) {
+        try {
+          const tsNum = Number(tsRaw);
+          const tsMs  = Number.isFinite(tsNum) ? (tsNum > 1e11 ? tsNum : tsNum*1000) : Date.now();
+          const tsS   = String(Math.floor(tsMs/1000));
+          const tsMS  = String(Math.floor(tsMs));
+          const body  = req.rawBody;
+          const hHex  = (s) => crypto.createHmac('sha256', SECRET).update(s).digest('hex');
+          const hBin  = (tsStr, buf) => crypto.createHmac('sha256', SECRET).update(tsStr).update('.').update(buf).digest('hex');
+          const bHash = crypto.createHash('sha256').update(body).digest('hex');
+          const bHashU= crypto.createHash('sha256').update(body.toString('utf8').replace(/\\\//g,'/')).digest('hex');
+          const path  = (req.originalUrl||req.url||'/').split('?')[0];
+          const norm  = (p)=>{ p=String(p).split('#')[0].split('?')[0]; if(p[0]!=='/')p='/'+p; p=p.replace(/\/{2,}/g,'/'); return p.length>1&&p.endsWith('/')?p.slice(0,-1):p; };
+          const p1 = norm(path), p2 = p1 === '/' ? '/' : p1 + '/';
+
+          const exp = {
+            v0_s   : hBin(tsS,  body).slice(0,12),
+            v0_ms  : hBin(tsMS, body).slice(0,12),
+            v1_s   : hHex(`${tsS}.${bHash}`).slice(0,12),
+            v1_ms  : hHex(`${tsMS}.${bHash}`).slice(0,12),
+            v1u_s  : hHex(`${tsS}.${bHashU}`).slice(0,12),
+            v1u_ms : hHex(`${tsMS}.${bHashU}`).slice(0,12),
+            v2_s   : hHex(`${tsS}.POST.${p1}.${bHash}`).slice(0,12),
+            v2_ms  : hHex(`${tsMS}.POST.${p1}.${bHash}`).slice(0,12),
+            v2s_s  : hHex(`${tsS}.POST.${p2}.${bHash}`).slice(0,12),
+            v2s_ms : hHex(`${tsMS}.POST.${p2}.${bHash}`).slice(0,12),
+            v2u_s  : hHex(`${tsS}.POST.${p1}.${bHashU}`).slice(0,12),
+            v2u_ms : hHex(`${tsMS}.POST.${p1}.${bHashU}`).slice(0,12),
+            v2us_s : hHex(`${tsS}.POST.${p2}.${bHashU}`).slice(0,12),
+            v2us_ms: hHex(`${tsMS}.POST.${p2}.${bHashU}`).slice(0,12),
+          };
+
+          res.setHeader('X-Debug-BodySHA', (bHash||'').slice(0,64));
+          res.setHeader('X-Debug-TsS', tsS);
+          res.setHeader('X-Debug-TsMS', tsMS);
+          res.setHeader('X-Debug-Expected', Object.entries(exp).map(([k,v])=>`${k}=${v}`).join(','));
+
+          console.warn('%s ⛔ BAD_HMAC · ts=%s · sig=%s… · hasRaw=%s · body=%s · exp={ %s } · err=%s',
+            LOG_PREFIX, tsRaw, sig.slice(0,12), hasRaw, (bHash||'').slice(0,12),
+            Object.entries(exp).map(([k,v])=>`${k}:${v}`).join(' '), v.error);
+        } catch(e) {
+          console.warn('%s debug calc err: %s', LOG_PREFIX, e?.message || e);
+        }
+      } else {
+        console.warn('%s ⛔ BAD_HMAC · ts=%s · sig=%s… · hasRaw=%s · sha256(body)=%s · err=%s',
+          LOG_PREFIX, tsRaw, sig.slice(0,12), hasRaw, bodyHash12, v.error);
+      }
+
       return res.status(401).json({ ok: false, error: 'BAD_HMAC' });
     } else if (LAB_DEBUG) {
       try {
         res.setHeader('X-HMAC-Variant', v.variant);
         res.setHeader('X-Body-SHA256', (v.bodyHash||'').slice(0,64));
       } catch {}
-      console.log('[marketing/send] ✅ HMAC ok (%s) · sha256(body)=%s', v.variant, (v.bodyHash||'').slice(0,12));
+      console.log('%s ✅ HMAC ok (%s) · sha256(body)=%s', LOG_PREFIX, v.variant, (v.bodyHash||'').slice(0,12));
     }
 
     const subject = s(req.body?.subject).trim();

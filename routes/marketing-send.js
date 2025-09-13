@@ -88,8 +88,14 @@ if (LAB_DEBUG) {
  *      - con BOM inicial añadido (raro, pero inocuo)
  */
 function verifyHmac(req) {
-  const tsRaw = s(req.headers['x-lb-ts']);
-  const sig   = s(req.headers['x-lb-sig']);
+ const tsRaw = s(
+   req.headers['x-lb-ts']  || req.headers['x_lb_ts']  ||
+   req.headers['x-lab-ts'] || req.headers['x_lab_ts']
+ );
+ const sig = s(
+   req.headers['x-lb-sig']  || req.headers['x_lb_sig']  ||
+   req.headers['x-lab-sig'] || req.headers['x_lab_sig']
+ );
   if (!tsRaw || !sig || !SECRET) return { ok:false, error:'missing_headers_or_secret' };
 
   const tsNum = Number(tsRaw);

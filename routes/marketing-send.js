@@ -43,6 +43,7 @@ const SMTP2GO_API_KEY = String(process.env.SMTP2GO_API_KEY || '').trim();
 const LOG_PREFIX = '[marketing/send]';
 const LAB_DEBUG = process.env.LAB_DEBUG === '1';
 
+// Firebase
 if (!admin.apps.length) { try { admin.initializeApp(); } catch (_) {} }
 const db = admin.firestore();
 
@@ -54,11 +55,13 @@ function timingEq(a, b) {
   try { return a.length === b.length && crypto.timingSafeEqual(a, b); }
   catch { return false; }
 }
-function b64urlToBuf(str){
+
+function b64urlToBuf(str) {
   const ss = String(str).replace(/-/g,'+').replace(/_/g,'/');
   const pad = ss.length % 4 ? '='.repeat(4 - (ss.length % 4)) : '';
   return Buffer.from(ss + pad, 'base64');
 }
+
 // normaliza path, quita query/hash y barra final (salvo raíz)
 function normalizePath(p) {
   try {
@@ -69,6 +72,7 @@ function normalizePath(p) {
     return p;
   } catch { return '/'; }
 }
+
 function withVariants(path) {
   const base = normalizePath(path);
   return base === '/' ? ['/'] : [base, base + '/'];

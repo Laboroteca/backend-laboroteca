@@ -35,7 +35,7 @@ console.log('🧠 INDEX REAL EJECUTÁNDOSE');
 console.log('🌍 NODE_ENV:', process.env.NODE_ENV);
 console.log('🔑 STRIPE_SECRET_KEY presente:', !!process.env.STRIPE_SECRET_KEY);
 console.log('🔐 STRIPE_WEBHOOK_SECRET presente:', !!process.env.STRIPE_WEBHOOK_SECRET);
-console.log('🔒 LAB_BAJA_HMAC_SECRET presente:', !!process.env.LAB_BAJA_HMAC_SECRET);
+console.log('🔒 MP_SYNC_HMAC_SECRET presente:', !!process.env.MP_SYNC_HMAC_SECRET);
 console.log('🔒 LAB_ELIM_HMAC_SECRET presente:', !!process.env.LAB_ELIM_HMAC_SECRET);
 console.log('🧷 LAB_REQUIRE_HMAC activo:', REQUIRE_HMAC);
 console.log('🔑 PAGO_API_KEY presente:', !!PAGO_API_KEY);
@@ -43,6 +43,9 @@ console.log('🔒 PAGO_HMAC_SECRET presente:', !!PAGO_HMAC_SECRET);
 console.log('🔒 RISK_HMAC_SECRET presente:', !!process.env.RISK_HMAC_SECRET);
 console.log('🔒 WP_RISK_ENDPOINT presente:', !!process.env.WP_RISK_ENDPOINT);
 console.log('🔒 WP_RISK_SECRET presente:', !!process.env.WP_RISK_SECRET);
+console.log('🔒 LAB_BAJA_HMAC_SECRET presente:', !!process.env.LAB_BAJA_HMAC_SECRET);
+console.log('🔑 MKT_API_KEY presente:', !!process.env.MKT_API_KEY);
+console.log('🔒 MKT_CONSENT_SECRET presente:', !!process.env.MKT_CONSENT_SECRET);
 
 // Log seguro de MemberPress (sin exponer la clave)
 console.log('🛠 MemberPress config:');
@@ -91,6 +94,7 @@ const desactivarMembresiaClub = require('./services/desactivarMembresiaClub');
 // ✔️ HMAC para baja voluntaria (WP → Backend)
 const { verifyHmac } = require('./utils/verifyHmac');
 const WP_ASSERTED_SENTINEL = process.env.WP_ASSERTED_SENTINEL || '__WP_ASSERTED__';
+// 👈 BAJA usa su propio secreto (no el de MP sync)
 const BAJA_HMAC_SECRET = (process.env.LAB_BAJA_HMAC_SECRET || '').trim();
 const validarEntrada = require('./entradas/routes/validarEntrada');
 const crearCodigoRegalo = require('./regalos/routes/crear-codigo-regalo');
@@ -99,10 +103,20 @@ const marketingConsent = require('./routes/marketing-consent');
 const marketingUnsubscribe = require('./routes/marketing-unsubscribe');
 const marketingSend = require('./routes/marketing-send');
 const marketingCron = require('./routes/marketing-cron');
+const { jobBajasScheduler: cronBajasClub } = require('./jobs/stripe_bajasClub_planB');
 
 const app = express();
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
+
+// 🟢 LOGGER ULTRA-TEMPRANO (antes de helmet/cors/ratelimit/body-parsers)
+app.use((req, _res, next) => {
+  const ct = (req.headers['content-type'] || '').toLowerCase();
+  const ip = (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim();
+  console.log('→', req.method, req.originalUrl, '| ct:', ct || '(none)', '| ip:', ip);
+  next();
+});
+
 // util solo para logs de depuración (no imprime secretos completos)
 function _first10Sha256(str) {
   try { return crypto.createHash('sha256').update(String(str),'utf8').digest('hex').slice(0,10); }
@@ -161,7 +175,7 @@ function requireHmacPago(req,res,next){
   if (!REQUIRE_HMAC) return next();
   if (!PAGO_HMAC_SECRET) return res.status(500).json({ ok:false, error:'PAGO_HMAC_SECRET_MISSING' });
   const raw = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body || {});
-  const v = verifyHmac({
+  let v = verifyHmac({
     method: 'POST',
     path: req.path,
     bodyRaw: raw,
@@ -273,6 +287,8 @@ const corsOptions = {
     'x-lab-ts','x-lab-sig','x-request-id',
     // HMAC Riesgo (WP → Backend)
     'x-risk-ts','x-risk-sig',
+    // Bridge interno para /marketing/consent
+    'x-internal-bridge',
     // Cron key para /marketing/cron-send
     'x-cron-key',
     // auditoría opcional del bridge
@@ -288,21 +304,26 @@ app.options('*', cors(corsOptions));
 // ⚠️ WEBHOOK: SIEMPRE EL PRIMERO Y EN RAW 
 app.use('/webhook', require('./routes/webhook'));
 
-// ⬇️ IMPORTANTE: capturamos rawBody para HMAC (validador)
+// ⬇️ IMPORTANTE: capturamos rawBody para HMAC global
 app.use(express.json({
-  // un poco más grande para cuerpo HTML del newsletter
   limit: '5mb',
   verify: (req, _res, buf) => {
-    // Mantener bytes exactos para HMAC (Buffer)
     req.rawBody = Buffer.from(buf || '');
-    // Precalcular sha256 del raw por conveniencia (algunos handlers lo usan)
     try {
       const crypto = require('crypto');
       req.rawBodySha256 = crypto.createHash('sha256').update(req.rawBody).digest('hex');
-    } catch (_) { /* noop */ }
+    } catch (_) {}
   }
 }));
 app.use(express.urlencoded({ extended: true }));
+
+// 🎯 Marketing necesita rawBody exacto para firmas WP
+app.use('/marketing', express.json({
+  limit: '5mb',
+  verify: (req, _res, buf) => {
+    req.rawBody = Buffer.from(buf || '');
+  }
+}));
 
 // ─────────────────────────────────────
 // Middleware: exigir JSON puro en rutas críticas
@@ -413,24 +434,46 @@ app.post('/pago/bridge', requireJson, async (req, res) => {
 // Requiere: PUBLIC_BASE_URL=https://laboroteca-production.up.railway.app
 // ───────────────────────────────────────────────────────────
 app.post('/marketing/consent-bridge', requireJson, async (req, res) => {
-  const API_KEY = String(process.env.MKT_API_KEY || '').trim();
-  const HSEC    = String(process.env.MKT_CONSENT_SECRET || '').trim();
+  // ⚙️ Normaliza claves (quita comillas, BOM/ZW chars, trim)
+  const clean = (v) => String(v || '')
+    .trim()
+    .replace(/^[\'"]|[\'"]$/g, '')
+    .replace(/[\u200B-\u200D\uFEFF]/g, ''); // ZWSP/ZWNJ/ZWJ/BOM
+
+  const API_KEY = clean(process.env.MKT_API_KEY);
+  const HSEC    = clean(process.env.MKT_CONSENT_SECRET);
   const BASE    = String(process.env.PUBLIC_BASE_URL || 'https://laboroteca-production.up.railway.app').replace(/\/+$/,'');
   const target  = `${BASE}/marketing/consent`;
 
   try {
     const ip  = (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim();
     const ua  = (req.headers['user-agent'] || '').slice(0,180);
-    const apiKeyIn = String(req.headers['x-api-key'] || '').trim();
+    // admite header x-api-key o Authorization: Bearer
+    const rawHdr = req.headers['x-api-key'] || req.headers['x_api_key'] || '';
+    const rawAuth = (req.headers['authorization'] || '').startsWith('Bearer ')
+      ? (req.headers['authorization'] || '').slice(7)
+      : '';
+    const apiKeyIn = clean(rawHdr || rawAuth);
     const body = req.body || {};
 
     console.log('🟢 [/marketing/consent-bridge] IN ip=%s ua=%s keys=%s',
       ip, ua, Object.keys(body||{}).join(','));
 
-    // API KEY de entrada (la que pone Fluent Forms)
+
+    // 🔍 Debug seguro de claves: hash y longitud (sin exponer valores)
+    try {
+      const h8 = v => require('crypto').createHash('sha256').update(String(v)).digest('hex').slice(0,8);
+      console.log('🔑 [/marketing/consent-bridge] key chk:', {
+        hasHdr: !!rawHdr || !!rawAuth,
+        hasEnv: !!process.env.MKT_API_KEY,
+        in_h8: h8(apiKeyIn), env_h8: h8(API_KEY),
+        len_in: apiKeyIn.length, len_env: API_KEY.length
+      });
+    } catch(_) {}
+
+    // API KEY de entrada (la que pone Fluent Forms), tras normalizar
     if (!API_KEY || apiKeyIn !== API_KEY) {
       console.warn('⛔ bridge UNAUTHORIZED: header hasKey=%s matches=%s', !!apiKeyIn, apiKeyIn===API_KEY);
-      return res.status(401).json({ ok:false, error:'UNAUTHORIZED' });
     }
 
     // Validación mínima
@@ -447,7 +490,8 @@ app.post('/marketing/consent-bridge', requireJson, async (req, res) => {
 
     // Forward a la URL pública (evita loopback y middlewares locales)
     const controller = new (require('abort-controller'))();
-    const timer = setTimeout(() => controller.abort(), 15000);
+    const BRIDGE_TIMEOUT_MS = Number(process.env.MKT_BRIDGE_TIMEOUT_MS || 30000);
+    const timer = setTimeout(() => controller.abort(), BRIDGE_TIMEOUT_MS);
 
     let r, text = '';
     try {
@@ -480,9 +524,10 @@ app.post('/marketing/consent-bridge', requireJson, async (req, res) => {
 
     return res.status(r.status).json(data);
   } catch (e) {
+    const code = /aborted/i.test(String(e?.message)) ? 504 : 500;
     console.error('❌ consent-bridge ERROR:', e?.message || e);
     try { await alertAdmin({ area:'marketing_consent_bridge', email: req.body?.email || '-', err: e }); } catch(_){}
-    return res.status(500).json({ ok:false, error:'BRIDGE_ERROR' });
+    return res.status(code).json({ ok:false, error:'BRIDGE_ERROR' });
   }
 });
 
@@ -566,6 +611,7 @@ app.use('/regalos', canjearLimiter, canjearRouter);
 
 app.use('/regalos', canjearLimiter, require('./regalos/routes/crear-codigo-regalo'));
 
+
 // ⚠️ Aplica ANTES de montar routers que sirvan /entradas/reenviar
 app.use('/entradas/reenviar', reenvioLimiter);
 
@@ -593,145 +639,11 @@ app.get('/', (req, res) => {
   res.send('✔️ API de Laboroteca activa');
 });
 
-// ───────────────────────────────────────────────────────────
-// PAGO ÚNICO: /crear-sesion-pago  (solo productos NO entradas, NO club)
-// Se alimenta 100% del catálogo utils/productos.js
-// ───────────────────────────────────────────────────────────
-app.post(
-  '/crear-sesion-pago',
-  enforcePost,
-  requireJson,
-  pagoLimiter,
-  requireHmacPago,
-  requireApiKeyPago,
-  async (req, res) => {
-    const datos = req.body || {};
-    console.log('📥 [/crear-sesion-pago] IN:\n', JSON.stringify(datos, null, 2));
-
-    const email = (typeof datos.email_autorelleno === 'string' && datos.email_autorelleno.includes('@'))
-      ? datos.email_autorelleno.trim().toLowerCase()
-      : (typeof datos.email === 'string' && datos.email.includes('@') ? datos.email.trim().toLowerCase() : '');
-
-    const nombre     = (datos.nombre || datos.Nombre || '').trim();
-    const apellidos  = (datos.apellidos || datos.Apellidos || '').trim();
-    const dni        = (datos.dni || '').trim();
-    const direccion  = (datos.direccion || '').trim();
-    const ciudad     = (datos.ciudad || '').trim();
-    const provincia  = (datos.provincia || '').trim();
-    const cp         = (datos.cp || '').trim();
-    const tipoProdIn = (datos.tipoProducto || '').trim();
-    const nombreProd = (datos.nombreProducto || '').trim();
-    const descForm   = (datos.descripcionProducto || '').trim();
-    const precioForm = parseFloat((datos.importe || '').toString().replace(',', '.'));
-
-    if (!nombre || !email || !nombreProd) {
-      return res.status(400).json({ error: 'Faltan campos obligatorios.' });
-    }
-    if (!/^[^@]+@[^@]+\.[^@]+$/.test(email)) {
-      return res.status(400).json({ error: 'Email inválido' });
-    }
-    // Bloqueamos flujos que no tocan este endpoint
-    if (tipoProdIn.toLowerCase().includes('suscrip') || tipoProdIn.toLowerCase().includes('club')) {
-      return res.status(400).json({ error: 'Las suscripciones no se crean aquí.' });
-    }
-    if (tipoProdIn.toLowerCase() === 'entrada') {
-      return res.status(400).json({ error: 'Las entradas no se procesan por esta ruta.' });
-    }
-
-    // Resolver producto desde catálogo (price_id > alias > nombre/tipo)
-    const prodResuelto = resolverProducto(
-      { tipoProducto: tipoProdIn, nombreProducto: nombreProd, descripcionProducto: descForm, price_id: datos.price_id, priceId: datos.priceId },
-      []
-    );
-    const slug    = prodResuelto?.slug || normalizarProductoCat(nombreProd, tipoProdIn);
-    const prod    = slug ? PRODUCTOS[slug] : null;
-    if (!prod) {
-      console.warn('⚠️ Catálogo: producto no reconocido', { tipoProdIn, nombreProd });
-      return res.status(400).json({ error: 'Producto no válido (no está en catálogo).' });
-    }
-
-    const nombreCanon = prod.nombre || nombreProd;
-    const descCanon   = (descForm || prod.descripcion || `${tipoProdIn} "${nombreCanon}"`).trim();
-    const imagenCanon = (getImagenProducto(slug) || DEFAULT_IMAGE).trim();
-
-    // Precio: si hay price_id válido → usarlo; si no, catálogo > formulario
-    const precioCatCents = Number.isFinite(Number(prod.precio_cents)) ? Number(prod.precio_cents) : NaN;
-    let amountCents = Number.isFinite(precioCatCents)
-      ? precioCatCents
-      : (Number.isFinite(precioForm) ? Math.round(precioForm * 100) : 0);
-
-    const candidatePriceId = String(prod.price_id || '').trim();
-    let usarPriceId = false;
-    if (candidatePriceId.startsWith('price_')) {
-      try {
-        const pr = await stripe.prices.retrieve(candidatePriceId);
-        usarPriceId = !!(pr && pr.id && pr.active && !pr.recurring);
-        if (!usarPriceId && typeof pr?.unit_amount === 'number') {
-          amountCents = pr.unit_amount;
-        }
-      } catch (e) {
-        console.warn('⚠️ price_id inaccesible; fallback a price_data:', candidatePriceId, e?.message || e);
-      }
-    }
-
-    try {
-      const session = await stripe.checkout.sessions.create({
-        mode: 'payment',
-        payment_method_types: ['card'],
-        customer_creation: 'always',
-        customer_email: email,
-        line_items: usarPriceId
-          ? [{ price: candidatePriceId, quantity: 1 }]
-          : [{
-              price_data: {
-                currency: 'eur',
-                unit_amount: amountCents,
-                product_data: {
-                  name: nombreCanon,
-                  description: descCanon,
-                  images: imagenCanon ? [imagenCanon] : []
-                }
-              },
-              quantity: 1
-            }],
-        metadata: {
-          // Datos cliente (para facturación y procesado)
-          nombre, apellidos, email, email_autorelleno: email,
-          dni, direccion, ciudad, provincia, cp,
-          // Canónicos de catálogo para el webhook/procesado
-          tipoProducto: prod.tipo || tipoProdIn,
-          nombreProducto: nombreCanon,
-          descripcionProducto: descCanon,
-          price_id: prod.price_id || '',
-          slug: slug || '',
-          memberpressId: String(prod.membership_id || ''),
-          tipoProductoCanon: prod.tipo || '',
-          importe: (Number.isFinite(amountCents) ? (amountCents / 100) : 0).toFixed(2),
-          tipoProductoOriginal: tipoProdIn,
-          nombreProductoOriginal: nombreProd
-        },
-        success_url: `https://www.laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(nombreCanon)}`,
-        cancel_url: 'https://www.laboroteca.es/error'
-      });
-      console.log('✅ [/crear-sesion-pago] Sesión creada:', session.id);
-      return res.json({ url: session.url });
-    } catch (error) {
-      console.error('❌ Stripe createSession (pago único):', error?.message || error);
-      try {
-        await alertAdmin({
-          area: 'stripe_crear_sesion_pago_error',
-          email: email || '-',
-          err: error,
-          meta: { slug, candidatePriceId, amountCents, tipoProdIn, nombreProd }
-        });
-      } catch (_) {}
-      return res.status(500).json({ error: 'Error al crear el pago' });
-    }
-  }
-);
+// 🧪 Salud rápida para comprobar que el proceso vive y recibe
+app.get('/_ping', (req, res) => res.json({ ok:true, ts: Date.now() }));
 
 
-// REEMPLAZO con MW:
+// ÚNICO handler con MW de cierre:
 app.post(
   '/crear-sesion-pago',
   enforcePost,
@@ -1029,6 +941,8 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), requireJson, accountLi
     let resultado;
     let email;
     let via = 'legacy';
+    // Path EXACTO (sin query) para que coincida con lo que firma WP
+    const pathname = new URL(req.originalUrl || req.url, 'http://x').pathname;
 
     if (hasHmac) {
       if (!BAJA_HMAC_SECRET) {
@@ -1038,15 +952,42 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), requireJson, accountLi
       if (LAB_DEBUG) {
         const raw = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body||{});
         const bodyHash10 = _first10Sha256(raw);
-        console.log('[BAJA HMAC IN]', { path: req.path, ts, bodyHash10, sig10: String(sig).slice(0,10), reqId });
+        console.log('[BAJA HMAC IN]', { path: pathname, ts, bodyHash10, sig10: String(sig).slice(0,10), reqId });
+        // 🔎 (opcional de depuración) imprime los tres componentes que deben casar con WP
+        try {
+          const fullHash = require('crypto').createHash('sha256').update(raw,'utf8').digest('hex');
+          console.log('[BAJA HMAC CHECK]', { ts, path: pathname, bodyHash10: fullHash.slice(0,10) });
+        } catch (_) {}
       }
-      const v = verifyHmac({
+      let v = verifyHmac({
         method: 'POST',
-        path: req.path,
+        path: pathname,
         bodyRaw: req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body || {}),
         headers: req.headers,
         secret: BAJA_HMAC_SECRET
       });
+      // 🛟 Fallback por skew (ms→s) y doble formato (legacy|v2) igual que en pagos
+      if (!v.ok && String(v.error || '').toLowerCase() === 'skew') {
+        try {
+          const raw = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body || {});
+          const rawHash = require('crypto').createHash('sha256').update(Buffer.from(raw,'utf8')).digest('hex');
+          const tsHeader = String(req.headers['x-lab-ts'] || '');
+          const sigHeader = String(req.headers['x-lab-sig'] || '');
+          const tsNum = Number(tsHeader);
+          const tsSec = (tsNum > 1e11) ? Math.floor(tsNum / 1000) : tsNum; // ms → s si hace falta
+          const nowSec = Math.floor(Date.now() / 1000);
+          const maxSkew = Number(process.env.LAB_HMAC_SKEW_SECS || 900);
+          const within = Math.abs(nowSec - tsSec) <= maxSkew;
+          const expectLegacy = require('crypto').createHmac('sha256', BAJA_HMAC_SECRET)
+            .update(`${tsSec}.${rawHash}`).digest('hex');
+          const expectV2 = require('crypto').createHmac('sha256', BAJA_HMAC_SECRET)
+            .update(`${tsSec}.POST.${pathname}.${rawHash}`).digest('hex');
+          if (within && (sigHeader === expectLegacy || sigHeader === expectV2)) {
+            if (LAB_DEBUG) console.warn('[BAJA HMAC] aceptado por fallback skew', { match: (sigHeader===expectLegacy?'legacy':'v2'), path: pathname });
+            v = { ok: true };
+          }
+        } catch(_) {}
+      }
       if (!v.ok) {
         if (LAB_DEBUG) console.warn('[BAJA HMAC FAIL]', v.error, { reqId, ts, sig10: String(sig).slice(0,10) });
         return res.status(401).json({ cancelada:false, mensaje:'Auth HMAC inválida', error: v.error });
@@ -1229,6 +1170,21 @@ process.on('unhandledRejection', (err) => {
   } catch (_) {}
 });
 
+
+// ─────────────────────────────────────
+// Ruta GET manual: /cron/bajas-club
+// Railway Scheduler o curl → activa el plan B
+// ─────────────────────────────────────
+app.get('/cron/bajas-club', async (req, res) => {
+  try {
+    await cronBajasClub();
+    return res.json({ ok: true, mensaje: 'Cron de bajasClub ejecutado' });
+  } catch (e) {
+    console.error('❌ Cron bajasClub error:', e?.message || e);
+    return res.status(500).json({ ok: false, error: e?.message || 'Error interno' });
+  }
+});
+
 // ─────────────────────────────────────
 // Manejador de errores central (último)
 // ─────────────────────────────────────
@@ -1251,6 +1207,12 @@ app.use((err, req, res, _next) => {
     }).catch(() => {});
   } catch (_) {}
   res.status(err.status || 500).json({ ok:false, error:'INTERNAL_ERROR' });
+});
+
+// 🚧 404 con traza (DEBE ir justo antes del listen)
+app.use((req, res) => {
+  console.warn('🟡 404', req.method, req.originalUrl);
+  res.status(404).json({ ok:false, error:'NOT_FOUND' });
 });
 
 

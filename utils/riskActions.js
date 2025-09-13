@@ -103,8 +103,8 @@ function abortPair(ms=SMTP_TIMEOUT_MS){
 function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
 
 /* ======================== Firma & Pie RGPD ======================== */
-const SIGN_HTML = `<p style="margin-top:20px;">Un saludo,<br/> <strong>Laboroteca</strong></p>`;
-const SIGN_TEXT = `\n\nUn saludo,\nLaboroteca`;
+const SIGN_HTML = `<p style="margin-top:20px;">Un saludo,<br/> <strong>Equipo Laboroteca</strong></p>`;
+const SIGN_TEXT = `\n\nUn saludo,\nEquipo Laboroteca`;
 
 const PIE_HTML = `
 <hr style="margin-top:40px;margin-bottom:10px;" />
@@ -228,13 +228,15 @@ async function sendMail({ to, subject, text, html, idemKey }){
 
 /* ======================== Emails de negocio ======================== */
 /** Email al USUARIO (con cooldown + idemKey) */
-async function sendUserNotice(email, { idemKey } = {}){
+async function sendUserNotice(email, { idemKey } = {}) {
   const safeEmail = sanitizeEmail(email);
   if (!safeEmail) return { ok:false, status:400, data:{ error:'invalid_email' } };
 
   logDebug('[userMail] called', { email: safeEmail, idemKey: idemKey ? redact(idemKey) : undefined });
 
-  if (skipByIdem(idemKey)) {
+  // Idempotencia corta con namespace por canal (user)
+  const scopedKey = idemKey ? `user:${idemKey}` : null;
+  if (skipByIdem(scopedKey)) {
     logDebug('[userMail] skip idem', { email: safeEmail });
     return { ok:true, status:200, data:{ skipped:'idempotent' } };
   }
@@ -243,29 +245,28 @@ async function sendUserNotice(email, { idemKey } = {}){
     return { ok:true, status:200, data:{ skipped:'cooldown' } };
   }
 
-  const subject = 'Seguridad de tu cuenta — actividad inusual detectada';
+  const subject = 'Seguridad de tu cuenta — Actividad inusual detectada';
 
-  const text = `Hemos detectado actividad inusual en tu cuenta (accesos desde varias direcciones IP o navegadores).
+  const text = `Hemos detectado actividad inusual en tu cuenta: accesos desde varias direcciones IP o navegadores.
 Te recomendamos cambiar tu contraseña.
 Puedes cambiarla aquí: ${USER_RESET_URL}
 Si no has sido tú, puedes contactarnos a través del buzón de incidencias:
 https://www.laboroteca.es/incidencias/
-Recuerda que los términos y condiciones de los productos vendidos en Laboroteca, no permiten compartir cuentas, siendo posible la suspensión de la cuenta en caso de incumplimiento sin derecho a reembolso.
-Equipo Laboroteca`;
+Recuerda que los términos y condiciones de los productos vendidos en Laboroteca, no permiten compartir cuentas, siendo posible la suspensión de la cuenta en caso de incumplimiento sin derecho a reembolso.`;
 
   const html = `
-<p>Hemos detectado <strong>actividad inusual</strong> en tu cuenta (accesos desde varias direcciones IP o navegadores).</p>
+<p>Hemos detectado <strong>actividad inusual en tu cuenta</strong>: accesos desde varias direcciones IP o navegadores.</p>
 <p><strong>Te recomendamos cambiar tu contraseña.</strong></p>
 <p><a href="${USER_RESET_URL}" target="_blank" rel="noopener noreferrer">Cambiar mi contraseña</a></p>
 <p>Si no has sido tú, puedes contactarnos a través del <a href="https://www.laboroteca.es/incidencias/" target="_blank" rel="noopener noreferrer">buzón de incidencias</a>.</p>
 <p style="margin-top:14px;">Recuerda que los <strong>Términos y Condiciones</strong> de los productos vendidos en Laboroteca no permiten compartir cuentas, siendo posible la suspensión de la cuenta en caso de incumplimiento sin derecho a reembolso.</p>
-<p><em>Equipo Laboroteca</em></p>
 `.trim();
 
-  const resp = await sendMail({ to: safeEmail, subject, text, html, idemKey });
+  const resp = await sendMail({ to: safeEmail, subject, text, html, idemKey: scopedKey });
   if (resp.ok) stamp(lastUserMail, safeEmail);
   return resp;
 }
+
 
 /** Email al ADMIN (con cooldown + idemKey) */
 async function sendAdminAlert(userId, email, risk=null, { idemKey } = {}){
@@ -281,7 +282,9 @@ async function sendAdminAlert(userId, email, risk=null, { idemKey } = {}){
     idemKey: idemKey ? redact(idemKey) : undefined
   });
 
-  if (skipByIdem(idemKey)) {
+  // Idempotencia corta con namespace por canal (admin)
+  const scopedKey = idemKey ? `admin:${idemKey}` : null;
+  if (skipByIdem(scopedKey)) {
     logDebug('[adminMail] skip idem', { uid });
     return { ok:true, status:200, data:{ skipped:'idempotent' } };
   }
@@ -320,7 +323,7 @@ Métricas:
   <li>Geo (km/h): <strong>${geoKmh}</strong></li>
 </ul>`;
 
-  const resp = await sendMail({ to: ADMIN_EMAIL, subject, text, html, idemKey });
+  const resp = await sendMail({ to: ADMIN_EMAIL, subject, text, html, idemKey: scopedKey });
   if (resp.ok) stamp(lastAdminMail, uid);
   return resp;
 }

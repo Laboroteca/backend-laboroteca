@@ -722,7 +722,6 @@ if (falloFactura) {
       html: `
         <p>Hola ${nombre || 'cliente'},</p>
         <p>Tu <strong>membresía del Club Laboroteca</strong> ha sido <strong>activada correctamente</strong>.</p>
-        <p><em>Hemos tenido un problema generando o enviando tu factura.</em> En cuanto esté disponible, te la enviaremos a este mismo correo.</p>
         <p><strong>Producto:</strong> ${isAlta ? 'Alta y primera cuota Club Laboroteca' : 'Renovación mensual Club Laboroteca'}<br>
            <strong>Importe:</strong> ${((invoice.amount_paid ?? invoice.amount_due ?? 0)/100).toFixed(2).replace('.', ',')} €<br>
            <strong>Fecha:</strong> ${fechaISO}</p>
@@ -731,7 +730,6 @@ if (falloFactura) {
       text: `Hola ${nombre || 'cliente'},
 
 Tu membresía del Club Laboroteca ha sido activada correctamente.
-Hemos tenido un problema generando o enviando tu factura. En cuanto esté disponible, te la enviaremos.
 
 Producto: ${isAlta ? 'Alta y primera cuota Club Laboroteca' : 'Renovación mensual Club Laboroteca'}
 Importe: ${((invoice.amount_paid ?? invoice.amount_due ?? 0)/100).toFixed(2)} €
@@ -1518,45 +1516,55 @@ try {
 }
     }
   }
-
-  // 📧 Email de apoyo SOLO si la factura FALLÓ (aplica al LIBRO)
+// 📧 Email de apoyo SOLO si la factura FALLÓ (pago único)
 // - No para entradas (tienen su correo propio)
 // - No para el club (se gestiona en invoice.paid)
-// Enviar solo para productos tipo "libro" (no entradas, no club)
-if (!esEntrada && catalogItem?.tipo === 'libro' && falloFactura) {
+if (!esEntrada && !esClub && falloFactura) {
   try {
-    const ahoraISO = new Date().toISOString();
-    const productoLabel = datosCliente.nombreProducto || datosCliente.producto || 'Libro Laboroteca';
+    const productoLabel =
+      datosCliente.nombreProducto ||
+      datosCliente.producto ||
+      'Producto Laboroteca';
+
+    const importeFormateado = (() => {
+      const n = Number(datosCliente.importe || 0);
+      return `${n.toFixed(2).replace('.', ',')} €`;
+    })();
+
     await enviarEmailPersonalizado({
       to: email,
-      subject: '✅ Acceso activo — estamos generando tu factura',
+      subject: '✅ Acceso activo a tu compra',
       html: `
         <p>Hola ${datosCliente.nombre || 'cliente'},</p>
-        <p>Tu <strong>compra del libro</strong> <strong>${productoLabel}</strong> se ha procesado correctamente y tu acceso ya está <strong>activado</strong>.</p>
-        <p><em>Hemos tenido un problema generando o enviando tu factura.</em> En cuanto esté disponible, te la enviaremos a este mismo correo.</p>
-        <p><strong>Importe:</strong> ${datosCliente.importe.toFixed(2).replace('.', ',')} €<br>
-           <strong>Fecha:</strong> ${ahoraISO}</p>
-        <p><a href="https://www.laboroteca.es/mi-cuenta/">Accede a tu área de cliente</a></p>
+        <p>Gracias por tu compra.</p>
+        <p><strong>${productoLabel}</strong></p>
+        <p><strong>Importe:</strong> ${importeFormateado}</p>
+        <p>Puedes acceder a tu contenido desde: <a href="https://www.laboroteca.es/mi-cuenta/">www.laboroteca.es/mi-cuenta</a></p>
+        <p>Un afectuoso saludo,<br/>Ignacio Solsona<br/>Abogado</p>
       `,
       text: `Hola ${datosCliente.nombre || 'cliente'},
 
-Tu compra del libro ${productoLabel} se ha procesado correctamente y tu acceso ya está activado.
-Hemos tenido un problema generando o enviando tu factura. En cuanto esté disponible, te la enviaremos.
+Gracias por tu compra.
+${productoLabel}
 
-Importe: ${datosCliente.importe.toFixed(2)} €
-Fecha: ${ahoraISO}
+Importe: ${importeFormateado}
+Puedes acceder a tu contenido desde: www.laboroteca.es/mi-cuenta
 
-Acceso: https://www.laboroteca.es/mi-cuenta/
-`
+Un afectuoso saludo,
+Ignacio Solsona
+Abogado`
     });
-    console.log('✅ Email de apoyo (solo por fallo de factura en LIBRO) enviado');
+
+    console.log('✅ Email de apoyo (pago único, factura fallida) enviado');
   } catch (e) {
-    console.error('❌ Error enviando email de apoyo (libro):', e?.message || e);
+    console.error('❌ Error enviando email de apoyo (pago único):', e?.message || e);
   }
 } else {
-  console.log(`ℹ️ Email de apoyo NO enviado (esEntrada=${esEntrada}, tipo=${catalogItem?.tipo || '-'}, falloFactura=${falloFactura}, seEnvioFactura=${seEnvioFactura})`);
-
+  console.log(
+    `ℹ️ Email de apoyo NO enviado (esEntrada=${esEntrada}, esClub=${esClub}, falloFactura=${falloFactura}, seEnvioFactura=${seEnvioFactura})`
+  );
 }
+
 
 // 🎫 Procesar ENTRADAS en background + dedupe por sesión
 if (esEntrada) {

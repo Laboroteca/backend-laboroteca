@@ -1,0 +1,8 @@
+{
+  "name": "cron-runner",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": { "start": "node marketing-run-cron.js" },
+  "engines": { "node": ">=18" }
+}
+

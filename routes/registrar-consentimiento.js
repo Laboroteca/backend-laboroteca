@@ -51,6 +51,15 @@ router.post('/registrar-consentimiento', async (req, res) => {
   const ts = new Date().toISOString();
   try {
     // Log de entrada sin PII sensible
+  // 🔒 CORTAFUEGOS: NO registrar flujos de newsletter/marketing
+  const body0 = req.body || {};
+  const fid0  = String(body0.formularioId || '');
+  const src0  = String(body0.source || body0.sourceForm || '').toLowerCase();
+  const skip0 = body0.skipConsentLogs === 1 || body0.skipConsentLogs === true || String(body0.skipConsentLogs) === '1';
+  if (skip0 || fid0 === '45' || /preferencias[_-]?marketing/.test(src0) || /form[_-]?0*45\b/.test(src0)) {
+    return res.json({ ok: true, skipped: 'marketing_newsletter' });
+  }
+  // Log de entrada sin PII sensible
     const ipHint = (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim();
     const uaHint = (req.headers['user-agent'] || '').slice(0, 120);
     console.log(`🟢 [CONSENT IN] ${ts} ip=${ipHint} ua=${uaHint}`);

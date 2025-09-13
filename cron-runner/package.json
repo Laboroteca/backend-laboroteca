@@ -1,5 +1,11 @@
 {
-  "name": "cron-runner",
+  "name": "emails-newsletter-cron",
   "version": "1.0.0",
-  "private": true
+  "private": true,
+  "scripts": {
+    "start": "node marketing-run-cron.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
 }

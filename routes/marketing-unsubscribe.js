@@ -11,7 +11,7 @@ const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 const router = express.Router();
 
 /* ───────── CONFIG ───────── */
-const UNSUB_SECRET = String(process.env.MKT_UNSUB_SECRET || 'change_me_secret').trim();
+const UNSUB_SECRET = String(process.env.MKT_UNSUB_SECRET || 'laboroteca-unsub').trim();
 
 const SHEET_ID  = String(process.env.MKT_SHEET_ID || '1beWTOMlWjJvtmaGAVDegF2mTts16jZ_nKBrksnEg4Co').trim();
 const SHEET_TAB = String(process.env.MKT_SHEET_TAB || 'Consents').trim();
@@ -120,21 +120,28 @@ function verifyToken(token){
   if (!token || typeof token !== 'string') throw new Error('TOKEN_MISSING');
   const parts = token.split('.');
 
-  // 2-part actual
+  // 2-part actual (payloadB64 + "." + sigHex)
   if (parts.length === 2){
     const [payloadB64, sigHex] = parts;
     const base = b64urlToBuf(payloadB64).toString('utf8'); // "email.ts"
     const exp  = crypto.createHmac('sha256', UNSUB_SECRET).update(base).digest('hex').slice(0,32);
     if (sigHex !== exp) throw new Error('TOKEN_BADSIG');
 
-    const [emailRaw] = base.split('.');
+    // ⚠️ separa por el ÚLTIMO punto: email puede contener puntos
+    const lastDot = base.lastIndexOf('.');
+    if (lastDot < 0) throw new Error('TOKEN_FORMAT');
+
+    const emailRaw = base.slice(0, lastDot);
+    const tsRaw    = base.slice(lastDot + 1);
+
     const email = String(emailRaw || '').toLowerCase().trim();
     if (!isEmail(email)) throw new Error('TOKEN_EMAIL');
+    if (!/^\d{10,13}$/.test(tsRaw)) throw new Error('TOKEN_TS');
 
-    return { email, payload:{ base, fmt: '2part' } };
+    return { email, payload:{ base, fmt: '2part', ts: tsRaw } };
   }
 
-  // 3-part legacy
+  // 3-part legacy: head.body.sig con JSON
   if (parts.length === 3){
     const [head, body, sig] = parts;
     const exp = b64urlEncode(crypto.createHmac('sha256', UNSUB_SECRET).update(`${head}.${body}`).digest());

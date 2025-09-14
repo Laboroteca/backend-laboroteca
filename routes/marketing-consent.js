@@ -588,9 +588,15 @@ router.post('/consent', async (req, res) => {
       else if (typeof cdcRaw === 'object') consentDataComercial = (cdcRaw || {});
     } catch { consentDataComercial = {}; }
 
-    const comercialUrl     = s(consentDataComercial.consentUrl);
-    const comercialVersion = s(consentDataComercial.consentVersion);
+    let comercialUrl     = s(consentDataComercial.consentUrl);
+    let comercialVersion = s(consentDataComercial.consentVersion);
     let comercialTextHash  = '';
+
+    // Fallback si marcaron comercial pero no llegó el hidden field
+    if (consent_comercial && (!comercialUrl || !comercialVersion)) {
+      comercialUrl     = s(process.env.MKT_COMMERCIAL_CONSENT_URL, 'https://www.laboroteca.es/consentimiento-publicidad/');
+      comercialVersion = s(process.env.MKT_COMMERCIAL_CONSENT_VERSION, 'v1.1');
+    }
 
     const sourceForm   = s(req.body?.sourceForm, 'preferencias_marketing');
     const formularioId = s(req.body?.formularioId, '45');
@@ -604,9 +610,10 @@ router.post('/consent', async (req, res) => {
     let snapshotComercialGeneralPath = '';
 
     try {
-      if (!BUCKET_NAME) {
-        if (DEBUG) console.log('ℹ️ BUCKET no configurado, se omite snapshot');
-      } else {
+      const BUCKET_SET = !!BUCKET_NAME;
+      if (!BUCKET_SET && DEBUG) console.log('ℹ️ BUCKET no configurado, se omite snapshot (usaremos fallback de hash)');
+
+      if (BUCKET_SET) {
         // Newsletter
         let rawHtml;
         try {
@@ -655,6 +662,11 @@ router.post('/consent', async (req, res) => {
 
         // Comercial (si hay URL+versión)
         if (comercialUrl && comercialVersion) {
+          // Fallback de hash *antes* por si algo falla más abajo
+          if (!comercialTextHash) {
+            comercialTextHash = `sha256:${sha256Hex(`${comercialVersion}|${comercialUrl}`)}`;
+          }
+
           let rawHtmlC;
           try {
             rawHtmlC = await fetchHtml(comercialUrl);
@@ -711,6 +723,14 @@ router.post('/consent', async (req, res) => {
 
     // Firestore: marketingConsents (docId = email) – idempotente
     if (DEBUG) console.log('📝 FS write → marketingConsents/%s materias=%j', email, materiasToList(materias));
+
+    // Fallbacks finales de hash por si no hubo snapshot:
+    if (!consentTextHash && consentVersion && consentUrl) {
+      consentTextHash = `sha256:${sha256Hex(`${consentVersion}|${consentUrl}`)}`;
+    }
+    if (!comercialTextHash && comercialVersion && comercialUrl) {
+      comercialTextHash = `sha256:${sha256Hex(`${comercialVersion}|${comercialUrl}`)}`;
+    }
     const mcRef = db.collection('marketingConsents').doc(email);
     let createdAt = admin.firestore.Timestamp.fromDate(new Date());
     try {
@@ -790,8 +810,8 @@ router.post('/consent', async (req, res) => {
           `<p>Hola {NOMBRE},</p>
            <p><strong>¡Gracias por suscribirte al Boletín de Laboroteca!</strong></p>
            <p>Desde ahora recibirás novedades por email sobre las materias que has seleccionado.</p>
-           <p>Si quieres enterarte de las últimas novedades, puedes visitar ahora mismo la portada del <a href="https://www.laboroteca.es/boletin-informativo/">Boletín</a>.</p>
-           <p>Si en algún momento quieres cambiar tus preferencias o darte de baja, puedes hacerlo desde <a href="${unsubUrl}">este enlace</a>.</p>
+           <p>Si quieres enterarte de las últimas novedades, puedes visitar ahora mismo <a href="https://www.laboroteca.es/boletin-informativo/">la portada del Boletín</a>.</p>
+           <p>Si en algún momento quieres darte de baja y dejar de recibir emails, puedes hacerlo desde <a href="${unsubUrl}">este enlace</a>.</p>
            <p>Un saludo,<br>Ignacio Solsona<br>Abogado</p>`,
           tokens
         );

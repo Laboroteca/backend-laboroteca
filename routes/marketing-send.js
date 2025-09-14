@@ -43,8 +43,8 @@ const SKEW_SECS = Number(process.env.LAB_HMAC_SKEW_SECS || 300);
 const HMAC_WINDOW_MS = (Number.isFinite(SKEW_SECS) && SKEW_SECS >= 0 ? SKEW_SECS : 300) * 1000;
 
 // Remitente / SMTP
-const FROM_EMAIL = process.env.EMAIL_FROM || process.env.SMTP2GO_FROM_EMAIL || 'newsletter@laboroteca.es';
-const FROM_NAME  = process.env.EMAIL_FROM_NAME || process.env.SMTP2GO_FROM_NAME || 'Laboroteca Newsletter';
+const FROM_EMAIL = process.env.EMAIL_FROM || process.env.SMTP2GO_FROM_EMAIL || 'noticias@boletin.laboroteca.es';
+const FROM_NAME  = process.env.EMAIL_FROM_NAME || process.env.SMTP2GO_FROM_NAME || 'Boletín Laboroteca';
 const SMTP2GO_API_KEY = String(process.env.SMTP2GO_API_KEY || '').trim();
 const SMTP2GO_API_URL = String(process.env.SMTP2GO_API_URL || 'https://api.smtp2go.com/v3/email/send');
 
@@ -248,7 +248,7 @@ function buildLegalFooter({ email }) {
   const unsubBlock = `
     <hr style="margin-top:32px;margin-bottom:12px" />
     <p style="font-size:13px;color:#555;line-height:1.5">
-      Para dejar de recibir esta newsletter, puedes darte de baja desde
+      Para dejar de recibir este boletín, puedes darte de baja desde
       <a href="${unsubUrl}" target="_blank" rel="noopener">este enlace seguro</a>.
     </p>
   `;
@@ -392,6 +392,7 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
     const scheduledAt = s(req.body?.scheduledAt);
     const materias = (req.body && typeof req.body === 'object' && req.body.materias) ? req.body.materias : {};
     const testOnly = !!req.body?.testOnly;
+    const onlyCommercial = !!req.body?.onlyCommercial;
 
     if (!subject)  return res.status(400).json({ ok: false, error: 'SUBJECT_REQUIRED' });
     if (!htmlBase) return res.status(400).json({ ok: false, error: 'HTML_REQUIRED' });
@@ -421,6 +422,7 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
         html: htmlBase, // el worker añadirá pie+unsub al enviar
         materias: materiasNorm,
         testOnly,
+        onlyCommercial,
         createdAt: admin.firestore.Timestamp.fromDate(new Date()),
         createdAtISO: ts,
         status: 'pending',
@@ -436,6 +438,7 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
         bodyHash: sha256(htmlBase),
         materias: materiasNorm,
         testOnly: !!testOnly,
+        onlyCommercial: !!onlyCommercial,
         scheduledAtISO: jobPayload.scheduledAtISO
       }));
 
@@ -454,6 +457,7 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
     if (testOnly) {
       recipients = ['ignacio.solsona@icacs.com', 'laboroteca@gmail.com'];
     } else {
+      // base: newsletter consent
       const snap = await db.collection('marketingConsents')
         .where('consent_marketing', '==', true)
         .get();
@@ -464,6 +468,10 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
         let match = false;
         for (const k of Object.keys(materiasNorm)) {
           if (materiasNorm[k] && d.materias?.[k]) { match = true; break; }
+        }
+        // Si se solicita filtro comercial, exige consentimiento comercial explícito
+        if (onlyCommercial === true && d.consent_comercial !== true) {
+          match = false;
         }
         if (match && d.email && typeof d.email === 'string' && d.email.includes('@')) {
           set.add(d.email.toLowerCase());
@@ -476,7 +484,7 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
     }
 
     if (!testOnly && recipients.length === 0) {
-      return res.status(200).json({ ok: true, sent: 0, note: 'NO_RECIPIENTS' });
+      return res.status(200).json({ ok: true, sent: 0, note: 'NO_RECIPIENTS', onlyCommercial });
     }
 
     // Clave de campaña estable
@@ -485,6 +493,7 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
       bodyHash: sha256(htmlBase),
       materias: materiasNorm,
       testOnly: !!testOnly,
+      onlyCommercial: !!onlyCommercial,
       scheduledAt: '' // inmediato
     }));
 
@@ -544,7 +553,7 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
 
     try {
       await db.collection('emailSends').add({
-        subject, html: htmlBase, materias: materiasNorm, testOnly,
+        subject, html: htmlBase, materias: materiasNorm, testOnly, onlyCommercial,
         recipients, count: sent, skipped, failed,
         createdAt: admin.firestore.Timestamp.fromDate(new Date()),
         createdAtISO: ts,
@@ -556,7 +565,7 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
       console.warn(`${LOG_PREFIX} ⚠️ log emailSends`, e?.message || e);
     }
 
-    return res.json({ ok: true, sent, skipped, failed });
+    return res.json({ ok: true, sent, skipped, failed, onlyCommercial });
   } catch (e) {
     console.error(`${LOG_PREFIX} ❌ error:`, e?.message || e);
     try { await alertAdmin({ area:'newsletter_send_unexpected', err: e, meta:{} }); } catch {}

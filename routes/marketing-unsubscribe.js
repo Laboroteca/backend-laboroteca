@@ -1,25 +1,4 @@
 // routes/marketing-unsubscribe.js
-// ─────────────────────────────────────────────────────────────────────────────
-// Unsubscribe 1-clic (Newsletter) — listo para producción
-//
-//  • ENDPOINTS:
-//      POST /marketing/unsubscribe    (alias: POST /unsubscribe)
-//        body: { token }   // también admite ?token=…
-//  • Token compatible:
-//      - Formato actual (2-part):  base64url("email.ts") + "." + hex(HMAC256(base)[:32])
-//      - Formato legacy (3-part):  head.body.sig  con JSON {"email","scope":"newsletter","act":"unsubscribe", ...}
-//  • Efectos (idempotentes):
-//      - Borra marketingConsents/<email> si existe
-//      - Añade/merge en suppressionList/<email>
-//      - Inserta log mínimo en consentLogs
-//      - Actualiza Google Sheets: Columna F = Fecha de baja (formato "DD/MM/YYYY - HH:MMh")
-//
-//  • Entorno:
-//      - MKT_UNSUB_SECRET
-//      - MKT_SHEET_ID
-//      - MKT_SHEET_TAB (por defecto "Consents")
-//      - MKT_SHEET_TZ  (por defecto "Europe/Madrid")
-// ─────────────────────────────────────────────────────────────────────────────
 'use strict';
 
 const express  = require('express');
@@ -42,6 +21,29 @@ const SHEET_TZ  = String(process.env.MKT_SHEET_TZ || 'Europe/Madrid').trim();
 if (!admin.apps.length) { try { admin.initializeApp(); } catch(_){} }
 const db = admin.firestore();
 
+/* ───────── UI helpers (estilos unificados) ───────── */
+const SUCCESS_CSS = `
+.ff-custom-success{
+  text-align:center;padding:22px;font-size:20px;background-color:#d6f9dc;color:#1c7c3a;
+  border:1px solid #a9e5b6;border-radius:8px;margin:20px 0;font-family:inherit
+}
+`;
+const ERROR_CSS = `
+.ff-custom-error{
+  background-color:#f9d6d5;color:#7c1c18;border:1px solid #e5a9a7;padding:20px;border-radius:8px;
+  font-family:inherit;text-align:center;font-size:18px;line-height:1.5;margin:0;width:100%;box-sizing:border-box
+}
+`;
+function htmlSuccess(msg){
+  return `<!doctype html><meta charset="utf-8"><style>${SUCCESS_CSS}${ERROR_CSS}</style><div class="ff-custom-success">✅ ${msg}</div>`;
+}
+function htmlError(msg){
+  return `<!doctype html><meta charset="utf-8"><style>${SUCCESS_CSS}${ERROR_CSS}</style><div class="ff-custom-error">⚠️ ${msg}</div>`;
+}
+function wantsHtml(req){
+  return String(req.query.html||'')==='1' || String(req.headers.accept||'').includes('text/html');
+}
+
 /* ───────── Helpers ───────── */
 const nowISO = () => new Date().toISOString();
 const isEmail = (e) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(e||''));
@@ -56,21 +58,19 @@ function b64urlToBuf(str){
   return Buffer.from(s + pad, 'base64');
 }
 
-/* Formato de fecha para Sheets: "DD/MM/YYYY - HH:MMh" (zona configurable) */
+/* Formato de fecha para Sheets */
 function formatFechaLocal(iso){
   try {
     const d = new Date(iso);
     const parts = new Intl.DateTimeFormat('es-ES', {
-      timeZone: SHEET_TZ,
-      day: '2-digit', month: '2-digit', year: 'numeric',
-      hour: '2-digit', minute: '2-digit', hour12: false
+      timeZone: SHEET_TZ, day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit', hour12:false
     }).formatToParts(d);
     const v = (t) => parts.find(p => p.type === t)?.value || '';
     return `${v('day')}/${v('month')}/${v('year')} - ${v('hour')}:${v('minute')}h`;
   } catch { return iso; }
 }
 
-/* Google Sheets helpers */
+/* Google Sheets */
 async function getSheetsClient(){
   const auth = await google.auth.getClient({ scopes: ['https://www.googleapis.com/auth/spreadsheets'] });
   return google.sheets({ version: 'v4', auth });
@@ -115,12 +115,12 @@ async function setUnsubscribeDateByEmail(email, fechaIso, nombreFallback=''){
   }
 }
 
-/* Token: acepta 2-part (actual) y 3-part (legacy) */
+/* Token: acepta 2-part y 3-part */
 function verifyToken(token){
   if (!token || typeof token !== 'string') throw new Error('TOKEN_MISSING');
   const parts = token.split('.');
 
-  // 2-part actual: payload(sig base64url) + "." + hex(hmac(base)[:32])
+  // 2-part actual
   if (parts.length === 2){
     const [payloadB64, sigHex] = parts;
     const base = b64urlToBuf(payloadB64).toString('utf8'); // "email.ts"
@@ -134,7 +134,7 @@ function verifyToken(token){
     return { email, payload:{ base, fmt: '2part' } };
   }
 
-  // 3-part legacy: head.body.sig con JSON
+  // 3-part legacy
   if (parts.length === 3){
     const [head, body, sig] = parts;
     const exp = b64urlEncode(crypto.createHmac('sha256', UNSUB_SECRET).update(`${head}.${body}`).digest());
@@ -154,10 +154,10 @@ function verifyToken(token){
   throw new Error('TOKEN_FORMAT');
 }
 
-/* ───────── Rate limit defensivo ───────── */
+/* ───────── Rate limit ───────── */
 const unsubLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 min
-  max: 5,              // 5 peticiones/IP/min
+  windowMs: 60 * 1000,
+  max: 5,
   standardHeaders: true,
   legacyHeaders: false,
   message: { ok:false, error:'RATE_LIMIT' }
@@ -174,53 +174,80 @@ async function handleUnsubscribe(req, res){
     const token = String((req.body && req.body.token) || req.query.token || '');
     const { email } = verifyToken(token);
 
-    // 1) Borrar consentimiento visible (si existe)
+    // 1) Borrar consentimiento visible (si existe) + verificación + fallback
     const consRef = db.collection('marketingConsents').doc(email);
     const snap = await consRef.get();
     let nombre = '';
     if (snap.exists){
       const prev = snap.data() || {};
       nombre = String(prev.nombre || '');
-      try { await consRef.delete(); }
-      catch (e) {
+      try {
+        await consRef.delete();
+        // verificación: si aún existe por reglas/latencia, fallback a update (hard off)
+        const again = await consRef.get();
+        if (again.exists) {
+          await consRef.set({
+            consent_marketing: false,
+            consent_comercial: false,
+            materias: {
+              derechos:false, cotizaciones:false, desempleo:false, bajas_ip:false,
+              jubilacion:false, ahorro_privado:false, otras_prestaciones:false
+            },
+            materiasList: [],
+            updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
+            updatedAtISO: whenISO
+          }, { merge: true });
+        }
+      } catch (e) {
         try { await alertAdmin({ area:'unsubscribe_consents_delete_error', err:e, meta:{ email } }); } catch{}
-        throw e;
+        // como último recurso, marca OFF
+        try {
+          await consRef.set({
+            consent_marketing:false, consent_comercial:false,
+            materias:{
+              derechos:false, cotizaciones:false, desempleo:false, bajas_ip:false,
+              jubilacion:false, ahorro_privado:false, otras_prestaciones:false
+            },
+            materiasList: [],
+            updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
+            updatedAtISO: whenISO
+          }, { merge: true });
+        } catch(_) {}
       }
     }
 
-    // 2) Añadir/merge suppressionList
-    try {
-      await db.collection('suppressionList').doc(email).set({
-        email, scope:'newsletter', reason:'user_unsubscribe',
-        createdAt: admin.firestore.Timestamp.fromDate(new Date()),
-        createdAtISO: whenISO, ip, ua
-      }, { merge:true });
-    } catch (e){
-      try { await alertAdmin({ area:'unsubscribe_suppression_error', err:e, meta:{ email } }); } catch{}
-      throw e;
-    }
+    // 2) Suppression list (idempotente)
+    await db.collection('suppressionList').doc(email).set({
+      email, scope:'newsletter', reason:'user_unsubscribe',
+      createdAt: admin.firestore.Timestamp.fromDate(new Date()),
+      createdAtISO: whenISO, ip, ua
+    }, { merge:true });
 
-    // 3) Log mínimo (best-effort)
+    // 3) Log (best-effort)
     try {
       await db.collection('consentLogs').add({
         flow:'newsletter', action:'unsubscribe', email, ip, userAgent: ua,
         acceptedAt: admin.firestore.Timestamp.fromDate(new Date()),
         acceptedAtISO: whenISO
       });
-    } catch (e){
-      try { await alertAdmin({ area:'unsubscribe_log_warn', err:e, meta:{ email } }); } catch{}
-    }
+    } catch (_) {}
 
-    // 4) Google Sheets (best-effort)
-    try { await setUnsubscribeDateByEmail(email, whenISO, nombre); }
-    catch (e){ try { await alertAdmin({ area:'unsubscribe_sheets_warn', err:e, meta:{ email } }); } catch{} }
+    // 4) Sheets (best-effort)
+    try { await setUnsubscribeDateByEmail(email, whenISO, nombre); } catch (_) {}
 
-    return res.json({ ok:true, email, when: whenISO });
+    // ── Respuesta
+    const okMsg = 'Te hemos dado de baja correctamente de la newsletter.';
+    if (wantsHtml(req)) return res.status(200).send(htmlSuccess(okMsg));
+    return res.json({ ok:true, email, when: whenISO, message: okMsg });
+
   } catch (e){
-    const msg = e?.message || 'UNSUB_ERROR';
-    console.error('unsubscribe error:', msg);
+    const code = String(e?.message || 'UNSUB_ERROR');
+    const msgHuman = 'No hemos podido procesar la baja. El enlace puede haber caducado o ya fue usado.';
+    console.error('unsubscribe error:', code);
     try { await alertAdmin({ area:'unsubscribe_error', err:e, meta:{} }); } catch{}
-    return res.status(400).json({ ok:false, error: msg });
+
+    if (wantsHtml(req)) return res.status(400).send(htmlError(msgHuman));
+    return res.status(400).json({ ok:false, error: code, message: msgHuman });
   }
 }
 

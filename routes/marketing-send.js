@@ -423,7 +423,7 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
         html: htmlBase, // el worker añadirá pie+unsub al enviar
         materias: materiasNorm,
         testOnly,
-        onlyCommercial,
+        onlyCommercial: !!onlyCommercial,
         createdAt: admin.firestore.Timestamp.fromDate(new Date()),
         createdAtISO: ts,
         status: 'pending',

@@ -763,7 +763,12 @@ router.post('/consent', async (req, res) => {
           createdAt
         }, { merge: true });
       });
-      console.log('🔥 Firestore upsert OK → marketingConsents/%s', email);
+      if (DEBUG) {
+        console.log('🔥 Firestore upsert OK → marketingConsents/%s', email);
+      } else {
+        const emailH12 = sha256Hex(email).slice(0,12);
+        console.info('🔥 Firestore upsert OK (email#%s)', emailH12);
+      }
     } catch (e) {
       console.error('Firestore set error:', e?.message || e);
       try { await alertAdmin({ area:'newsletter_firestore_error', email, err: e, meta:{} }); } catch {}

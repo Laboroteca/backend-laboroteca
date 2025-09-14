@@ -178,28 +178,28 @@ function ensureLegalAndUnsub(html, unsubUrl) {
 async function sendSMTP2GO({ to, subject, html, listUnsubUrl }) {
   if (!SMTP2GO_API_KEY) throw new Error('SMTP2GO_API_KEY missing');
 
-  const custom_headers = {};
-  if (listUnsubUrl) {
-    custom_headers['List-Unsubscribe'] = `<${listUnsubUrl}>`;
-    custom_headers['List-Unsubscribe-Post'] = 'List-Unsubscribe=One-Click';
-  }
-
   const payload = {
     api_key: SMTP2GO_API_KEY,
     to: [to],
     sender: `${FROM_NAME} <${FROM_EMAIL}>`,
     subject,
-    html_body: html,
-    custom_headers
+    html_body: html
   };
+
+  if (listUnsubUrl) {
+    payload.custom_headers = [
+      { header: 'List-Unsubscribe',      value: `<${listUnsubUrl}>` },
+      { header: 'List-Unsubscribe-Post', value: 'List-Unsubscribe=One-Click' }
+    ];
+  }
 
   const res = await fetch(SMTP2GO_API_URL, {
     method: 'POST',
-    headers: { 'Content-Type':'application/json' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   });
 
-  const data = await res.json().catch(()=> ({}));
+  const data = await res.json().catch(() => ({}));
 
   const failuresLen  = Array.isArray(data?.data?.failures) ? data.data.failures.length : 0;
   const succeededNum = typeof data?.data?.succeeded === 'number' ? data.data.succeeded : NaN;
@@ -208,10 +208,7 @@ async function sendSMTP2GO({ to, subject, html, listUnsubUrl }) {
                        (Array.isArray(succeededArr) && succeededArr.length > 0);
   const hasEmailId   = Boolean(data?.data?.email_id);
 
-  if (res.ok && failuresLen === 0 && (hasSucceeded || hasEmailId)) {
-    if (LAB_DEBUG) console.log('%s 📬 SMTP2GO OK → %s', LOG_PREFIX, to);
-    return data;
-  }
+  if (res.ok && failuresLen === 0 && (hasSucceeded || hasEmailId)) return data;
   throw new Error(`SMTP2GO failed: ${JSON.stringify(data).slice(0,400)}`);
 }
 

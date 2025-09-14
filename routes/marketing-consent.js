@@ -82,6 +82,8 @@ const UNSUB_PAGE   = String(process.env.MKT_UNSUB_PAGE   || 'https://www.laborot
 const IP_ALLOW  = String(process.env.CONSENT_IP_ALLOW || '').trim(); // ej: "1.2.3.4, 5.6.7.8"
 const MAX_PER_10M = Number(process.env.CONSENT_MAX_PER_10M || 8);    // rate por ip+email
 const HMAC_WINDOW_MS = 5 * 60 * 1000; // ±5 minutos (acepta s o ms)
+// Quitar automáticamente de suppressionList cuando hay nuevo consentimiento válido
+const AUTO_UNSUPPRESS = String(process.env.CONSENT_AUTO_UNSUPPRESS || '1').trim() === '1';
 
 /* ───────── Materias ───────── */
 
@@ -766,6 +768,18 @@ router.post('/consent', async (req, res) => {
       console.error('Firestore set error:', e?.message || e);
       try { await alertAdmin({ area:'newsletter_firestore_error', email, err: e, meta:{} }); } catch {}
       return res.status(500).json({ ok:false, error:'FIRESTORE_WRITE_FAILED' });
+    }
+
+    // ── Auto un-suppress tras re-suscripción (idempotente)
+    if (AUTO_UNSUPPRESS) {
+      try {
+        const eid = String(email || '').toLowerCase();
+        await db.collection('suppressionList').doc(eid).delete();
+        if (DEBUG) console.log('🟢 Un-suppress OK → suppressionList/%s', eid);
+      } catch (e) {
+        // Si no existe, no pasa nada
+        if (DEBUG) console.log('ℹ️ Un-suppress noop (no doc) para %s', String(email||'').toLowerCase());
+      }
     }
 
     // Aviso de éxito desactivado: no enviamos "newsletter_alta_ok"

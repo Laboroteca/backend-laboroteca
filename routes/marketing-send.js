@@ -406,7 +406,8 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
       materiasNorm[k] = vv;
       if (vv) anyMateria = true;
     }
-    if (!testOnly && !anyMateria) {
+    // Permitir envío sin materias si onlyCommercial está activo
+    if (!testOnly && !anyMateria && !onlyCommercial) {
       return res.status(400).json({ ok: false, error: 'MATERIAS_REQUIRED' });
     }
 
@@ -465,9 +466,15 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
       const set = new Set();
       snap.forEach(doc => {
         const d = doc.data() || {};
-        let match = false;
-        for (const k of Object.keys(materiasNorm)) {
-          if (materiasNorm[k] && d.materias?.[k]) { match = true; break; }
+        // Si hay materias seleccionadas, exige coincidencia con ≥1 materia.
+        // Si NO hay materias y onlyCommercial=true, no se filtra por materias.
+        const hasAnyMateria = Object.values(materiasNorm || {}).some(Boolean);
+        let match = true;
+        if (hasAnyMateria) {
+          match = false;
+          for (const k of Object.keys(materiasNorm)) {
+            if (materiasNorm[k] && d.materias?.[k]) { match = true; break; }
+          }
         }
         // Si se solicita filtro comercial, exige consentimiento comercial explícito
         if (onlyCommercial === true && d.consent_comercial !== true) {

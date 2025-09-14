@@ -1,6 +1,7 @@
 // routes/marketing-cron.js
 // ──────────────────────────────────────────────────────────────
 // Dispara envíos programados (emailQueue) cuando llega su hora.
+// Soporta filtro: onlyCommercial → solo contactos con consent_comercial=true
 // POST /marketing/cron-send
 //
 // Endurecido para producción:
@@ -164,7 +165,7 @@ function ensureLegalAndUnsub(html, unsubUrl) {
 
   const unsubHtml = `
     <p data-lb-unsub style="font-size:12px;color:#666;margin-top:18px">
-      Si no deseas seguir recibiendo esta newsletter, puedes darte de baja aquí:
+      Si no deseas seguir recibiendo este boletín, puedes darte de baja aquí:
       <a href="${unsubUrl}" target="_blank" rel="noopener">cancelar suscripción</a>.
     </p>
   `;
@@ -224,7 +225,7 @@ async function loadSuppressionSetCached() {
 }
 
 // ───────── Resolución de destinatarios ─────────
-async function resolveRecipients({ materias, testOnly }) {
+async function resolveRecipients({ materias, testOnly, onlyCommercial }) {
   if (testOnly) return ['ignacio.solsona@icacs.com', 'laboroteca@gmail.com'];
 
   const snap = await db.collection('marketingConsents')
@@ -234,10 +235,22 @@ async function resolveRecipients({ materias, testOnly }) {
   const set = new Set();
   snap.forEach(doc => {
     const d = doc.data() || {};
-    let match = false;
-    for (const k of Object.keys(materias || {})) {
-      if (materias[k] && d.materias?.[k]) { match = true; break; }
+    // Si hay materias seleccionadas, exige coincidencia con ≥1 materia.
+    // Si NO hay materias y onlyCommercial=true, no se filtra por materias.
+    const hasAnyMateria = Object.values(materias || {}).some(Boolean);
+    let match = true;
+    if (hasAnyMateria) {
+      match = false;
+      for (const k of Object.keys(materias || {})) {
+        if (materias[k] && d.materias?.[k]) { match = true; break; }
+      }
     }
+    // Filtro consentimiento comercial cuando se solicita
+    if (onlyCommercial === true && d.consent_comercial !== true) {
+      match = false;
+    }
+    // Siempre requiere estar en newsletter (consent_marketing=true)
+    if (d.consent_marketing !== true) match = false;
     if (match && d.email && typeof d.email === 'string' && d.email.includes('@')) {
       set.add(d.email.toLowerCase());
     }
@@ -420,6 +433,7 @@ async function processJob(ref) {
   const html     = String(job.html || '');
   const materias = job.materias || {};
   const testOnly = !!job.testOnly;
+  const onlyCommercial = !!job.onlyCommercial;
 
   if (!subject || !html) {
     await ref.update({ status:'failed', finishedAtISO:tsISO, error:'INVALID_JOB' });
@@ -430,7 +444,7 @@ async function processJob(ref) {
     // Recupera (o resuelve) destinatarios y estado de progreso
     let recipients = Array.isArray(job.recipientsSnapshot) ? job.recipientsSnapshot : null;
     if (!recipients) {
-      recipients = await resolveRecipients({ materias, testOnly });
+      recipients = await resolveRecipients({ materias, testOnly, onlyCommercial });
       // Guarda snapshot para consistencia del job
       await ref.update({
         recipientsSnapshot: recipients,
@@ -479,7 +493,7 @@ async function processJob(ref) {
     if (lastIndex >= total) {
       // Log envío
       await db.collection('emailSends').add({
-        subject, html, materias, testOnly,
+        subject, html, materias, testOnly, onlyCommercial,
         recipientsCount: total,
         createdAt: admin.firestore.Timestamp.fromDate(ts),
         createdAtISO: tsISO,

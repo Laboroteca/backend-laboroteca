@@ -71,8 +71,8 @@ const BUCKET_NAME =
    process.env.GCLOUD_STORAGE_BUCKET || '').trim();
 
 const SMTP2GO_API_KEY = String(process.env.SMTP2GO_API_KEY || '').trim();
-const FROM_EMAIL      = String(process.env.EMAIL_FROM || 'newsletter@laboroteca.es').trim();
-const FROM_NAME       = String(process.env.EMAIL_FROM_NAME || 'Laboroteca Newsletter').trim();
+const FROM_EMAIL      = String(process.env.EMAIL_FROM || 'noticias@boletin.laboroteca.es').trim();
+const FROM_NAME       = String(process.env.EMAIL_FROM_NAME || 'Boletin Laboroteca').trim();
 
 const UNSUB_SECRET = String(process.env.MKT_UNSUB_SECRET || 'laboroteca-unsub').trim();
 // Nueva URL de bajas (canónica sin slash final)
@@ -721,10 +721,10 @@ router.post('/consent', async (req, res) => {
           createdAt = prev.createdAt || createdAt;
         }
         tx.set(mcRef, {
-          email,
+          email: String(email).toLowerCase(),
           nombre,
-          consent_marketing: true,
-          consent_comercial,
+          consent_marketing: !!true,
+          consent_comercial: !!consent_comercial,
           materias,
           materiasList: materiasToList(materias),
           consentVersion,
@@ -774,7 +774,7 @@ router.post('/consent', async (req, res) => {
         const nombreSafe = nombre || (email.split('@')[0] || '').replace(/[._-]+/g, ' ');
         const tokens = { NOMBRE: nombreSafe };
 
-        const subject = tpl('¡Bienvenido a la newsletter de Laboroteca, {NOMBRE}!', tokens);
+        const subject = tpl('¡Bienvenido al Boletín de Laboroteca, {NOMBRE}!', tokens);
 
         // Pie legal corporativo unificado
         const pieHtml = `
@@ -788,9 +788,9 @@ router.post('/consent', async (req, res) => {
 
         const bodyTop = tpl(
           `<p>Hola {NOMBRE},</p>
-           <p><strong>¡Gracias por suscribirte a la newsletter de Laboroteca!</strong></p>
+           <p><strong>¡Gracias por suscribirte al Boletín de Laboroteca!</strong></p>
            <p>Desde ahora recibirás novedades por email sobre las materias que has seleccionado.</p>
-           <p>Y si quieres más novedades, puedes visitar nuestro <a href="https://www.laboroteca.es/boletin-informativo/">Boletín</a>.</p>
+           <p>Si quieres enterarte de las últimas novedades, puedes visitar ahora mismo la portada del <a href="https://www.laboroteca.es/boletin-informativo/">Boletín</a>.</p>
            <p>Si en algún momento quieres cambiar tus preferencias o darte de baja, puedes hacerlo desde <a href="${unsubUrl}">este enlace</a>.</p>
            <p>Un saludo,<br>Ignacio Solsona<br>Abogado</p>`,
           tokens

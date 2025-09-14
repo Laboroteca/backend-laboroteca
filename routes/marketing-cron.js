@@ -46,7 +46,7 @@ const FROM_EMAIL             = String(process.env.EMAIL_FROM || process.env.SMTP
 const FROM_NAME              = String(process.env.EMAIL_FROM_NAME || process.env.SMTP2GO_FROM_NAME || 'Laboroteca Newsletter').trim();
 
 const UNSUB_SECRET           = String(process.env.MKT_UNSUB_SECRET || 'laboroteca-unsub').trim();
-const UNSUB_PAGE             = String(process.env.MKT_UNSUB_PAGE   || 'https://www.laboroteca.es/unsubscribe/').trim();
+const UNSUB_PAGE             = String(process.env.MKT_UNSUB_PAGE   || 'https://www.laboroteca.es/baja-newsletter/').trim();
 
 const MAX_JOBS_PER_RUN       = Number(process.env.CRON_MAX_JOBS || 6);
 const MAX_ATTEMPTS           = Number(process.env.CRON_MAX_ATTEMPTS || 5);

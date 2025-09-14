@@ -50,7 +50,7 @@ const SMTP2GO_API_URL = String(process.env.SMTP2GO_API_URL || 'https://api.smtp2
 
 // Baja obligatoria
 const UNSUB_SECRET = String(process.env.MKT_UNSUB_SECRET || 'laboroteca-unsub').trim();
-const UNSUB_PAGE   = String(process.env.MKT_UNSUB_PAGE || 'https://www.laboroteca.es/unsubscribe/').trim();
+const UNSUB_PAGE   = String(process.env.MKT_UNSUB_PAGE || 'https://www.laboroteca.es/baja-newsletter/').trim();
 
 // Rate opcional para inmediatos (ms entre emails)
 const SEND_RATE_DELAY_MS = Number(process.env.SEND_RATE_DELAY_MS || 0);

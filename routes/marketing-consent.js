@@ -36,7 +36,7 @@
  *  - SMTP2GO_API_KEY=xxxx
  *  - EMAIL_FROM, EMAIL_FROM_NAME
  *  - MKT_UNSUB_SECRET=xxxx
- *  - MKT_UNSUB_PAGE=https://www.laboroteca.es/baja-newsletter/
+ *  - MKT_UNSUB_PAGE=https://www.laboroteca.es/baja-newsletter
  *  - GOOGLE_CLOUD_BUCKET o GCS_CONSENTS_BUCKET/GCS_BUCKET/GCLOUD_STORAGE_BUCKET
  *  - MKT_DEBUG=1 (opcional para logs verbosos)
  * ─────────────────────────────────────────────────────────────────────────────
@@ -75,8 +75,8 @@ const FROM_EMAIL      = String(process.env.EMAIL_FROM || 'newsletter@laboroteca.
 const FROM_NAME       = String(process.env.EMAIL_FROM_NAME || 'Laboroteca Newsletter').trim();
 
 const UNSUB_SECRET = String(process.env.MKT_UNSUB_SECRET || 'laboroteca-unsub').trim();
-// Nueva URL de bajas
-const UNSUB_PAGE   = String(process.env.MKT_UNSUB_PAGE   || 'https://www.laboroteca.es/baja-newsletter/').trim();
+// Nueva URL de bajas (canónica sin slash final)
+const UNSUB_PAGE   = String(process.env.MKT_UNSUB_PAGE   || 'https://www.laboroteca.es/baja-newsletter').trim();
 
 
 const IP_ALLOW  = String(process.env.CONSENT_IP_ALLOW || '').trim(); // ej: "1.2.3.4, 5.6.7.8"
@@ -422,7 +422,7 @@ function tpl(str, data = {}) {
     .replace(/%([A-Z0-9_]+)%/gi,             (_, k) => data[k] ?? '');
 }
 
-async function sendSMTP2GO({ to, subject, html }) {
+async function sendSMTP2GO({ to, subject, html, headers = [] }) {
   if (!SMTP2GO_API_KEY) throw new Error('SMTP2GO_API_KEY missing');
 
   const payload = {
@@ -432,6 +432,9 @@ async function sendSMTP2GO({ to, subject, html }) {
     subject,
     html_body: html
   };
+  if (headers && headers.length) {
+    payload.custom_headers = headers.map(({ header, value }) => ({ header, value }));
+  }
 
   const res = await fetch('https://api.smtp2go.com/v3/email/send', {
     method: 'POST',
@@ -763,6 +766,10 @@ router.post('/consent', async (req, res) => {
       try {
         const token   = makeUnsubToken(email);
         const unsubUrl = `${UNSUB_PAGE}${UNSUB_PAGE.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
+        const listHeaders = [
+          { header: 'List-Unsubscribe',      value: `<${unsubUrl}>` },
+          { header: 'List-Unsubscribe-Post', value: 'List-Unsubscribe=One-Click' }
+        ];
 
         const nombreSafe = nombre || (email.split('@')[0] || '').replace(/[._-]+/g, ' ');
         const tokens = { NOMBRE: nombreSafe };
@@ -789,7 +796,7 @@ router.post('/consent', async (req, res) => {
           tokens
         );
 
-        await sendSMTP2GO({ to: email, subject, html: bodyTop + pieHtml });
+        await sendSMTP2GO({ to: email, subject, html: bodyTop + pieHtml, headers: listHeaders });
         if (DEBUG) console.log('📧 Welcome email OK → %s', email);
       } catch (e) {
         console.warn('Welcome email failed:', e?.message || e);

@@ -596,7 +596,7 @@ router.post('/consent', async (req, res) => {
 
     // Fallback si marcaron comercial pero no llegó el hidden field
     if (consent_comercial && (!comercialUrl || !comercialVersion)) {
-      comercialUrl     = s(process.env.MKT_COMMERCIAL_CONSENT_URL, 'https://www.laboroteca.es/consentimiento-publicidad/');
+      comercialUrl     = s(process.env.MKT_COMMERCIAL_CONSENT_URL, 'https://www.laboroteca.es/consentimiento-newsletter/');
       comercialVersion = s(process.env.MKT_COMMERCIAL_CONSENT_VERSION, 'v1.1');
     }
 

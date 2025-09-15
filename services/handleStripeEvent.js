@@ -25,10 +25,28 @@ const escapeHtml = s => String(s ?? '')
   .replace(/>/g,'&gt;').replace(/"/g,'&quot;')
   .replace(/'/g,'&#39;');
 const crypto = require('crypto');
-const redact = (v) => (process.env.NODE_ENV === 'production' ? hash12(String(v || '')) : String(v || ''));
 const hash12 = e => crypto.createHash('sha256').update(String(e || '').toLowerCase()).digest('hex').slice(0,12);
+const redact = (v) => (process.env.NODE_ENV === 'production' ? hash12(String(v || '')) : String(v || ''));
+const redactEmail = (e) => redact((e || '').toString().toLowerCase().trim());
 const { ensureOnce } = require('../utils/dedupe');
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
+
+// ——— LRU en memoria para idempotencia cuando Firestore falle (no bloqueante) ———
+const EVT_RECENT_MAX = Number(process.env.EVT_RECENT_MAX || 5000);
+const EVT_TTL_MS = Number(process.env.EVT_TTL_MS || 6 * 60 * 60 * 1000); // 6h
+const _evts = new Map(); // id -> expiresAt
+function evtSeen(id) {
+  const now = Date.now(); const exp = _evts.get(id);
+  if (exp && exp > now) return true;
+  _evts.delete(id); return false;
+}
+function evtRemember(id) {
+  const now = Date.now(); _evts.set(id, now + EVT_TTL_MS);
+  if (_evts.size > EVT_RECENT_MAX) _evts.delete(_evts.keys().next().value);
+}
+setInterval(() => {
+  const now = Date.now(); for (const [k,exp] of _evts) if (exp<=now) _evts.delete(k);
+}, 10*60*1000).unref();
 
 // ——— Helpers comunes ———
 async function nombreCompletoPorEmail(email, fallbackNombre = '', fallbackApellidos = '') {
@@ -121,12 +139,20 @@ const CLUB_ID = MP_IDS['el-club-laboroteca'] || MP_IDS['club laboroteca'] || 106
 
 // 🔁 BLOQUE IMPAGO – Cancela TODO al primer intento fallido, email claro y sin generar factura
 async function handleStripeEvent(event) {
-  // Idempotencia global por evento Stripe
-const firstEvent = await ensureOnce('events', event.id);
-if (!firstEvent) {
-  console.warn(`🟡 Evento repetido ignorado: ${event.id} (${event.type})`);
-  return { duplicateEvent: true };
-}
+  // Idempotencia global por evento Stripe (FS → LRU memoria fallback)
+  let isFirst = true;
+  try {
+    const firstEvent = await ensureOnce('events', event.id);
+    isFirst = !!firstEvent;
+  } catch (e) {
+    console.warn('⚠️ ensureOnce(events) falló, uso LRU memoria:', e?.message || e);
+    try { await alertAdmin({ area:'evt_idem_firestore_fail', email:'-', err:e, meta:{ id:event.id, type:event.type } }); } catch(_){}
+    if (evtSeen(event.id)) isFirst = false; else evtRemember(event.id);
+  }
+  if (!isFirst) {
+    console.warn(`🟡 Evento repetido ignorado: ${event.id} (${event.type})`);
+    return { duplicateEvent: true };
+  }
 
   // ---- IMPAGO EN INVOICE ----
   if (event.type === 'invoice.payment_failed') {
@@ -166,7 +192,7 @@ if (!firstEvent) {
           const nComp = [doc.nombre, doc.apellidos].filter(Boolean).join(' ').trim();
           nombre = doc.nombre || '';
           nombreCompleto = nComp || '';
-          console.log(`✅ Nombre recuperado para ${email}: ${nombre}`);
+          console.log(`✅ Nombre recuperado para ${redactEmail(email)}: ${nombre}`);
         }
       } catch (err) {
         console.error('❌ Error al recuperar nombre desde Firestore:', err.message);
@@ -177,7 +203,7 @@ if (!firstEvent) {
 
     // --- Enviar email y desactivar membresía inmediatamente ---
     try {
-      console.log(`⛔️ Primer intento de cobro fallido, CANCELANDO suscripción y SIN emitir factura para: ${email} – ${nombre}`);
+      console.log(`⛔️ Primer intento de cobro fallido, CANCELANDO suscripción y SIN emitir factura para: ${redactEmail(email)} – ${nombre}`);
 // ✅ Determinar subscriptionId primero
 const subscriptionId =
   invoice.subscription ||
@@ -303,6 +329,14 @@ if (event.type === 'invoice.paid') {
     const invoiceId = invoice.id;
     const customerId = invoice.customer;
     const billingReason = invoice.billing_reason;
+
+    // Gate de seguridad por motivo de facturación
+    const allowManualInTest = (billingReason === 'manual' && event.livemode === false);
+    const allowedReasons = new Set(['subscription_create', 'subscription_cycle']);
+    if (!allowedReasons.has(billingReason) && !allowManualInTest) {
+      console.log(`⏭️ invoice.paid ignorada (billing_reason=${billingReason}, livemode=${event.livemode})`);
+      return { ignored: true, reason: 'billing_reason_not_allowed' };
+    }
 
   // ⏱️ Determinar fecha de fin de ciclo de Stripe (para alinear MP.expires_at)
   let expiresAtISO = null;
@@ -672,45 +706,58 @@ Error: ${T(e?.message || e)}`,
     }
 
 
-    const emailSeguro = (email || '').toString().trim().toLowerCase();
+const emailSeguro = String(email ?? '').trim().toLowerCase();
 
-if (emailSeguro.includes('@')) {
+if (emailSeguro && emailSeguro.indexOf('@') !== -1) {
+  const mpKey = `mp:activate:${invoiceId}`;
+  let doMp = true;
   try {
-    await activarMembresiaClub(emailSeguro, {
-      activationRef: String(invoiceId),
-      invoiceId: String(invoiceId),
-      via: 'webhook:invoice.paid'
-    });
+    const first = await ensureOnce('mpActivate', mpKey);
+    doMp = !!first; // true = primera vez → activar; false = duplicado → saltar
   } catch (e) {
-    console.error('❌ Activación Club (invoice.paid):', e?.message || e);
-    await alertAdmin({
-      area: 'activacion_membresia',
-      email: emailSeguro,
-      err: e,
-      meta: { evento: 'invoice.paid' }
-    });
+    console.warn('⚠️ ensureOnce(mpActivate) falló, continúo sin bloquear:', e?.message || e);
   }
-  try {
-    await syncMemberpressClub({
-      email: emailSeguro,
-      accion: 'activar',
-      membership_id: CLUB_ID,
-      importe: (invoice.amount_paid || 999) / 100,
-      ...(expiresAtISO ? { expires_at: expiresAtISO } : {})
-    });
-  } catch (e) {
-    console.error('❌ syncMemberpressClub (invoice.paid):', e?.message || e);
-    await alertAdmin({
-      area: 'sync_memberpress',
-      email: emailSeguro,
-      err: e,
-      meta: { evento: 'invoice.paid' }
-    });
+
+  if (!doMp) {
+    console.warn(`🟡 Dedupe activación MP para invoiceId=${invoiceId}`);
+  } else {
+    try {
+      await activarMembresiaClub(emailSeguro, {
+        activationRef: String(invoiceId),
+        invoiceId: String(invoiceId),
+        via: 'webhook:invoice.paid'
+      });
+    } catch (e) {
+      console.error('❌ Activación Club (invoice.paid):', e?.message || e);
+      await alertAdmin({
+        area: 'activacion_membresia',
+        email: emailSeguro,
+        err: e,
+        meta: { evento: 'invoice.paid' }
+      });
+    }
+
+    try {
+      await syncMemberpressClub({
+        email: emailSeguro,
+        accion: 'activar',
+        membership_id: CLUB_ID,
+        importe: (invoice.amount_paid || 999) / 100,
+        ...(expiresAtISO ? { expires_at: expiresAtISO } : {})
+      });
+    } catch (e) {
+      console.error('❌ syncMemberpressClub (invoice.paid):', e?.message || e);
+      await alertAdmin({
+        area: 'sync_memberpress',
+        email: emailSeguro,
+        err: e,
+        meta: { evento: 'invoice.paid' }
+      });
+    }
   }
 } else {
-
-      console.warn(`❌ Email inválido en syncMemberpressClub: "${emailSeguro}"`);
-    }
+  console.warn(`❌ Email inválido en syncMemberpressClub: "${emailSeguro}"`);
+}
 
 // 📧 Email de activación SOLO si falló la factura
 if (falloFactura) {
@@ -756,7 +803,7 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
     });
 
 
-    console.log(`✅ Factura de ${isAlta ? 'ALTA' : 'RENOVACIÓN'} procesada para ${redact(email)}`);
+    console.log(`✅ Factura de ${isAlta ? 'ALTA' : 'RENOVACIÓN'} procesada para ${redactEmail(email)}`);
   } catch (error) {
     console.error('❌ Error al procesar invoice.paid:', error);
   }
@@ -797,7 +844,7 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
 
     if (email) {
       try {
-        console.log(`❌ Suscripción cancelada: ${email} (motivo=${motivo}, finDeCiclo=${eraFinDeCiclo})`);
+        console.log(`❌ Suscripción cancelada: ${redactEmail(email)} (motivo=${motivo}, finDeCiclo=${eraFinDeCiclo})`);
 
         if (motivo === 'impago') {
           // ✅ Se mantiene tu comportamiento de baja inmediata (ya realizada)
@@ -1110,7 +1157,12 @@ try {
 
     const sessionId = session.id;
     const docRef = firestore.collection('comprasProcesadas').doc(sessionId);
-    await docRef.set({ sessionId, createdAt: new Date().toISOString() }, { merge: true });
+    try {
+      await docRef.set({ sessionId, createdAt: new Date().toISOString() }, { merge: true });
+    } catch (e) {
+      console.warn('⚠️ comprasProcesadas.set inicial falló (ignorado):', e?.message || e);
+      try { await alertAdmin({ area:'fs_compras_set_init', email:'-', err:e, meta:{ sessionId } }); } catch(_){}
+    }
 
     // ID de pago para dedupe de FacturaCity
     const pi = session.payment_intent || session.payment_intent_id || null;
@@ -1605,7 +1657,7 @@ if (esEntrada) {
   ) {
     try {
   await firestore.collection('datosFiscalesPorEmail').doc(email).set(datosCliente, { merge: true });
-  console.log(`✅ Datos fiscales guardados para ${email}`);
+  console.log(`✅ Datos fiscales guardados para ${redactEmail(email)}`);
 } catch (e) {
   console.error('❌ Firestore datos fiscales (final):', e?.message || e);
   await alertAdmin({
@@ -1635,14 +1687,19 @@ if (esEntrada) {
   return { success: false, mensaje: 'error_parcial', detalle: err?.message || String(err) };
 
 } finally {
-  await docRef.set({
-    email,
-    producto: datosCliente.producto,
-    fecha: new Date().toISOString(),
-    procesando: false,
-    facturaGenerada: !!pdfBuffer,  // ← accesible siempre
-    error: errorProcesando
-  }, { merge: true });
+  try {
+    await docRef.set({
+      email,
+      producto: datosCliente.producto,
+      fecha: new Date().toISOString(),
+      procesando: false,
+      facturaGenerada: !!pdfBuffer,
+      error: errorProcesando
+    }, { merge: true });
+  } catch (e) {
+    console.warn('⚠️ comprasProcesadas.set final falló (ignorado):', e?.message || e);
+    try { await alertAdmin({ area:'fs_compras_set_final', email, err:e, meta:{ sessionId } }); } catch(_){}
+  }
 }
 
 return { success: true };

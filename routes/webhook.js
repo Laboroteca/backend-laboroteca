@@ -14,14 +14,39 @@ const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
 console.log('📦 WEBHOOK CARGADO');
 
+// ── LRU simple en memoria para dedupe cuando Firestore falle (no bloqueante)
+const RECENT_MAX = Number(process.env.WEBHOOK_RECENT_MAX || 3000); // tamaño máx del LRU
+const RECENT_TTL_MS = Number(process.env.WEBHOOK_RECENT_TTL_MS || 6 * 60 * 60 * 1000); // 6h
+const _recent = new Map(); // eventId -> expiresAt
+function recentSeen(id) {
+  const now = Date.now();
+  const exp = _recent.get(id);
+  if (exp && exp > now) return true;
+  _recent.delete(id);
+  return false;
+}
+function recentRemember(id) {
+  const now = Date.now();
+  _recent.set(id, now + RECENT_TTL_MS);
+  if (_recent.size > RECENT_MAX) {
+    // borrar el más antiguo (iteración en inserción, suficiente aquí)
+    const firstKey = _recent.keys().next().value;
+    if (firstKey) _recent.delete(firstKey);
+  }
+}
+function recentGc() {
+  const now = Date.now();
+  for (const [k, exp] of _recent) if (exp <= now) _recent.delete(k);
+}
+setInterval(recentGc, 10 * 60 * 1000).unref();
+
 router.post(
   '/',
   express.raw({ type: 'application/json' }),
   async (req, res) => {
     try {
       // No toques req.body antes de verificar firma
-      console.log('🛎️ Stripe webhook recibido:');
-      console.log('headers:', req.headers);
+      console.log('🛎️ Stripe webhook recibido');
     } catch (logErr) {}
 
     const sig = req.headers['stripe-signature'];
@@ -58,15 +83,35 @@ return res.status(400).send(`Webhook Error: ${err.message}`);
       const eventId = event.id;
       const processedRef = firestore.collection('stripeWebhookProcesados').doc(eventId);
 
-      const alreadyProcessed = await firestore.runTransaction(async (transaction) => {
-        const doc = await transaction.get(processedRef);
-        if (doc.exists) return true;
-        transaction.set(processedRef, {
-          type: event.type,
-          fecha: new Date().toISOString()
+      let alreadyProcessed = false;
+      try {
+        alreadyProcessed = await firestore.runTransaction(async (transaction) => {
+          const doc = await transaction.get(processedRef);
+          if (doc.exists) return true;
+          transaction.set(processedRef, {
+            type: event.type,
+            fecha: new Date().toISOString()
+          });
+          return false;
         });
-        return false;
-      });
+      } catch (fsErr) {
+        // ❗ Firestore KO (cuota / outage). NO bloqueamos el flujo.
+        console.warn('⚠️ Firestore dedupe falló, usando LRU en memoria:', fsErr?.message || fsErr);
+        try {
+          await alertAdmin({
+            area: 'webhook_dedupe_firestore_fail',
+            email: '-',
+            err: fsErr,
+            meta: { eventId, eventType: event?.type || null }
+          });
+        } catch (_) {}
+        // Dedupe en memoria para evitar reprocesados durante la caída
+        if (recentSeen(eventId)) {
+          console.warn(`⛔️ [WEBHOOK] Evento duplicado (LRU) ignorado: ${eventId}`);
+          return res.status(200).json({ received: true, duplicate: true, dedupe: 'memory' });
+        }
+        recentRemember(eventId);
+      }
 
       if (alreadyProcessed) {
         console.warn(`⛔️ [WEBHOOK] Evento duplicado ignorado: ${eventId}`);

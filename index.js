@@ -681,7 +681,7 @@ app.post(
   }
 
   if (!/^[^@]+@[^@]+\.[^@]+$/.test(email)) {
-    console.warn('❌ Email inválido antes de Stripe:', email);
+    console.warn('❌ Email inválido antes de Stripe:', (email||'').replace(/^(.{0,2}).*(@.*\.)(.{0,3})$/, '$1***@***$2***'));
     return res.status(400).json({ error: 'Email inválido' });
   }
 
@@ -832,7 +832,7 @@ app.post(
   }
 
   if (!/^[^@]+@[^@]+\.[^@]+$/.test(email)) {
-    console.warn('❌ Email inválido antes de Stripe:', email);
+    console.warn('❌ Email inválido antes de Stripe:', (email||'').replace(/^(.{0,2}).*(@.*\.)(.{0,3})$/, '$1***@***$2***'));
     return res.status(400).json({ error: 'Email inválido' });
   }
 

@@ -14,6 +14,15 @@ const {
 } = require('../utils/productos');
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
+// ── logging sobrio (sin PII en prod)
+const LAB_DEBUG = (process.env.LAB_DEBUG === '1' || process.env.DEBUG === '1');
+const maskEmail = (e='') => {
+  if (!e || typeof e !== 'string' || !e.includes('@')) return '***';
+  const [u,d]=e.split('@'); const us = u.length<=2 ? (u[0]||'*') : u.slice(0,2);
+  return `${us}***@***${d.slice(Math.max(0,d.length-3))}`;
+};
+const safeLog = (...args) => { if (LAB_DEBUG) console.log(...args); };
+
 router.post('/create-session', async (req, res) => {
   // ❌ Bloquear intentos de lanzar entradas por esta ruta
   if ((req.body?.tipoProducto || '').toLowerCase() === 'entrada') {
@@ -88,17 +97,13 @@ router.post('/create-session', async (req, res) => {
     const slug = productoResuelto?.slug || normalizarProductoCat(nombreProducto, tipoProducto);
     const producto = slug ? PRODUCTOS[slug] : null;
 
-    console.log('📩 [create-session] Solicitud recibida:', {
-      nombre,
-      apellidos,
-      email,
-      dni,
-      direccion,
-      ciudad,
-      provincia,
-      cp,
+    // Log sin PII (solo en debug)
+    safeLog('📩 [create-session] Solicitud recibida:', {
+      tieneNombre: !!nombre,
+      tieneApellidos: !!apellidos,
+      email: maskEmail(email),
       tipoProducto,
-      nombreProducto,
+      nombreProducto
     });
 
     if (
@@ -111,13 +116,8 @@ router.post('/create-session', async (req, res) => {
       !tipoProducto ||
       !producto
     ) {
-      console.warn('⚠️ [create-session] Faltan datos obligatorios o producto inválido.', {
-        nombre,
-        email,
-        nombreProducto,
-        tipoProducto,
-        producto,
-      });
+      console.warn('⚠️ [create-session] Faltan datos o producto inválido. email=%s, tipo=%s, nombre=%s, producto?=%s',
+        maskEmail(email), tipoProducto, nombreProducto, !!producto);
       // 🔔 Aviso admin (validación 400)
       try {
         await alertAdmin({
@@ -146,7 +146,7 @@ router.post('/create-session', async (req, res) => {
 
     const registrado = await emailRegistradoEnWordPress(email);
     if (!registrado) {
-      console.warn('🚫 [create-session] Email no registrado en WP:', email);
+      console.warn('🚫 [create-session] Email no registrado en WP:', maskEmail(email));
       // 🔔 Aviso admin (403)
       try {
         await alertAdmin({
@@ -230,11 +230,9 @@ router.post('/create-session', async (req, res) => {
       ];
     }
 
-    console.log('🧪 tipoProducto:', tipoProducto);
-    console.log('🧪 esEntrada:', esEntrada);
-    console.log('🧪 totalAsistentes:', totalAsistentes);
-    console.log('🧪 importeFormulario:', importeFormulario);
-    console.log('🧪 producto:', producto);
+    safeLog('🧪 tipoProducto=%s esEntrada=%s asistentes=%s importeForm=%s candidatoPrice?=%s',
+      tipoProducto, esEntrada, totalAsistentes, importeFormulario,
+      !!(producto?.price_id || producto?.priceId));
 
     const session = await stripe.checkout.sessions.create({
       mode: 'payment', // 🔒 solo pago único en este endpoint
@@ -271,7 +269,7 @@ router.post('/create-session', async (req, res) => {
       },
     });
 
-    console.log('✅ [create-session] Sesión Stripe creada:', session.url);
+    console.log('✅ [create-session] Sesión Stripe creada (email=%s)', maskEmail(email));
     res.json({ url: session.url });
   } catch (err) {
     console.error('❌ [create-session] Error creando sesión de pago:', err?.message || err);

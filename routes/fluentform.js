@@ -1,15 +1,27 @@
+// routes/fluentform.js
 require('dotenv').config();
 const crypto = require('crypto');
 const { ensureOnce } = require('../utils/dedupe');
 const procesarCompra = require('../services/procesarCompra');
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
+// ── helpers de logging seguro
+const LAB_DEBUG = (process.env.LAB_DEBUG === '1' || process.env.DEBUG === '1');
+const maskEmail = (e='') => {
+  if (!e || typeof e !== 'string' || !e.includes('@')) return '***';
+  const [u, d] = e.split('@');
+  const us = u.length <= 2 ? (u[0]||'*') : u.slice(0,2);
+  return `${us}***@***${d.slice(Math.max(0,d.length-3))}`;
+};
+const safeLog = (...args) => { if (LAB_DEBUG) console.log(...args); };
+
+
 module.exports = async function (req, res) {
   const tokenCliente = req.headers['authorization'];
 
   // 🔐 Verificación de token secreto
   if (!tokenCliente || tokenCliente !== process.env.FLUENTFORM_TOKEN) {
-    console.warn('🚫 Token inválido recibido en /fluentform:', tokenCliente);
+    console.warn('🚫 Token inválido recibido en /fluentform'); // no exponemos token
 
     // 🔔 Aviso admin (no bloquea respuesta)
     try {
@@ -29,7 +41,8 @@ module.exports = async function (req, res) {
   }
 
   const datos = req.body;
-  console.log('📦 Datos recibidos desde FluentForms:\n', JSON.stringify(datos, null, 2));
+  // Log sobrio: sin PII ni volcado de body
+  safeLog('📦 [/fluentform] keys:', Object.keys(datos||{}));
 
   // 🔎 Normaliza claves
   const nombre    = datos.nombre || datos.Nombre || '';
@@ -43,29 +56,36 @@ module.exports = async function (req, res) {
   const tipoProducto        = (datos.tipoProducto || '').trim();
   const nombreProducto      = (datos.nombreProducto || '').trim();
   const descripcionProducto = (datos.descripcionProducto || '').trim();
-  const importe  = parseFloat((datos.importe || '0').toString().replace(',', '.'));
+  const importe  = parseFloat((datos.importe ?? '0').toString().replace(',', '.'));
 
   // 🧪 Validación
-  if (!email || !nombre || !tipoProducto || (!nombreProducto && !descripcionProducto) || !importe) {
-    console.warn('⚠️ Campos requeridos faltantes:', {
-      email, nombre, tipoProducto, nombreProducto, descripcionProducto, importe
-    });
-
+  // Permitimos 0 €, pero rechazamos NaN o negativos
+  if (!email || !nombre || !tipoProducto || (!nombreProducto && !descripcionProducto) || Number.isNaN(importe) || importe < 0) {
+    console.warn('⚠️ Campos requeridos faltantes (email=%s, tipo=%s, nombreProd=%s, descProd?=%s, importe=%s)',
+      maskEmail(email), tipoProducto, nombreProducto, !!descripcionProducto, importe);
     // 🔔 Aviso admin (no bloquea respuesta)
     try {
       await alertAdmin({
         area: 'fluentform_validacion',
         email: email || '-',
         err: new Error('Faltan datos requeridos en envío FluentForms'),
-        meta: {
-          nombre, apellidos, email, dni, direccion, ciudad, provincia, cp,
-          tipoProducto, nombreProducto, descripcionProducto, importe
-        }
+        // sin PII en meta
+        meta: { tipoProducto, nombreProducto, hasDesc: !!descripcionProducto, importe }
       });
     } catch (_) { /* no-op */ }
 
     return res.status(400).json({ error: 'Faltan datos requeridos.' });
   }
+
+  // 🚫 REGLA DE ORO: si hay cobro (>0), esto NO puede procesar nada.
+  // Debe redirigirse al flujo Stripe (crear-sesion-pago + webhook).
+  if (importe > 0) {
+    return res.status(400).json({
+      error: 'FLUJO_INVALIDO',
+      mensaje: 'Este endpoint no procesa compras de pago. Use Stripe (/crear-sesion-pago).'
+    });
+  }
+
 
   // 🔐 Clave idempotente persistente (usa ID propio del envío si existe)
   const naturalId = datos.submissionId || datos.entry_id || datos.ff_id || null;
@@ -77,7 +97,7 @@ module.exports = async function (req, res) {
   // 🔁 Reserva atómica en Firestore: si ya existe, ignorar
   const first = await ensureOnce('ff_sessions', dedupeKey);
   if (!first) {
-    console.warn(`⛔️ [fluentform] Duplicado ignorado: ${dedupeKeyRaw}`);
+    console.warn('⛔️ [fluentform] Duplicado ignorado (email=%s, key=%s)', maskEmail(email), dedupeKey);
 
     // 🔔 Aviso admin (informativo, no error)
     try {
@@ -85,7 +105,7 @@ module.exports = async function (req, res) {
         area: 'fluentform_duplicado',
         email,
         err: new Error('Duplicado FluentForms ignorado'),
-        meta: { naturalId, dedupeKeyRaw, dedupeKey }
+        meta: { naturalId: !!naturalId, dedupeKey }
       });
     } catch (_) { /* no-op */ }
 
@@ -125,10 +145,10 @@ module.exports = async function (req, res) {
 
   try {
     await procesarCompra(session);
-    console.log('✅ Compra procesada correctamente desde /fluentform');
+    console.log('✅ Procesada (importe=0) desde /fluentform para', maskEmail(email));
     return res.status(200).json({ ok: true, mensaje: 'Compra procesada correctamente' });
   } catch (error) {
-    console.error('❌ Error procesando compra desde /fluentform:', error);
+    console.error('❌ Error procesando compra (ff, importe=0):', error?.message || error);
 
     // 🔔 Aviso admin (500)
     try {
@@ -136,14 +156,7 @@ module.exports = async function (req, res) {
         area: 'fluentform_procesar_compra',
         email,
         err: error,
-        meta: {
-          dedupeKey,
-          naturalId,
-          tipoProducto,
-          nombreProducto,
-          descripcionProducto,
-          importe
-        }
+      meta: { dedupeKey, hasNaturalId: !!naturalId, tipoProducto, nombreProducto, hasDesc: !!descripcionProducto, importe }
       });
     } catch (_) { /* no-op */ }
 

@@ -102,8 +102,8 @@ const PRODUCTOS = {
   // ─────────────────────────────────────────────────────────────────────────────
   'libro-conoce-y-protege-tus-derechos-laborales': {
     slug: 'libro-conoce-y-protege-tus-derechos-laborales',
-    nombre: 'Libro digital. Conoce y defiende tus derechos laborales',
-    descripcion: 'Conoce y defiende tus derechos laborales. Edición digital con acceso vitalicio.',
+    nombre: 'Libro digital. Conoce y protege tus derechos laborales',
+    descripcion: 'Conoce y protege tus derechos laborales. Edición digital con acceso vitalicio.',
    tipo: 'libro',
     es_recurrente: false,
     activar_membresia: true,
@@ -116,7 +116,7 @@ const PRODUCTOS = {
     price_id: 'price_1S3jNSEe6Cd77jenZ52iQd7D',
     imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/04/CONSULTAS-IGNACIO-SOLSONA-scaled.webp',
     precio_cents: 2995, // informativo/compat
-    descripcion_factura: 'Libro digital (acceso vitalicio): "Conoce y defiende tus derechos laborales".',
+    descripcion_factura: 'Libro digital (acceso vitalicio): "Conoce y protege tus derechos laborales".',
     aliases: [
       'conoce y defiende tus derechos laborales',
       'conocer y defender tus derechos laborales',

@@ -2,6 +2,7 @@
 // 
 const admin = require('../firebase');
 const firestore = admin.firestore();
+const { FieldValue } = admin.firestore;
 
 const { guardarEnGoogleSheets } = require('./googleSheets');
 const { crearFacturaEnFacturaCity } = require('./facturaCity');
@@ -349,6 +350,18 @@ if (event.type === 'invoice.paid') {
     }
   } catch (_) {}
 
+  // ↪️ Re-alta: si la suscripción tenía baja programada en Stripe, anúlala
+  try {
+    if (invoice.subscription) {
+      const sub = await stripe.subscriptions.retrieve(invoice.subscription);
+      if (sub.cancel_at_period_end) {
+        await stripe.subscriptions.update(invoice.subscription, { cancel_at_period_end: false });
+        console.log('↪️ cancel_at_period_end=false por re-alta (invoice.paid)', invoice.subscription);
+      }
+    }
+  } catch (e) {
+    console.warn('⚠️ No se pudo desprogramar la baja en Stripe:', e?.message || e);
+  }
     if (!invoiceId || !customerId) {
       console.warn('⚠️ Falta invoiceId o customerId en invoice.paid');
       return;
@@ -505,6 +518,8 @@ if (isAlta) {
         email,
         nombre, apellidos, dni,
         activo: true,
+        // limpiar marcas de baja anteriores (eliminar el campo)
+        fechaBaja: FieldValue.delete(),
         ultimaRenovacion: ahoraISO,
         ...(isAlta && (!uSnap.exists || !uSnap.data()?.fechaAlta) ? { fechaAlta: ahoraISO } : {})
       }, { merge: true });
@@ -754,6 +769,30 @@ if (emailSeguro && emailSeguro.indexOf('@') !== -1) {
         meta: { evento: 'invoice.paid' }
       });
     }
+
+    // 🔒 Re-alta segura: anular baja "pendiente" en Firestore si existe
+    try {
+      const refBaja  = firestore.collection('bajasClub').doc(emailSeguro);
+      const snapBaja = await refBaja.get();
+      if (snapBaja.exists) {
+        const d = snapBaja.data() || {};
+        const estado = String(d.estadoBaja || '').toLowerCase();
+        const comp   = String(d.comprobacionFinal || '').toLowerCase();
+        const isPend = (estado === 'programada') || (comp === 'pendiente');
+        if (isPend) {
+          await refBaja.set({
+            estadoBaja: 'anulada',
+            // etiqueta de auditoría: la baja pendiente se cancela por re-alta
+            comprobacionFinal: 'cancelada_por_re_alta',
+            fechaAnulacion: new Date().toISOString()
+          }, { merge: true });
+          console.log('↪️ Baja programada anulada por re-alta para', redactEmail(emailSeguro));
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ No se pudo anular baja programada tras re-alta:', e?.message || e);
+    }
+
   }
 } else {
   console.warn(`❌ Email inválido en syncMemberpressClub: "${emailSeguro}"`);

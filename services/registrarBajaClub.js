@@ -23,11 +23,15 @@ const RANGE_APPEND = `${RANGE_BASE}!A2`; // A..F
 const VERIF = (v) => String(v || 'PENDIENTE').toUpperCase();
 const isCorrecto = (v) => /^CORRECTO/.test(String(v || '').toUpperCase());
 const isPendiente = (v) => /^PENDIENTE/.test(String(v || '').toUpperCase());
+const maskEmail = (e='') => {
+  const [u,d] = String(e).split('@'); if(!u||!d) return '***';
+  return `${u.slice(0,2)}***@***${d.slice(-3)}`;
+};
 
 async function getSheets() {
   const b64 = process.env.GCP_CREDENTIALS_BASE64;
   if (!b64) {
-    try { await alertAdmin({ area: 'bajas_sheets_config', email: '-', err: new Error('GCP_CREDENTIALS_BASE64 ausente') }); } catch {}
+    try { await alertAdmin({ area: 'bajas_sheets_config', email: '-', err: { message: 'GCP_CREDENTIALS_BASE64 ausente' } }); } catch {}
     throw new Error('❌ Falta GCP_CREDENTIALS_BASE64');
   }
   const credentials = JSON.parse(Buffer.from(b64, 'base64').toString('utf8'));
@@ -76,7 +80,7 @@ async function registrarBajaClub({
         (r[4] || '').trim() === E
       );
       if (yaExiste) {
-        console.log(`↪️ registrarBajaClub: ya existe fila para ${A} · ${D} · ${E}. No se duplica.`);
+        console.log(`↪️ registrarBajaClub: ya existe fila para ${maskEmail(A)} · ${D} · ${E}. No se duplica.`);
         return;
       }
     } catch (eGet) {
@@ -90,14 +94,15 @@ async function registrarBajaClub({
       insertDataOption: 'INSERT_ROWS',
       requestBody: { values: [fila] },
     });
-    console.log(`📉 Baja registrada en Sheets: ${A} (${D})`);
+    console.log(`📉 Baja registrada en Sheets: ${maskEmail(A)} (${D})`);
   } catch (err) {
     console.error('❌ registrarBajaClub:', err?.message || err);
 
     // Silenciar alertas si es una baja diferida aún "pendiente"
     const esDiferida = ['voluntaria', 'manual_fin_ciclo'].includes(String(motivo || '').toLowerCase());
     if (!(esDiferida && VERIF(verificacion) === 'PENDIENTE')) {
-      try { await alertAdmin({ area: 'bajas_sheet_append', email: A, err, meta: { spreadsheetId } }); } catch {}
+      const mask = (e='') => { const [u,d]=String(e).split('@'); return (u&&d)?`${u.slice(0,2)}***@***${d.slice(-3)}`:'***'; };
+      try { await alertAdmin({ area: 'bajas_sheet_append', email: mask(A), err: { message: err?.message, code: err?.code, type: err?.type }, meta: { spreadsheetId } }); } catch {}
     }
   }
 }
@@ -168,7 +173,7 @@ async function actualizarVerificacionBaja({
     if (candidateIndex === -1) {
       const reason = 'not_found';
       if (expectExisting) {
-        try { await alertAdmin({ area: 'bajas_sheet_update_missing_row', email: emailKey, err: new Error('Fila no encontrada para actualizar F'), meta: { efectosKey, motivo: motivo || 'auto' } }); } catch {}
+        try { await alertAdmin({ area: 'bajas_sheet_update_missing_row', email: maskEmail(emailKey), err: { message: 'Fila no encontrada para actualizar F' }, meta: { efectosKey, motivo: motivo || 'auto' } }); } catch {}
       }
       return { updated: false, reason };
     }
@@ -181,11 +186,11 @@ async function actualizarVerificacionBaja({
       requestBody: { values: [[estado]] },
     });
 
-    console.log(`📝 Verificación actualizada en Sheets para ${emailKey} → ${estado}`);
+    console.log(`📝 Verificación actualizada en Sheets para ${maskEmail(emailKey)} → ${estado}`);
     return { updated: true };
   } catch (err) {
     console.error('❌ actualizarVerificacionBaja:', err?.message || err);
-    try { await alertAdmin({ area: 'bajas_sheet_update', email: emailKey, err, meta: { efectosKey, motivo: motivo || 'auto' } }); } catch {}
+    try { await alertAdmin({ area: 'bajas_sheet_update', email: maskEmail(emailKey), err: { message: err?.message, code: err?.code, type: err?.type }, meta: { efectosKey, motivo: motivo || 'auto' } }); } catch {}
     return { updated: false, reason: 'exception' };
   }
 }

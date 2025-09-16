@@ -4,6 +4,7 @@
 const fetch = require('node-fetch');
 const crypto = require('crypto');
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // ⚙️ Config por entorno (no hardcode)
 const DEFAULT_API_URL = (process.env.MP_SYNC_API_URL_CLUB || 'https://www.laboroteca.es/wp-json/laboroteca/v1/club-membership').trim();
@@ -15,6 +16,13 @@ const MP_SYNC_DEBUG   = String(process.env.MP_SYNC_DEBUG || '').trim() === '1';
 const maskTail = (s) => (s ? `••••${String(s).slice(-4)}` : null);
 const nowIso   = () => new Date().toISOString();
 const shortId  = () => crypto.randomBytes(6).toString('hex');
+const maskEmail = (e='') => {
+  const [u,d] = String(e).split('@'); if(!u||!d) return '***';
+  return `${u.slice(0,2)}***@***${d.slice(-3)}`;
+};
+const sanitizeSnippet = (s='') =>
+  String(s).replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig,'***@***');
+
 
 /**
  * Firma HMAC:
@@ -62,8 +70,10 @@ async function syncMemberpressClub({
   if (!ALLOWED_IN.includes(accion)) {
     throw new Error("❌ Acción inválida: usa 'activar' o 'desactivar'");
   }
-  if (!Number.isInteger(membership_id)) {
-    throw new Error('❌ membership_id debe ser un número entero');
+  // Acepta strings numéricos y normaliza
+  const mid = Number.parseInt(membership_id, 10);
+  if (!Number.isFinite(mid)) {
+    throw new Error('❌ membership_id debe ser numérico');
   }
 
   // —— Config segura obligatoria
@@ -81,10 +91,11 @@ async function syncMemberpressClub({
   const accionOut = (accion === 'activar') ? 'activar' : 'desactivar';
 
   // —— Payload
+  const emailNorm = String(email).trim().toLowerCase();
   const payload = {
-    email,
+    email: emailNorm,
     accion: accionOut,
-    membership_id,
+    membership_id: mid,
     importe: importeNum
   };
   if (typeof expires_at === 'string' && expires_at.trim()) {
@@ -111,8 +122,7 @@ async function syncMemberpressClub({
 
   // —— Log operativo mínimo
   const reqId = shortId();
-  console.log(`⏩ [syncMemberpressClub#${reqId}] '${accionOut}' → ${email} (ID:${membership_id}${accionOut==='activar' ? `, €${importeNum}` : ''}${payload.expires_at ? `, expires_at=${payload.expires_at}` : ''})`);
-
+  console.log(`⏩ [syncMemberpressClub#${reqId}] '${accionOut}' → ${maskEmail(emailNorm)} (ID:${mid}${accionOut==='activar' ? `, €${importeNum}` : ''}${payload.expires_at ? `, expires_at=${payload.expires_at}` : ''})`);
   // —— Petición (con 1 reintento simple ante 502/503/504)
   let response;
   let text;
@@ -121,6 +131,7 @@ async function syncMemberpressClub({
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'Accept': 'application/json',
         'User-Agent': 'LaborotecaMP/1.0',
         'x-api-key': API_KEY,
         'x-lab-ts': ts,
@@ -137,10 +148,10 @@ async function syncMemberpressClub({
   try {
     ({ r: response, t: text } = await attempt());
 
-    // Reintento simple si es 502/503/504
-    if ([502, 503, 504].includes(response.status)) {
+    // Reintento simple si es 408/429/502/503/504/522/524 (timeouts o upstream temporal)
+    if ([408, 429, 502, 503, 504, 522, 524].includes(response.status)) {
       if (MP_SYNC_DEBUG) console.warn(`[syncMemberpressClub#${reqId}] retry por ${response.status}`);
-      await new Promise(res => setTimeout(res, 500));
+      await sleep(500 + Math.floor(Math.random() * 300));
       ({ r: response, t: text } = await attempt());
     }
 
@@ -163,27 +174,29 @@ async function syncMemberpressClub({
       throw new Error(`❌ Respuesta WP inesperada (ok=${String(data?.ok)})`);
     }
 
-    console.log(`✅ [MemberPressClub#${reqId}] '${accionOut}' OK para ${email}`);
+    console.log(`✅ [MemberPressClub#${reqId}] '${accionOut}' OK para ${maskEmail(emailNorm)}`);
     return data;
 
   } catch (err) {
     // —— Log de error y alerta
-    console.error(`❌ [syncMemberpressClub#${reqId}]`, err?.message || err, text ? `| resp: ${text.substring(0, 200)}` : '');
+    const safeSnippet = text ? sanitizeSnippet(text).substring(0, 200) : '';
+    console.error(`❌ [syncMemberpressClub#${reqId}] ${err?.message || err}${safeSnippet ? ` | resp: ${safeSnippet}` : ''}`);
+
 
     try {
       await alertAdmin({
         area: 'memberpress_sync',
-        email,
-        err,
+        email: maskEmail(emailNorm),
+        err: { message: err?.message, code: err?.code, type: err?.type },
         meta: {
           accion: accionOut,
-          membership_id,
+          membership_id: mid,
           importe: importeNum,
           apiUrl: API_URL,
           ts,
           reqId,
           status: response?.status || null,
-          responseTextSnippet: typeof text === 'string' ? text.slice(0, 500) : null,
+          responseTextSnippet: typeof text === 'string' ? sanitizeSnippet(text).slice(0, 500) : null,
           at: nowIso()
         }
       });

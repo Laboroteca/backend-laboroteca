@@ -15,6 +15,11 @@ const ACTIVE_STATUSES = ['active', 'trialing', 'past_due'];
 const nowISO = () => new Date().toISOString();
 // ✔️ Sentinel para llamadas autenticadas por HMAC desde WP (no romper otros flujos)
 const WP_ASSERTED_SENTINEL = process.env.WP_ASSERTED_SENTINEL || '__WP_ASSERTED__';
+// Util PII
+const maskEmail = (e='') => {
+  const [u,d] = String(e).split('@'); if(!u||!d) return '***';
+  return `${u.slice(0,2)}***@***${d.slice(-3)}`;
+};
 
 /** Resolución robusta del NOMBRE y APELLIDOS para la fila de baja y el email */
 async function getNombreCompleto(email, subContext) {
@@ -51,7 +56,8 @@ async function getNombreCompleto(email, subContext) {
       const cust = await stripe.customers.retrieve(custId);
       if (cust?.name) return String(cust.name).trim();
     } else if (email) {
-      const clientes = await stripe.customers.list({ email, limit: 1 });
+    // Procesa todos los clientes con ese email para evitar residuales
+    const clientes = await stripe.customers.list({ email, limit: 100 });
       const cust = clientes?.data?.[0];
       if (cust?.name) return String(cust.name).trim();
     }
@@ -136,7 +142,12 @@ async function desactivarMembresiaClub(email, password, enviarEmailConfirmacion 
         return { ok: false, mensaje: 'Contraseña incorrecta' };
       }
     } catch (err) {
-      await alertAdmin({ area: 'desactivarMembresiaClub_login', email, err, meta: { email } });
+      try { await alertAdmin({
+        area: 'desactivarMembresiaClub_login',
+        email: maskEmail(email),
+        err: { message: err?.message, code: err?.code, type: err?.type },
+        meta: { email: maskEmail(email) }
+      }); } catch(_) {}
       return { ok: false, mensaje: 'Contraseña incorrecta' };
     }
   }
@@ -145,118 +156,118 @@ async function desactivarMembresiaClub(email, password, enviarEmailConfirmacion 
   // Paso 1) Stripe — Programar fin de ciclo
   let suscripcionesActualizadas = 0;
   const fechasEfectos = [];
+  const subscriptionIds = [];
+  let firstSubContext = null;
   const fechaSolicitudISO = nowISO(); // misma fecha para Sheets y email
 
   try {
-    const clientes = await stripe.customers.list({ email, limit: 1 });
+    // Procesa TODOS los clientes que compartan email (evita residuales si hay duplicados en Stripe)
+    const clientes = await stripe.customers.list({ email, limit: 100 });
     if (!clientes?.data?.length) {
       // sin cliente en Stripe → no hay nada que programar (pero no rompemos)
-      await alertAdmin({
+      try { await alertAdmin({
         area: 'baja_voluntaria_sin_cliente_stripe',
-        email,
-        err: new Error('Cliente no encontrado en Stripe'),
+        email: maskEmail(email),
+        err: { message: 'Cliente no encontrado en Stripe' },
         meta: {}
-      });
+      }); } catch(_) {}
     } else {
-      const customerId = clientes.data[0].id;
-      const subs = await stripe.subscriptions.list({
-        customer: customerId,
-        status: 'all',
-        limit: 25,
-      });
-
-      for (const sub of subs.data) {
-        // Solo suscripciones realmente activas o en ciclo
-        if (!ACTIVE_STATUSES.includes(sub.status)) continue;
-
-        // Programar cancelación al fin de ciclo
-        const updated = await stripe.subscriptions.update(sub.id, {
-          cancel_at_period_end: true,
-          metadata: {
-            ...(sub.metadata || {}),
-            motivo_baja: 'baja_voluntaria',
-            origen_baja: 'formulario_usuario',
-            email, // redundante pero útil para trazas
-          },
+      for (const c of clientes.data) {
+        const subs = await stripe.subscriptions.list({
+          customer: c.id,
+          status: 'all',
+          limit: 100,
         });
+        for (const sub of subs.data) {
+          if (!ACTIVE_STATUSES.includes(sub.status)) continue;
+          if (!firstSubContext) firstSubContext = sub;
 
-        // Releer para obtener cancel_at consistente (Stripe lo rellena)
-        let refreshed = null;
-        try { refreshed = await stripe.subscriptions.retrieve(sub.id); } catch (_) {}
-
-        // Fecha de efectos robusta
-        const fechaEfectosISO = computeFechaEfectosISO({ updated, refreshed, original: sub });
-        if (!fechaEfectosISO) {
-          await alertAdmin({
-            area: 'baja_voluntaria_sin_cpe',
-            email,
-            err: new Error('Sin fecha de efectos fiable'),
-            meta: { subscriptionId: sub.id, status: (refreshed || updated || sub)?.status, cancel_at: (refreshed || updated || sub)?.cancel_at }
+          const updated = await stripe.subscriptions.update(sub.id, {
+            cancel_at_period_end: true,
+            metadata: {
+              ...(sub.metadata || {}),
+              motivo_baja: 'baja_voluntaria',
+              origen_baja: 'formulario_usuario',
+              email,
+            },
           });
-          // No cortamos todo el flujo por una subs rara: saltamos esta y seguimos
-          continue;
+
+          let refreshed = null;
+          try { refreshed = await stripe.subscriptions.retrieve(sub.id); } catch (_) {}
+
+          const fechaEfectosISO = computeFechaEfectosISO({ updated, refreshed, original: sub });
+          if (!fechaEfectosISO) {
+            try { await alertAdmin({
+              area: 'baja_voluntaria_sin_cpe',
+              email: maskEmail(email),
+              err: { message: 'Sin fecha de efectos fiable' },
+              meta: { subscriptionId: sub.id, status: (refreshed || updated || sub)?.status, cancel_at: (refreshed || updated || sub)?.cancel_at }
+            }); } catch(_) {}
+            continue;
+          }
+
+          fechasEfectos.push(fechaEfectosISO);
+          subscriptionIds.push(sub.id);
+          suscripcionesActualizadas++;
+          console.log(`🟢 Stripe: baja voluntaria programada ${sub.id} (efectos=${fechaEfectosISO})`);
         }
+      }
 
-        fechasEfectos.push(fechaEfectosISO);
-        suscripcionesActualizadas++;
-
-        // Firestore: baja programada (para job/verificación posterior)
+      // ——— Una sola escritura en bajasClub + un solo acuse/email ———
+      if (suscripcionesActualizadas > 0) {
+        // fecha final = la más tardía (cuando realmente se pierde el acceso)
+        const fechaEfectosFinal = fechasEfectos.sort().slice(-1)[0];
         try {
           await firestore.collection('bajasClub').doc(email).set(
             {
               tipoBaja: 'voluntaria',
               origen: 'formulario_usuario',
-              subscriptionId: sub.id,
+              subscriptionIds,
               fechaSolicitud: fechaSolicitudISO,
-              fechaEfectos: fechaEfectosISO,
-              estadoBaja: 'programada', // pendiente/programada/ejecutada/fallida
+              fechaEfectos: fechaEfectosFinal,
+              estadoBaja: 'programada',
               comprobacionFinal: 'pendiente',
             },
             { merge: true }
           );
         } catch (e) {
-          await alertAdmin({
+          try { await alertAdmin({
             area: 'desactivarMembresiaClub_firestore_baja',
-            email,
-            err: e,
-            meta: { subscriptionId: sub.id, fechaEfectosISO },
-          });
+            email: maskEmail(email),
+            err: { message: e?.message, code: e?.code, type: e?.type },
+            meta: { subscriptionIds, fechaEfectosFinal },
+          }); } catch(_) {}
         }
 
-        // Nombre y email de acuse + fila única en Sheets
         try {
-          const nombre = await getNombreCompleto(email, (refreshed || updated || sub));
-
+          const nombre = await getNombreCompleto(email, firstSubContext);
           await registrarBajaClub({
             email,
             nombre,
             motivo: 'voluntaria',
-            fechaSolicitud: fechaSolicitudISO,  // una sola marca temporal
-            fechaEfectos: fechaEfectosISO,      // fin de ciclo correcto
-            verificacion: 'PENDIENTE'           // se actualizará a CORRECTO/FALLIDA en la fecha de efectos
+            fechaSolicitud: fechaSolicitudISO,
+            fechaEfectos: fechaEfectosFinal,
+            verificacion: 'PENDIENTE'
           });
-
-          await enviarEmailSolicitudBajaVoluntaria(nombre, email, fechaSolicitudISO, fechaEfectosISO);
-          console.log(`[BajaClub] 📩 Acuse de solicitud enviado a ${email}`);
+          await enviarEmailSolicitudBajaVoluntaria(nombre, email, fechaSolicitudISO, fechaEfectosFinal);
+          console.log(`[BajaClub] 📩 Acuse de solicitud enviado a ${maskEmail(email)}`);
         } catch (e) {
-          await alertAdmin({
+          try { await alertAdmin({
             area: 'desactivarMembresiaClub_registro_o_email',
-            email,
-            err: e,
-            meta: { subscriptionId: sub.id, fechaEfectosISO }
-          });
+            email: maskEmail(email),
+            err: { message: e?.message, code: e?.code, type: e?.type },
+            meta: { subscriptionIds, fechaEfectos: fechasEfectos }
+          }); } catch(_) {}
         }
-
-        console.log(`🟢 Stripe: baja voluntaria programada ${sub.id} (efectos=${fechaEfectosISO})`);
       }
     }
   } catch (err) {
-    await alertAdmin({
+    try { await alertAdmin({
       area: 'desactivarMembresiaClub_stripe_update',
-      email,
-      err,
-      meta: { email },
-    });
+      email: maskEmail(email),
+      err: { message: err?.message, code: err?.code, type: err?.type },
+      meta: { email: maskEmail(email) },
+    }); } catch(_) {}
     // No devolvemos error duro por si no hubiera suscripciones activas
   }
 
@@ -272,6 +283,7 @@ async function desactivarMembresiaClub(email, password, enviarEmailConfirmacion 
     voluntaria: true,
     suscripciones: suscripcionesActualizadas,
     fechasEfectos: fechasEfectos.length ? fechasEfectos : undefined,
+    subscriptionIds: subscriptionIds.length ? subscriptionIds : undefined,
   };
 }
 

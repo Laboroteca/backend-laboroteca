@@ -15,6 +15,10 @@ const MEMBERPRESS_ID = parseInt(process.env.MEMBERSHIP_ID || '10663', 10);
 const ACTIVE_STATUSES = ['active', 'trialing', 'past_due'];
 
 const nowISO = () => new Date().toISOString();
+const maskEmail = (e='') => {
+  const [u,d] = String(e).split('@'); if(!u||!d) return '***';
+  return `${u.slice(0,2)}***@***${d.slice(-3)}`;
+};
 
 /**
  * Ruta “baja del Club”
@@ -62,33 +66,39 @@ async function desactivarMembresiaClub(email, password) {
 
   try {
     // 1) Stripe: cancelar inmediatamente las suscripciones activas
-    const clientes = await stripe.customers.list({ email, limit: 1 });
+    //    (recorre TODOS los clientes que compartan email para evitar cobros residuales)
+    const clientes = await stripe.customers.list({ email, limit: 100 });
     if (!clientes?.data?.length) {
-      console.warn(`⚠️ Stripe: cliente no encontrado (${email})`);
+      console.warn(`⚠️ Stripe: cliente no encontrado (${maskEmail(email)})`);
     } else {
-      const customerId = clientes.data[0].id;
-      const subs = await stripe.subscriptions.list({
-        customer: customerId,
-        status: 'all',
-        limit: 25,
-      });
+      for (const c of clientes.data) {
+        const subs = await stripe.subscriptions.list({
+          customer: c.id,
+          status: 'all',
+          limit: 100,
+        });
 
-      for (const sub of subs.data) {
-        if (!ACTIVE_STATUSES.includes(sub.status)) continue;
-        huboSuscripciones = true;
+        for (const sub of subs.data) {
+          if (!ACTIVE_STATUSES.includes(sub.status)) continue;
+          huboSuscripciones = true;
 
-        try {
-          await stripe.subscriptions.cancel(sub.id, { invoice_now: false, prorate: false });
-          console.log(`🛑 Stripe: cancelada inmediata ${sub.id} (${email})`);
-        } catch (e) {
-          console.error('❌ Error cancelando suscripción inmediata en Stripe:', e?.message || e);
-          // seguimos con el resto para no dejar el estado a medias
+          try {
+            await stripe.subscriptions.cancel(sub.id, { invoice_now: false, prorate: false });
+            console.log(`🛑 Stripe: cancelada inmediata ${sub.id} (${maskEmail(email)})`);
+          } catch (e) {
+            console.error('❌ Error cancelando suscripción inmediata en Stripe:', e?.message || e);
+            // seguimos con el resto para no dejar el estado a medias
+          }
         }
       }
     }
   } catch (errStripe) {
     console.error('❌ Stripe error (baja inmediata):', errStripe?.message || errStripe);
-    await alertAdmin({ area: 'stripe_baja_inmediata', email, err: errStripe });
+    try { await alertAdmin({
+      area: 'stripe_baja_inmediata',
+      email: maskEmail(email),
+      err: { message: errStripe?.message, code: errStripe?.code, type: errStripe?.type }
+    }); } catch (_) {}
   }
 
   // 2) Firestore: marcar inactivo ya
@@ -97,10 +107,14 @@ async function desactivarMembresiaClub(email, password) {
       { activo: false, fechaBaja: nowISO() },
       { merge: true }
     );
-    console.log(`📉 Firestore: baja inmediata registrada para ${email}`);
+     console.log(`📉 Firestore: baja inmediata registrada para ${maskEmail(email)}`);
   } catch (errFS) {
     console.error('❌ Error Firestore (usuariosClub):', errFS?.message || errFS);
-    await alertAdmin({ area: 'firestore_baja_inmediata', email, err: errFS });
+    try { await alertAdmin({
+      area: 'firestore_baja_inmediata',
+      email: maskEmail(email),
+      err: { message: errFS?.message, code: errFS?.code, type: errFS?.type }
+    }); } catch (_) {}
   }
 
   // 3) MemberPress: desactivar acceso (idempotente)
@@ -116,7 +130,11 @@ async function desactivarMembresiaClub(email, password) {
     }
   } catch (errMP) {
     console.error('❌ Error MemberPress (inmediata):', errMP?.message || errMP);
-    await alertAdmin({ area: 'memberpress_baja_inmediata', email, err: errMP });
+    try { await alertAdmin({
+      area: 'memberpress_baja_inmediata',
+      email: maskEmail(email),
+      err: { message: errMP?.message, code: errMP?.code, type: errMP?.type }
+    }); } catch (_) {}
     return { ok: false, mensaje: 'Error al desactivar en MemberPress.' };
   }
 

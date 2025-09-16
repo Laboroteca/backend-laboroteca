@@ -40,11 +40,11 @@ const PRODUCTOS = {
     activar_membresia: true,
     // Canónicos
     memberpressId: 7994,
-    priceId: 'price_1RMG0mEe6Cd77jenTpudZVan',
-    precio: 34.90,
+    priceId: 'price_1RMG0mEe6Cd77jenTtn9xlB7',
+    precio: 29.90,
     // Compat legacy
     membership_id: 7994,
-    price_id: 'price_1RMG0mEe6Cd77jenTpudZVan',
+    price_id: 'price_1RMG0mEe6Cd77jenTtn9xlB7',
     imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/06/DE-CARA-A-LA-JUBILACION-IGNACIO-SOLSONA-ABOGADO-scaled.png',
     precio_cents: 2990, // informativo/compat
     descripcion_factura: 'Libro digital (acceso vitalicio): "De cara a la jubilación".',

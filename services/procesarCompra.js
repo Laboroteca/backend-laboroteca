@@ -1,3 +1,5 @@
+// services/procesarCompra.js
+// 
 const admin = require('../firebase');
 const firestore = admin.firestore();
 
@@ -16,6 +18,13 @@ const crypto = require('crypto');
 const fetch = require('node-fetch');
 // util pequeño para rutas GCS sin PII
 const hash12 = e => crypto.createHash('sha256').update(String(e || '').toLowerCase()).digest('hex').slice(0,12);
+
+
+// util para redactar PII en logs (emails, etc.)
+const redact = (v) => (process.env.NODE_ENV === 'production'
+  ? hash12(String(v || ''))
+  : String(v || ''));
+const redactEmail = (e) => redact((e || '').toLowerCase().trim());
 
 // === WP HMAC config ===
 const WP_BASE = process.env.WP_BASE_URL || 'https://www.laboroteca.es';
@@ -82,6 +91,7 @@ module.exports = async function procesarCompra(datos) {
     typeof datos.stripeAmountCents === 'number' ? (datos.stripeAmountCents / 100) :
     null;
   let importe = importeStripe ?? parseFloat((datos.importe || '29,90').toString().replace(',', '.'));
+  if (!Number.isFinite(importe)) { console.warn('⚠️ importe NaN → 0'); importe = 0; }
 
 
   // 🧭 Resolver producto desde catálogo (metadata + fallback)
@@ -98,7 +108,7 @@ module.exports = async function procesarCompra(datos) {
         const userSnap = await firestore.collection('usuariosClub').doc(alias).get();
         if (userSnap.exists) {
           email = (userSnap.data().email || '').trim().toLowerCase();
-          console.log(`📩 Email recuperado por alias (${alias}):`, email);
+          console.log(`📩 Email recuperado por alias (${alias}):`, redactEmail(email));
         }
       } catch (err) {
         console.error(`❌ Error recuperando email por alias "${alias}":`, err);
@@ -116,7 +126,7 @@ module.exports = async function procesarCompra(datos) {
   }
 
     if (!email || !email.includes('@')) {
-      console.error(`❌ Email inválido: "${email}"`);
+      console.error(`❌ Email inválido: "${redactEmail(email)}"`);
       try {
   await alertAdmin({
     area: 'procesarCompra_email_invalido',
@@ -221,7 +231,12 @@ module.exports = async function procesarCompra(datos) {
 
 
 
+  // Timer PII-safe (solo si vas a ejecutar el flujo principal)
+  const _timer = `🕒 Compra ${redactEmail(email)}`;
+  console.time(_timer);
+
   try {
+    // ─────────────────────────────────────────────────────────
     const nombre = datos.nombre || datos.Nombre || '';
     const apellidos = datos.apellidos || datos.Apellidos || '';
     const dni = datos.dni || '';
@@ -257,11 +272,18 @@ module.exports = async function procesarCompra(datos) {
     }
     
     if (!nombre || !apellidos || !dni || !direccion || !ciudad || !provincia || !cp) {
-      console.warn(`⚠️ [procesarCompra] Datos incompletos para factura de ${email}`);
+      console.warn(`⚠️ [procesarCompra] Datos incompletos para factura de ${redactEmail(email)}`);
     }
 
-    console.time(`🕒 Compra ${email}`);
-    console.log('📦 [procesarCompra] Datos facturación finales:\n', JSON.stringify(datosCliente, null, 2));
+if (process.env.NODE_ENV !== 'production') {
+   console.log('📦 [procesarCompra] Datos facturación finales:\n', JSON.stringify(datosCliente, null, 2));
+ } else {
+   const safe = { ...datosCliente };
+   safe.email = redactEmail(safe.email);
+   safe.dni = safe.dni ? '***' : '';
+   safe.direccion = safe.ciudad = safe.cp = safe.provincia = '***';
+   console.log('📦 [procesarCompra] Datos facturación (sanitized):', safe);
+ }
 
     // 🔐 Activación de membresía según catálogo (mantiene compatibilidad)
     const tipoEfectivo = (productoResuelto?.tipo || (tipoProducto || '')).toLowerCase();
@@ -279,7 +301,7 @@ module.exports = async function procesarCompra(datos) {
 if (activarMembresia && membership_id && esClub) {
   // CLUB → HMAC mu-plugin de Club
   try {
-    console.log(`🔓 → [WP HMAC] Activando CLUB para ${email}`);
+    console.log(`🔓 → [WP HMAC] Activando CLUB para ${redactEmail(email)}`);
  await postWPHmac(WP_PATH_CLUB, {
    email,
    accion: 'activar',
@@ -306,7 +328,7 @@ if (activarMembresia && membership_id && esClub) {
   // 📘 CUALQUIER producto que NO sea el Club → pago único (sin caducidad)
   //    Se centraliza en el servicio genérico (nombre legacy, comportamiento genérico).
   try {
-    console.log(`📘 → [MP] Activando acceso pago único para ${email} (ID:${membership_id})`);
+    console.log(`📘 → [MP] Activando acceso pago único para ${redactEmail(email)} (ID:${membership_id})`);
     await syncMemberpressLibro({
       email,
       accion: 'activar',
@@ -408,7 +430,7 @@ if (invoicingDisabled) {
     console.log('📝 → Registrando en Google Sheets (kill-switch activo)...');
     await guardarEnGoogleSheets({
       ...datosCliente,
-      uid: String(datos.invoiceId || datos.sessionId || datos.pedidoId || ''),
+      uid: String(datos.invoiceId || datos.sessionId || datos.pedidoId || compraId),
       productoSlug
 });
 
@@ -419,7 +441,7 @@ if (invoicingDisabled) {
         area: 'sheets_guardar_killswitch',
         email,
         err,
-        meta: { uid: String(datos.invoiceId || datos.sessionId || datos.pedidoId || '') }
+        meta: { uid: String(datos.invoiceId || datos.sessionId || datos.pedidoId || compraId) }
       });
     } catch (_) {}
 
@@ -658,8 +680,7 @@ if (datos.invoiceId && pdfBuffer) {
   });
 }
 
-    console.log(`✅ Compra procesada con éxito para ${nombre} ${apellidos}`);
-    console.timeEnd(`🕒 Compra ${email}`);
+    console.log(`✅ Compra procesada con éxito para ${redactEmail(email)} (${nombre} ${apellidos})`);
     return { success: true };
 
   } catch (error) {
@@ -685,7 +706,9 @@ if (datos.invoiceId && pdfBuffer) {
 } catch (_) {}
 
     return { success: false, mensaje: 'error_procesar_compra', error: String(error?.message || error) };
-
+  } finally {
+    // Cierra siempre el timer, pase lo que pase
+    try { console.timeEnd(_timer); } catch {}
   }
 
 };

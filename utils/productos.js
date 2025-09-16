@@ -41,7 +41,7 @@ const PRODUCTOS = {
     // Canónicos
     memberpressId: 7994,
     priceId: 'price_1RMG0mEe6Cd77jenTpudZVan',
-    precio: 29.90,
+    precio: 34.90,
     // Compat legacy
     membership_id: 7994,
     price_id: 'price_1RMG0mEe6Cd77jenTpudZVan',

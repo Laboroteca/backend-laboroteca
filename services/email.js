@@ -10,13 +10,16 @@ const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 async function enviarEmailPersonalizado({
   to,
   subject,
-  html,
-  text,
+  html = '',
+  text = '',
   pdfBuffer = null,
   enviarACopy = false,
   attachments = []
 }) {
-  const destinatarios = Array.isArray(to) ? [...to] : [to];
+  const destinatarios = (Array.isArray(to) ? [...to] : [to]).filter(Boolean);
+  if (destinatarios.length === 0) {
+    throw new Error('enviarEmailPersonalizado: lista de destinatarios vacía');
+  }
 
   // Copia al admin opcional controlada por env
   const SEND_ADMIN_COPY = String(process.env.SEND_ADMIN_COPY || 'false').toLowerCase() === 'true';
@@ -25,16 +28,13 @@ async function enviarEmailPersonalizado({
   }
 
   const pieHtml = `
-    <hr style="margin-top:40px;margin-bottom:10px;" />
     <div style="font-size:12px;color:#777;line-height:1.5;">
       En cumplimiento del Reglamento (UE) 2016/679 (RGPD) y la LOPDGDD, le informamos de que su dirección de correo electrónico forma parte de la base de datos de Ignacio Solsona Fernández-Pedrera (DNI 20481042W), con domicilio en calle Enmedio nº 22, 3.º E, 12001 Castellón de la Plana (España).<br /><br />
       Finalidades: prestación de servicios jurídicos, venta de infoproductos, gestión de entradas a eventos, emisión y envío de facturas por email y, en su caso, envío de newsletter y comunicaciones comerciales si usted lo ha consentido. Base jurídica: ejecución de contrato y/o consentimiento. Puede retirar su consentimiento en cualquier momento.<br /><br />
       Puede ejercer sus derechos de acceso, rectificación, supresión, portabilidad, limitación y oposición escribiendo a <a href="mailto:laboroteca@gmail.com">laboroteca@gmail.com</a>. También puede presentar una reclamación ante la autoridad de control competente. Más información en nuestra política de privacidad: <a href="https://www.laboroteca.es/politica-de-privacidad/" target="_blank" rel="noopener">https://www.laboroteca.es/politica-de-privacidad/</a>.
     </div>
   `;
-
   const pieText = `
-------------------------------------------------------------
 En cumplimiento del Reglamento (UE) 2016/679 (RGPD) y la LOPDGDD, su email forma parte de la base de datos de Ignacio Solsona Fernández-Pedrera (DNI 20481042W), calle Enmedio nº 22, 3.º E, 12001 Castellón de la Plana (España).
 
 Finalidades: prestación de servicios jurídicos, venta de infoproductos, gestión de entradas a eventos, emisión y envío de facturas por email y, en su caso, envío de newsletter y comunicaciones comerciales si usted lo ha consentido. Base jurídica: ejecución de contrato y/o consentimiento. Puede retirar su consentimiento en cualquier momento.
@@ -44,13 +44,23 @@ También puede presentar una reclamación ante la autoridad de control competent
 Más información: https://www.laboroteca.es/politica-de-privacidad/
   `;
 
+  // ——— ADVERTENCIA (mismo tamaño que el cuerpo, color gris) ———
+  const advertenciaHtml = `
+    <div style="font-size:16px;color:#777;line-height:1.5;margin-top:8px;margin-bottom:8px;">
+      <strong>Importante:</strong> tu acceso es personal e intransferible. Queda prohibido compartir tus claves con terceros o distribuir el material sin autorización. Si se detecta actividad sospechosa o irregular se puede suspender o bloquear la cuenta.
+    </div>
+  `;
+  const sepHtml = `<hr style="margin:16px 0;border:0;border-top:1px solid #bbb;" />`;
+
+  const advertenciaText = `IMPORTANTE: tu acceso es personal e intransferible. Queda prohibido compartir tus claves con terceros o distribuir el material sin autorización. Si se detecta actividad sospechosa o irregular se puede suspender o bloquear la cuenta.`;
+  const sepText = '------------------------------------------------------------';
   const body = {
     api_key: process.env.SMTP2GO_API_KEY,
     to: destinatarios,
     sender: `"Laboroteca" <${process.env.SMTP2GO_FROM_EMAIL}>`,
     subject,
-    html_body: html + pieHtml,
-    text_body: text + '\n\n' + pieText
+    html_body: html + sepHtml + advertenciaHtml + sepHtml + pieHtml,
+    text_body: [text, '', sepText, advertenciaText, sepText, pieText].join('\n')
   };
 
   // Adjuntos: prioriza attachments explícitos; si no, adjunta el PDF si existe
@@ -73,7 +83,7 @@ Más información: https://www.laboroteca.es/politica-de-privacidad/
   try {
     response = await fetch('https://api.smtp2go.com/v3/email/send', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
       body: JSON.stringify(body)
     });
 
@@ -84,7 +94,9 @@ Más información: https://www.laboroteca.es/politica-de-privacidad/
       resultado = { success: false, data: {}, raw };
     }
 
-    successReal = resultado?.data?.succeeded === 1 && resultado?.data?.failed === 0;
+ const succeeded = Number(resultado?.data?.succeeded ?? 0);
+ const failed = Number(resultado?.data?.failed ?? 0);
+ successReal = succeeded >= destinatarios.length && failed === 0;
 
     if (!resultado.success && !successReal) {
       console.error(

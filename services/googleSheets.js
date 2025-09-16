@@ -1,4 +1,4 @@
-// services/guardarEnGoogleSheets.js
+// services/googleSheets.js
 const { google } = require('googleapis');
 const crypto = require('crypto');
 const { ensureOnce } = require('../utils/dedupe');
@@ -11,7 +11,12 @@ if (!credentialsBase64) {
   throw new Error('❌ Falta la variable de entorno GCP_CREDENTIALS_BASE64 con las credenciales de Google');
 }
 
-const credentials = JSON.parse(Buffer.from(credentialsBase64, 'base64').toString('utf8'));
+let credentials;
+try {
+  credentials = JSON.parse(Buffer.from(credentialsBase64, 'base64').toString('utf8'));
+} catch (e) {
+  throw new Error('❌ GCP_CREDENTIALS_BASE64 no es JSON válido (revísalo).');
+}
 
 const auth = new google.auth.GoogleAuth({
   credentials,

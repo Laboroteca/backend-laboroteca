@@ -717,6 +717,7 @@ app.post(
       }
     } catch (e) {
       console.warn('⚠️ price_id inexistente/inaccesible en Stripe. Fallback a price_data:', candidatePriceId, e?.message || e);
+      usarPriceId = false; // ← asegura el fallback
     }
   }
 
@@ -731,7 +732,7 @@ app.post(
       mode: 'payment',
       customer_creation: 'always',
       customer_email: email,
-      line_items: usarPriceId
+      line_items: (usarPriceId && candidatePriceId)
         ? [{
             // ✅ Usa el Price de catálogo (importe/imagen ya los tiene el producto Stripe)
             price: candidatePriceId,

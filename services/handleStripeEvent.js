@@ -305,7 +305,7 @@ if (!isFirstBaja) {
       intent.metadata?.email
     )?.toLowerCase().trim();
 
-    console.warn(`⚠️ [Intento fallido] payment_intent ${intent.id} falló para ${email || '[email desconocido]'}`);
+    console.warn(`⚠️ [Intento fallido] payment_intent ${intent.id} falló para ${email ? redactEmail(email) : '[email desconocido]'}`);
 
     if (email && email.includes('@')) {
       try {
@@ -519,7 +519,7 @@ if (isAlta && !snap.exists) {
     origen: 'checkout.session.metadata@invoice.paid',
     fecha: new Date().toISOString()
   }, { merge: true });
-  console.log(`ℹ️ (ALTA) Datos fiscales guardados desde subscription.metadata para ${email}`);
+  console.log(`ℹ️ (ALTA) Datos fiscales guardados desde subscription.metadata para ${redactEmail(email)}`);
 }
 
 
@@ -1032,7 +1032,7 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
         
         // (Sin escritura en Sheets de bajas; solo Firestore)
 
-        console.log(`📝 Registrada baja programada para ${email} (efectos=${fechaEfectosISO})`);
+        console.log(`📝 Registrada baja programada para ${redactEmail(email)} (efectos=${fechaEfectosISO})`);
       }
     }
     return { noted_subscription_updated: true };
@@ -1571,7 +1571,7 @@ try {
 // 📧 Email de apoyo SOLO si la factura FALLÓ (pago único)
 // - No para entradas (tienen su correo propio)
 // - No para el club (se gestiona en invoice.paid)
-if (!esEntrada && !esClub && falloFactura) {
+if (!esEntrada && !isClub && falloFactura) {
   try {
     const productoLabel =
       datosCliente.nombreProducto ||
@@ -1611,11 +1611,11 @@ Abogado`
   } catch (e) {
     console.error('❌ Error enviando email de apoyo (pago único):', e?.message || e);
   }
-} else {
-  console.log(
-    `ℹ️ Email de apoyo NO enviado (esEntrada=${esEntrada}, esClub=${esClub}, falloFactura=${falloFactura}, seEnvioFactura=${seEnvioFactura})`
-  );
-}
+ } else {
+   console.log(
+     `ℹ️ Email de apoyo NO enviado (esEntrada=${esEntrada}, isClub=${isClub}, falloFactura=${falloFactura}, seEnvioFactura=${seEnvioFactura})`
+   );
+ }
 
 
 // 🎫 Procesar ENTRADAS en background + dedupe por sesión
@@ -1669,7 +1669,7 @@ if (esEntrada) {
 }
 
   } else {
-    console.warn(`⚠️ Datos incompletos. No se guardan en Firestore para ${email}`);
+    console.warn(`⚠️ Datos incompletos. No se guardan en Firestore para ${redactEmail(email)}`);
   }
 
 

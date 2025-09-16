@@ -1,7 +1,7 @@
 // services/syncMemberpressLibro.js
 'use strict';
 
-const fetch = require('node-fetch');
+const fetch = require('node-fetch'); // ⚠️ Este módulo usa 'timeout' de node-fetch v2. Si pasas a v3, usa AbortController.
 const crypto = require('crypto');
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
@@ -18,6 +18,11 @@ const MP_SYNC_DEBUG   = String(process.env.MP_SYNC_DEBUG || '').trim() === '1';
 
 // ——— utilidades ———
 const maskTail = (s) => (s ? `••••${String(s).slice(-4)}` : null);
+const maskEmail = (e='') => {
+  const [u='', d=''] = String(e).toLowerCase().split('@');
+  const tld = d.split('.').pop() || '';
+  return `${u.slice(0,2)}***@***.${tld}`;
+};
 const nowIso   = () => new Date().toISOString();
 const shortId  = () => crypto.randomBytes(6).toString('hex');
 
@@ -115,7 +120,7 @@ async function syncMemberpressLibro({
 
   // —— Log operativo mínimo
   const reqId = shortId();
-  console.log(`📡 [syncMemberpressLibro#${reqId}] '${accion}' → ${email} (ID:${membership_id}, €${importeNum})`);
+  console.log(`📡 [syncMemberpressLibro#${reqId}] '${accion}' → ${maskEmail(email)} (ID:${membership_id}, €${importeNum})`);
 
   // —— Petición
   let response;
@@ -125,6 +130,7 @@ async function syncMemberpressLibro({
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'Accept': 'application/json',
         'User-Agent': 'LaborotecaMP/1.0',
         'x-api-key': API_KEY,
         'x-mp-ts': ts,
@@ -162,7 +168,7 @@ async function syncMemberpressLibro({
       }
     }
 
-    console.log(`✅ [MemberPressLibro#${reqId}] '${accion}' OK para ${email} ${accion === 'activar' ? `(tx=${data.transaction_id})` : ''}`);
+    console.log(`✅ [MemberPressLibro#${reqId}] '${accion}' OK para ${maskEmail(email)} ${accion === 'activar' ? `(tx=${data.transaction_id})` : ''}`);
     return data;
 
   } catch (err) {

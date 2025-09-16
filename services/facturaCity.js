@@ -1,8 +1,10 @@
+// services/facturaCity.js
+// 
 const axios = require('axios');
 const qs = require('qs');
 require('dotenv').config();
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
-
+const crypto = require('crypto');
 
 const FACTURACITY_API_KEY = process.env.FACTURACITY_API_KEY?.trim().replace(/"/g, '');
 const API_BASE = process.env.FACTURACITY_API_URL;
@@ -19,6 +21,31 @@ const { ensureOnce } = require('../utils/dedupe');
 
 const AXIOS_TIMEOUT = 10000; // 10s razonable
 const fcHeaders = { Token: FACTURACITY_API_KEY, 'Content-Type': 'application/x-www-form-urlencoded' };
+
+// Helpers PII-safe (mismo criterio que procesarCompra)
+const hash12 = e => crypto.createHash('sha256').update(String(e || '').toLowerCase()).digest('hex').slice(0,12);
+const redact = (v) => (process.env.NODE_ENV === 'production' ? hash12(String(v || '')) : String(v || ''));
+const redactEmail = (e) => redact((e || '').toLowerCase().trim());
+
+// ——— Reintentos acotados (backoff exponencial suave) solo en errores transitorios ———
+function isRetryable(err) {
+  const s = err?.response?.status;
+  if (s && (s === 429 || (s >= 500 && s <= 599))) return true;
+  const code = err?.code || '';
+  return /ECONNRESET|ETIMEDOUT|ENETUNREACH|EAI_AGAIN/i.test(code);
+}
+async function retry(fn, { tries = 3, baseMs = 400 } = {}) {
+  let lastErr;
+  for (let i = 0; i < tries; i++) {
+    try { return await fn(); } catch (e) {
+      lastErr = e;
+      if (!isRetryable(e) || i === tries - 1) break;
+      const wait = baseMs * Math.pow(2, i) + Math.floor(Math.random() * 200);
+      await new Promise(r => setTimeout(r, wait));
+    }
+  }
+  throw lastErr;
+}
 
 // ───────── Firestore (registro de facturas) ─────────
 const admin = require('../firebase');
@@ -87,7 +114,9 @@ async function registrarFacturaEnFirestore(payload) {
           : `tmp_${Date.now()}`;
 
     // ── Normalización de fecha ──
-    const fechaObj = pickFechaFactura(payload);
+    const fechaObj = (payload.fechaISO && payload.fechaTexto)
+      ? { iso: payload.fechaISO, texto: payload.fechaTexto }
+      : pickFechaFactura(payload);
 
     // ── Escritura en colección 'facturas' ──
     await firestore.collection('facturas').doc(docId).set({
@@ -98,7 +127,7 @@ async function registrarFacturaEnFirestore(payload) {
 
       // Datos de control
       email: payload.email || null,
-      tipo: payload.tipo || null, // alta o renovacion
+      tipo: payload.tipo || payload.tipoProducto || null, // alta/renovacion o tipo de producto
       fechaISO: fechaObj.iso,
       fechaTexto: fechaObj.texto,
 
@@ -166,7 +195,20 @@ if (!FACTURACITY_API_KEY) {
 
 
     console.log('🌐 API URL utilizada:', API_BASE);
-    console.log('🧾 Datos del cliente recibidos para facturar:', JSON.stringify(datosCliente, null, 2));
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('🧾 Datos del cliente recibidos para facturar:', JSON.stringify(datosCliente, null, 2));
+    } else {
+      const safe = {
+        email: redactEmail(datosCliente.email),
+        nombre: datosCliente.nombre ? '***' : '',
+        apellidos: datosCliente.apellidos ? '***' : '',
+        dni: datosCliente.dni ? '***' : '',
+        importe: datosCliente.importe,
+        tipoProducto: datosCliente.tipoProducto || null,
+        nombreProducto: datosCliente.nombreProducto || null
+      };
+      console.log('🧾 Datos facturación (sanitized):', safe);
+    }
 
     // PVP CON IVA recibido
     const totalConIVA = Number.parseFloat(String(datosCliente.importe).replace(',', '.'));
@@ -194,12 +236,16 @@ if (!FACTURACITY_API_KEY) {
       regimeniva: 'General'
     };
 
-    const clienteResp = await axios.post(`${API_BASE}/clientes`, qs.stringify(cliente), {
-      headers: fcHeaders,
-      timeout: AXIOS_TIMEOUT
-    });
+    const clienteResp = await retry(() => axios.post(
+      `${API_BASE}/clientes`,
+      qs.stringify(cliente),
+      { headers: fcHeaders, timeout: AXIOS_TIMEOUT }
+    ));
 
-    const codcliente = clienteResp.data?.data?.codcliente;
+    const codcliente =
+      clienteResp.data?.data?.codcliente ||
+      clienteResp.data?.doc?.codcliente ||
+      clienteResp.data?.codcliente;
 if (!codcliente) {
   await alertAdmin({
     area: 'facturacity_codcliente_missing',
@@ -209,7 +255,7 @@ if (!codcliente) {
   });
   throw new Error('❌ No se pudo obtener codcliente');
 }
-    console.log(`✅ Cliente creado en FacturaCity codcliente=${codcliente} email=${datosCliente.email}`);
+    console.log(`✅ Cliente creado en FacturaCity codcliente=${codcliente} email=${redactEmail(datosCliente.email)}`);
 
     // 🏠 Dirección fiscal (opcional)
     try {
@@ -225,12 +271,13 @@ if (!codcliente) {
         apellidos: datosCliente.apellidos,
         email: datosCliente.email
       };
-      await axios.post(`${API_BASE}/direccionescliente`, qs.stringify(direccionFiscal), {
-        headers: fcHeaders,
-        timeout: AXIOS_TIMEOUT
-      });
+      await retry(() => axios.post(
+        `${API_BASE}/direccionescliente`,
+        qs.stringify(direccionFiscal),
+        { headers: fcHeaders, timeout: AXIOS_TIMEOUT }
+      ));
 
-      console.log(`🏠 Dirección fiscal añadida para codcliente=${codcliente} email=${datosCliente.email}`);
+      console.log(`🏠 Dirección fiscal añadida para codcliente=${codcliente} email=${redactEmail(datosCliente.email)}`);
     } catch (err) {
       console.warn('⚠️ No se pudo añadir dirección fiscal (opcional):', err?.message || err);
       // Sin alertAdmin: este fallo es benigno y frecuente, no afecta al flujo
@@ -285,13 +332,23 @@ if (!codcliente) {
       codpostal: datosCliente.cp || ''
     };
 
-    const facturaResp = await axios.post(`${API_BASE}/crearFacturaCliente`, qs.stringify(factura), {
-      headers: fcHeaders,
-      timeout: AXIOS_TIMEOUT
-    });
+    // ⚠️ Sin reintentos aquí para evitar facturas duplicadas si el 1er intento crea la factura
+    const facturaResp = await axios.post(
+      `${API_BASE}/crearFacturaCliente`,
+      qs.stringify(factura),
+      { headers: fcHeaders, timeout: AXIOS_TIMEOUT }
+    );
 
 
-    console.log('📩 Respuesta completa de crearFacturaCliente:', JSON.stringify(facturaResp.data, null, 2));
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('📩 Respuesta crearFacturaCliente:', JSON.stringify(facturaResp.data, null, 2));
+    } else {
+      const resumen = {
+        tieneDoc: !!facturaResp?.data?.doc,
+        camposDoc: facturaResp?.data?.doc ? Object.keys(facturaResp.data.doc) : []
+      };
+      console.log('📩 Respuesta crearFacturaCliente (resumen):', resumen);
+    }
 
     const idfactura = facturaResp.data?.doc?.idfactura;
     if (!idfactura) {
@@ -304,7 +361,7 @@ if (!codcliente) {
       throw new Error('❌ No se recibió idfactura');
     }
 
-    console.log(`✅ Factura emitida idfactura=${idfactura} invoiceId=${datosCliente.invoiceId || 'N/A'} email=${datosCliente.email}`);
+    console.log(`✅ Factura emitida idfactura=${idfactura} invoiceId=${datosCliente.invoiceId || 'N/A'} email=${redactEmail(datosCliente.email)}`);
 
 
     // Nº de factura (legible si lo devuelve la API) y fecha
@@ -336,11 +393,10 @@ if (!codcliente) {
 
 
     const pdfUrl = `${API_BASE}/exportarFacturaCliente/${idfactura}?lang=es_ES`;
-    const pdfResponse = await axios.get(pdfUrl, {
-      headers: { Token: FACTURACITY_API_KEY },
-      responseType: 'arraybuffer',
-      timeout: AXIOS_TIMEOUT
-    });
+    const pdfResponse = await retry(() => axios.get(
+      pdfUrl,
+      { headers: { Token: FACTURACITY_API_KEY }, responseType: 'arraybuffer', timeout: AXIOS_TIMEOUT }
+    ));
 
 
     const pdfSize = pdfResponse.data?.length || 0;
@@ -370,11 +426,16 @@ if (pdfSize <= 0) {
   });
 
   if (error.response) {
-    console.error(`⛔ Error FacturaCity invoiceId=${datosCliente.invoiceId || 'N/A'} email=${datosCliente.email}`);
+    console.error(`⛔ Error FacturaCity invoiceId=${datosCliente.invoiceId || 'N/A'} email=${redactEmail(datosCliente.email)}`);
     console.error('🔢 Status:', error.response.status);
-    console.error('📦 Data:', error.response.data);
+    if (process.env.NODE_ENV !== 'production') {
+      console.error('📦 Data:', error.response.data);
+    } else {
+      const size = typeof error.response.data === 'string' ? error.response.data.length : (error.response.data?.length || 0);
+      console.error('📦 Data (sanitized): tipo=', typeof error.response.data, 'bytes=', size);
+    }
   } else {
-    console.error(`⛔ Error FacturaCity sin respuesta invoiceId=${datosCliente.invoiceId || 'N/A'} email=${datosCliente.email} → ${error.message}`);
+    console.error(`⛔ Error FacturaCity sin respuesta invoiceId=${datosCliente.invoiceId || 'N/A'} email=${redactEmail(datosCliente.email)} → ${error.message}`);
   }
 
   

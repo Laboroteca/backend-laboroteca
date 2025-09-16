@@ -1,10 +1,11 @@
 require('dotenv').config();
 const fetch = require('node-fetch');
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
+// ^ sin cambios de import
 
 /**
  * Envía un email con o sin factura adjunta (PDF).
- * @param {Object} opciones - { to, subject, html, text, pdfBuffer, enviarACopy, attachments }
+ * @param {Object} opciones - { to, subject, html, text, pdfBuffer, enviarACopy, attachments, incluirAdvertencia }
  * @returns {Promise<string>}
  */
 async function enviarEmailPersonalizado({
@@ -14,7 +15,8 @@ async function enviarEmailPersonalizado({
   text = '',
   pdfBuffer = null,
   enviarACopy = false,
-  attachments = []
+  attachments = [],
+  incluirAdvertencia = false
 }) {
   const destinatarios = (Array.isArray(to) ? [...to] : [to]).filter(Boolean);
   if (destinatarios.length === 0) {
@@ -44,23 +46,37 @@ También puede presentar una reclamación ante la autoridad de control competent
 Más información: https://www.laboroteca.es/politica-de-privacidad/
   `;
 
-  // ——— ADVERTENCIA (mismo tamaño que el cuerpo, color gris) ———
+  // ——— ADVERTENCIA (mismo tamaño/fuente que el pie RGPD: 12px; color #606296) ———
   const advertenciaHtml = `
-    <div style="font-size:16px;color:#777;line-height:1.5;margin-top:8px;margin-bottom:8px;">
+    <div style="font-size:12px;color:#606296;line-height:1.5;margin:8px 0;">
       <strong>Importante:</strong> tu acceso es personal e intransferible. Queda prohibido compartir tus claves con terceros o distribuir el material sin autorización. Si se detecta actividad sospechosa o irregular se puede suspender o bloquear la cuenta.
     </div>
   `;
-  const sepHtml = `<hr style="margin:16px 0;border:0;border-top:1px solid #bbb;" />`;
+  // Separadores: el superior con espacio extra (≈2–3 líneas) para que quede más abajo del nombre
+  const sepHtml       = `<hr style="margin:16px 0;border:0;border-top:1px solid #bbb;" />`;
+  const sepSuperiorHtml = `
+    <div style="height:2.6em;line-height:1.6;"></div>
+    <hr style="margin:16px 0;border:0;border-top:1px solid #bbb;" />
+  `;
 
   const advertenciaText = `IMPORTANTE: tu acceso es personal e intransferible. Queda prohibido compartir tus claves con terceros o distribuir el material sin autorización. Si se detecta actividad sospechosa o irregular se puede suspender o bloquear la cuenta.`;
   const sepText = '------------------------------------------------------------';
+  // Construcción de cuerpo: la advertencia SOLO se incluye si incluirAdvertencia === true
+  const html_body = incluirAdvertencia
+    ? (html + sepSuperiorHtml + advertenciaHtml + sepHtml + pieHtml)
+    : (html + sepHtml + pieHtml);
+
+  const text_body = incluirAdvertencia
+    ? [text, '', '', '', sepText, advertenciaText, sepText, '', pieText].join('\n')
+    : [text, '', sepText, '', pieText].join('\n');
+
   const body = {
     api_key: process.env.SMTP2GO_API_KEY,
     to: destinatarios,
     sender: `"Laboroteca" <${process.env.SMTP2GO_FROM_EMAIL}>`,
     subject,
-    html_body: html + sepHtml + advertenciaHtml + sepHtml + pieHtml,
-    text_body: [text, '', sepText, advertenciaText, sepText, pieText].join('\n')
+    html_body,
+    text_body
   };
 
   // Adjuntos: prioriza attachments explícitos; si no, adjunta el PDF si existe
@@ -174,7 +190,7 @@ async function enviarFacturaPorEmail(datos, pdfBuffer) {
   const esRenovClub = esClub && /(renovación mensual|renovacion mensual|subscription_cycle|renovación)/i.test(etiqueta);
 
   const nombreProductoMostrar = datos.nombreProducto || datos.descripcionProducto || 'Producto Laboroteca';
-
+  const debeIncluirAdvertencia = (!esClub) || esAltaClub; // ✅ SOLO productos y alta de Club (NO renovaciones)
   let subject = '';
   let html = '';
   let text = '';
@@ -254,7 +270,8 @@ Abogado`;
     html,
     text,
     pdfBuffer, // adjunta la factura siempre que llegue
-    enviarACopy: false
+    enviarACopy: false,
+    incluirAdvertencia: debeIncluirAdvertencia
   });
 }
 
@@ -363,7 +380,7 @@ Reactivar: https://www.laboroteca.es/membresia-club-laboroteca/
 Un saludo
 Laboroteca`;
 
-  return enviarEmailPersonalizado({ to: [email], subject, html, text });
+  return enviarEmailPersonalizado({ to: [email], subject, html, text, incluirAdvertencia: false });
 }
 
 /**
@@ -390,7 +407,7 @@ Si no has solicitado esta acción, ignora este correo. El enlace caducará en 2 
 Un saludo
 Laboroteca`;
 
-  return enviarEmailPersonalizado({ to: email, subject, html, text, enviarACopy: false });
+  return enviarEmailPersonalizado({ to: email, subject, html, text, enviarACopy: false, incluirAdvertencia: false });
 }
 
 module.exports = {

@@ -890,8 +890,12 @@ if (emailSeguro && emailSeguro.indexOf('@') !== -1) {
               trialEnd = Math.floor(new Date(expiresAtISO).getTime() / 1000);
             }
             // y si aún no hubiera, pon un pequeño margen para no cobrar ahora mismo
+            const nowTs = Math.floor(Date.now() / 1000);
             if (!trialEnd) {
-              trialEnd = Math.floor(Date.now() / 1000) + 60; // +60s
+              trialEnd = nowTs + 60; // +60s
+            }
+            if (trialEnd <= nowTs) {
+              trialEnd = nowTs + 60; // garantizar futuro
             }
             const newSub = await stripe.subscriptions.create({
               customer: customerId,
@@ -953,7 +957,7 @@ if (emailSeguro && emailSeguro.indexOf('@') !== -1) {
           await refBaja.set({
             estadoBaja: 'anulada',
             // etiqueta de auditoría: la baja pendiente se cancela por re-alta
-            comprobacionFinal: 'cancelada_por_re_alta',
+            comprobacionFinal: 'anulada_por_re_alta',
             fechaAnulacion: new Date().toISOString()
           }, { merge: true });
           console.log('↪️ Baja programada anulada por re-alta para', redactEmail(emailSeguro));
@@ -1075,7 +1079,7 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
         try {
           await firestore.collection('bajasClub').doc(email).set({
             estadoBaja: 'anulada',
-            comprobacionFinal: 'cancelada_por_re_alta',
+            comprobacionFinal: 'anulada_por_re_alta',
             fechaAnulacion: new Date().toISOString(),
             subscriptionId_cancelada: subscriptionId
           }, { merge: true });

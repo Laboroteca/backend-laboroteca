@@ -52,41 +52,71 @@ setInterval(() => {
 }, 10*60*1000).unref();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Re-ALTA guard: deja SOLO UNA suscripción activa por email
-// 1) Quita cancel_at_period_end a la suscripción “keepId” (si venía programada).
-// 2) Cancela inmediatamente las demás suscripciones activas de ese email.
-async function ensureSingleActiveClubSubscription(email, keepId = null) {
+// Re-ALTA guard SOLO PARA EL CLUB:
+//   - keepId: suscripción del Club que queremos conservar
+//   - clubPriceId / clubProductId: identificadores del precio/producto del Club
+// Hace:
+//   1) Si keepId es del Club, quita cancel_at_period_end en esa.
+//   2) Cancela OTRAS suscripciones ACTIVAS del Club de ese email.
+// No toca suscripciones que no sean del Club.
+async function ensureSingleActiveClubSubscription({
+  email,
+  keepId = null,
+  clubPriceId = null,
+  clubProductId = null
+}) {
   if (!email || !email.includes('@')) return { changed: false };
   let changed = false;
+
+  // Helper: determina si una suscripción es del Club según price/product/metadata
+  const isClubSub = (sub) => {
+    try {
+      const items = sub?.items?.data || [];
+      // Señal por priceId o productId
+      const matchByPrice = clubPriceId
+        ? items.some(it => (it?.price?.id || '') === clubPriceId)
+        : false;
+      const matchByProduct = clubProductId
+        ? items.some(it => (it?.price?.product || '') === clubProductId)
+        : false;
+      // Señal por metadata (por si en algún momento marcamos tipo=club)
+      const metaTipo = String(sub?.metadata?.tipo || sub?.metadata?.tipoProducto || '').toLowerCase();
+      const matchByMeta = metaTipo === 'club' || /club\s*laboroteca/i.test(String(sub?.metadata?.producto || ''));
+      return !!(matchByPrice || matchByProduct || matchByMeta);
+    } catch (_) {
+      return false;
+    }
+  };
+
   try {
     const clientes = await stripe.customers.list({ email, limit: 100 });
     for (const c of clientes.data) {
       const subs = await stripe.subscriptions.list({ customer: c.id, status: 'all', limit: 100 });
       for (const sub of subs.data) {
         const isActive = ACTIVE_STATUSES.includes(sub.status);
-        // 1) la “buena” → quitar cancel_at_period_end si estuviera programada
+        const isClub = isClubSub(sub);
+        if (!isClub) continue; // ← ignorar suscripciones que no sean del Club
+
         if (keepId && sub.id === keepId) {
           if (sub.cancel_at_period_end) {
             await stripe.subscriptions.update(sub.id, { cancel_at_period_end: false });
-            console.log('↪️ cancel_at_period_end=false por re-alta (invoice.paid):', sub.id);
+            console.log('↪️ [Club] cancel_at_period_end=false por re-alta:', sub.id);
             changed = true;
           }
           continue;
         }
-        // 2) cualquier otra activa → cancelar YA para que solo quede una
         if (isActive) {
           try {
             await stripe.subscriptions.cancel(sub.id, { invoice_now: false, prorate: false });
-            console.log('🛑 Subs antigua cancelada por re-alta:', sub.id);
+            console.log('🛑 [Club] Subs antigua cancelada por re-alta:', sub.id);
             changed = true;
           } catch (e) {
-            console.warn('⚠️ No se pudo cancelar subs antigua:', sub.id, e?.message || e);
+            console.warn('⚠️ [Club] No se pudo cancelar subs antigua:', sub.id, e?.message || e);
           }
         }
       }
     }
     if (changed) {
-      // Dejar huella en bajasClub: anulada por re-alta (estado vivo limpio)
       try {
         await firestore.collection('bajasClub').doc(email).set({
           estadoBaja: 'anulada',
@@ -96,7 +126,7 @@ async function ensureSingleActiveClubSubscription(email, keepId = null) {
       } catch (_) {}
     }
   } catch (e) {
-    console.warn('⚠️ ensureSingleActiveClubSubscription:', e?.message || e);
+    console.warn('⚠️ ensureSingleActiveClubSubscription (Club only):', e?.message || e);
   }
   return { changed };
 }
@@ -382,6 +412,9 @@ if (event.type === 'invoice.paid') {
     const invoiceId = invoice.id;
     const customerId = invoice.customer;
     const billingReason = invoice.billing_reason;
+    // IDs del Club detectados en la línea cobrada
+    const clubPriceId   = invoice?.lines?.data?.[0]?.price?.id || null;
+    const clubProductId = invoice?.lines?.data?.[0]?.price?.product || null;
 
     // Gate de seguridad por motivo de facturación
     const allowManualInTest = (billingReason === 'manual' && event.livemode === false);
@@ -822,10 +855,14 @@ if (emailSeguro && emailSeguro.indexOf('@') !== -1) {
       });
     }
 
-    // 🧠 POLÍTICA “una sola suscripción viva por email”
-    // Mantén la de ESTA invoice y elimina duplicadas; además, desprograma su cancelación si venía marcada.
+    // Mantén la de ESTA invoice y elimina duplicadas SOLO del Club; y desprograma su cancelación si venía marcada.
     try {
-      await ensureSingleActiveClubSubscription(emailSeguro, invoice.subscription || null);
+      await ensureSingleActiveClubSubscription({
+        email: emailSeguro,
+        keepId: invoice.subscription || null,
+        clubPriceId,
+        clubProductId
+      });
     } catch (_) {}
 
     // 🛟 SAFETY NET: asegura que, tras la limpieza, SIGUE habiendo una suscripción viva
@@ -870,7 +907,14 @@ if (emailSeguro && emailSeguro.indexOf('@') !== -1) {
             });
             console.log('🧷 Re-alta: creada suscripción de seguridad', newSub.id);
             // vuelve a asegurar unicidad dejando solo la nueva
-            try { await ensureSingleActiveClubSubscription(emailSeguro, newSub.id); } catch (_) {}
+            try {
+              await ensureSingleActiveClubSubscription({
+                email: emailSeguro,
+                keepId: newSub.id,
+                clubPriceId: priceId,
+                clubProductId: null
+              });
+            } catch (_) {}
             // refresca expires para MemberPress
             try { if (newSub.current_period_end) { expiresAtISO = new Date(newSub.current_period_end * 1000).toISOString(); } } catch (_) {}
             // reforzar estado vivo en FS/MP por si hubo una desactivación posterior

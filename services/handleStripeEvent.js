@@ -240,6 +240,19 @@ async function handleStripeEvent(event) {
   // ---- IMPAGO EN INVOICE ----
   if (event.type === 'invoice.payment_failed') {
     const invoice = event.data.object;
+  // Guard “solo Club”
+  const linePF      = invoice?.lines?.data?.[0] || null;
+  const descPF      = String(linePF?.description || linePF?.price?.nickname || '');
+  const metaTipoPF  = String(invoice?.subscription_details?.metadata?.tipo || invoice?.metadata?.tipo || '').toLowerCase();
+  const metaProdPF  = String(invoice?.subscription_details?.metadata?.producto || invoice?.metadata?.producto || '');
+  const looksClubPF = metaTipoPF === 'club' ||
+                      /club\s*laboroteca/i.test(metaProdPF) ||
+                      /club\s*laboroteca/i.test(descPF);
+  if (!looksClubPF) {
+    console.log('⏭️ [IMPAGO] Invoice no identificada como Club. No se toca MP del Club ni se cancela subs.', { invoiceId: invoice?.id });
+    return { ignored: true, reason: 'payment_failed_non_club' };
+  }
+
     const email = (
       invoice.customer_email ||
       invoice.customer_details?.email ||
@@ -1025,6 +1038,19 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
 
   if (event.type === 'customer.subscription.deleted') {
     const subscription = event.data.object;
+    // Guard “solo Club” en la suscripción cancelada
+    const subItemsDel   = subscription?.items?.data || [];
+    const subDescDel    = String(subItemsDel?.[0]?.price?.nickname || '');
+    const subTipoDel    = String(subscription?.metadata?.tipo || subscription?.metadata?.tipoProducto || '').toLowerCase();
+    const subProdTxtDel = String(subscription?.metadata?.producto || '');
+    const isClubDeleted = subTipoDel === 'club' ||
+                          /club\s*laboroteca/i.test(subProdTxtDel) ||
+                          /club\s*laboroteca/i.test(subDescDel);
+    if (!isClubDeleted) {
+      console.log('⏭️ subscription.deleted de producto NO Club. No se toca MP del Club.');
+      return { ignored: true, reason: 'deleted_non_club' };
+    }
+
     const email = (
       subscription.metadata?.email ||
       subscription.customer_email ||
@@ -1044,7 +1070,18 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
         const clientes = await stripe.customers.list({ email, limit: 100 });
         for (const c of clientes.data) {
           const subs = await stripe.subscriptions.list({ customer: c.id, status: 'all', limit: 100 });
-          if (subs.data.some(s => s.id !== (subscriptionId || null) && ACTIVE_STATUSES.includes(s.status))) {
+          if (subs.data.some(s => {
+                if (s.id === (subscriptionId || null)) return false;
+                if (!ACTIVE_STATUSES.includes(s.status)) return false;
+                const it = (s.items?.data || [])[0];
+                const nick = String(it?.price?.nickname || '');
+                const tipo = String(s?.metadata?.tipo || s?.metadata?.tipoProducto || '').toLowerCase();
+                const prod = String(s?.metadata?.producto || '');
+                const isClub = tipo === 'club' ||
+                               /club\s*laboroteca/i.test(prod) ||
+                               /club\s*laboroteca/i.test(nick);
+                return isClub;
+              })) {
           hasOtherActive = true;
             break;
           }
@@ -1337,7 +1374,11 @@ if (event.type === 'checkout.session.completed') {
             ciudad:    (m.ciudad || '').trim(),
             provincia: (m.provincia || '').trim(),
             cp:        (m.cp || m.codigo_postal || '').trim(),
-            fuente:    'fluentforms'
+            fuente:    'fluentforms',
+            // Etiquetas para identificar SIEMPRE que es Club
+            tipo:      'club',
+            tipoProducto: 'Club',
+            producto:  'el club laboroteca'
           }
         });
       }

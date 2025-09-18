@@ -828,6 +828,74 @@ if (emailSeguro && emailSeguro.indexOf('@') !== -1) {
       await ensureSingleActiveClubSubscription(emailSeguro, invoice.subscription || null);
     } catch (_) {}
 
+    // 🛟 SAFETY NET: asegura que, tras la limpieza, SIGUE habiendo una suscripción viva
+    // (si por carrera/orden de webhooks la "buena" quedase cancelada, se crea una de sustitución sin reprocesar cobro ahora).
+    try {
+      const keepSubId = invoice.subscription || null;
+      if (keepSubId) {
+        let keepSub = await stripe.subscriptions.retrieve(keepSubId);
+        const keepOk = keepSub && ACTIVE_STATUSES.includes(keepSub.status);
+        if (!keepOk) {
+          // price de la línea cobrada en esta invoice
+          const priceId = invoice?.lines?.data?.[0]?.price?.id;
+          if (priceId) {
+            // reutiliza fin de periodo ya calculado si lo tienes; si no, usa el de la subs “keep” si existe
+            let trialEnd = null;
+            try {
+              if (keepSub?.current_period_end) {
+                trialEnd = keepSub.current_period_end;
+              } else if (typeof keepSub?.schedule === 'string') {
+                // fallback raro: ignora
+              }
+            } catch (_) {}
+            // último fallback: si arriba no había, usa el "expiresAtISO" si lo calculaste antes
+            if (!trialEnd && expiresAtISO) {
+              trialEnd = Math.floor(new Date(expiresAtISO).getTime() / 1000);
+            }
+            // y si aún no hubiera, pon un pequeño margen para no cobrar ahora mismo
+            if (!trialEnd) {
+              trialEnd = Math.floor(Date.now() / 1000) + 60; // +60s
+            }
+            const newSub = await stripe.subscriptions.create({
+              customer: customerId,
+              items: [{ price: priceId }],
+              // evita nuevo cargo inmediato; cobrará al llegar trial_end (anclado a fin de ciclo)
+              trial_end: trialEnd,
+              proration_behavior: 'none',
+              collection_method: 'charge_automatically',
+              metadata: {
+                email: emailSeguro,
+                origen_realta: 'safety_autofix'
+              }
+            });
+            console.log('🧷 Re-alta: creada suscripción de seguridad', newSub.id);
+            // vuelve a asegurar unicidad dejando solo la nueva
+            try { await ensureSingleActiveClubSubscription(emailSeguro, newSub.id); } catch (_) {}
+            // refresca expires para MemberPress
+            try { if (newSub.current_period_end) { expiresAtISO = new Date(newSub.current_period_end * 1000).toISOString(); } } catch (_) {}
+            // reforzar estado vivo en FS/MP por si hubo una desactivación posterior
+            try {
+              await firestore.collection('usuariosClub').doc(emailSeguro).set({
+                activo: true,
+                ultimaRenovacion: new Date().toISOString(),
+                fechaBaja: FieldValue.delete()
+              }, { merge: true });
+              await syncMemberpressClub({
+                email: emailSeguro,
+                accion: 'activar',
+                membership_id: CLUB_ID,
+                ...(expiresAtISO ? { expires_at: expiresAtISO } : {})
+              });
+            } catch (_) {}
+          } else {
+            console.warn('⚠️ SAFETY: no se pudo obtener priceId de la invoice; no se recrea suscripción.');
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ SAFETY re-alta: verificación/auto-recreación de suscripción falló:', e?.message || e);
+    }
+
     // 🔒 Re-alta segura: anular baja "pendiente" en Firestore si existe
     try {
       const refBaja  = firestore.collection('bajasClub').doc(emailSeguro);

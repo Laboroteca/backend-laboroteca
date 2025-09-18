@@ -52,71 +52,41 @@ setInterval(() => {
 }, 10*60*1000).unref();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Re-ALTA guard SOLO PARA EL CLUB:
-//   - keepId: suscripción del Club que queremos conservar
-//   - clubPriceId / clubProductId: identificadores del precio/producto del Club
-// Hace:
-//   1) Si keepId es del Club, quita cancel_at_period_end en esa.
-//   2) Cancela OTRAS suscripciones ACTIVAS del Club de ese email.
-// No toca suscripciones que no sean del Club.
-async function ensureSingleActiveClubSubscription({
-  email,
-  keepId = null,
-  clubPriceId = null,
-  clubProductId = null
-}) {
+// Re-ALTA guard: deja SOLO UNA suscripción activa por email
+// 1) Quita cancel_at_period_end a la suscripción “keepId” (si venía programada).
+// 2) Cancela inmediatamente las demás suscripciones activas de ese email.
+async function ensureSingleActiveClubSubscription(email, keepId = null) {
   if (!email || !email.includes('@')) return { changed: false };
   let changed = false;
-
-  // Helper: determina si una suscripción es del Club según price/product/metadata
-  const isClubSub = (sub) => {
-    try {
-      const items = sub?.items?.data || [];
-      // Señal por priceId o productId
-      const matchByPrice = clubPriceId
-        ? items.some(it => (it?.price?.id || '') === clubPriceId)
-        : false;
-      const matchByProduct = clubProductId
-        ? items.some(it => (it?.price?.product || '') === clubProductId)
-        : false;
-      // Señal por metadata (por si en algún momento marcamos tipo=club)
-      const metaTipo = String(sub?.metadata?.tipo || sub?.metadata?.tipoProducto || '').toLowerCase();
-      const matchByMeta = metaTipo === 'club' || /club\s*laboroteca/i.test(String(sub?.metadata?.producto || ''));
-      return !!(matchByPrice || matchByProduct || matchByMeta);
-    } catch (_) {
-      return false;
-    }
-  };
-
   try {
     const clientes = await stripe.customers.list({ email, limit: 100 });
     for (const c of clientes.data) {
       const subs = await stripe.subscriptions.list({ customer: c.id, status: 'all', limit: 100 });
       for (const sub of subs.data) {
         const isActive = ACTIVE_STATUSES.includes(sub.status);
-        const isClub = isClubSub(sub);
-        if (!isClub) continue; // ← ignorar suscripciones que no sean del Club
-
+        // 1) la “buena” → quitar cancel_at_period_end si estuviera programada
         if (keepId && sub.id === keepId) {
           if (sub.cancel_at_period_end) {
             await stripe.subscriptions.update(sub.id, { cancel_at_period_end: false });
-            console.log('↪️ [Club] cancel_at_period_end=false por re-alta:', sub.id);
+            console.log('↪️ cancel_at_period_end=false por re-alta (invoice.paid):', sub.id);
             changed = true;
           }
           continue;
         }
+        // 2) cualquier otra activa → cancelar YA para que solo quede una
         if (isActive) {
           try {
             await stripe.subscriptions.cancel(sub.id, { invoice_now: false, prorate: false });
-            console.log('🛑 [Club] Subs antigua cancelada por re-alta:', sub.id);
+            console.log('🛑 Subs antigua cancelada por re-alta:', sub.id);
             changed = true;
           } catch (e) {
-            console.warn('⚠️ [Club] No se pudo cancelar subs antigua:', sub.id, e?.message || e);
+            console.warn('⚠️ No se pudo cancelar subs antigua:', sub.id, e?.message || e);
           }
         }
       }
     }
     if (changed) {
+      // Dejar huella en bajasClub: anulada por re-alta (estado vivo limpio)
       try {
         await firestore.collection('bajasClub').doc(email).set({
           estadoBaja: 'anulada',
@@ -126,7 +96,7 @@ async function ensureSingleActiveClubSubscription({
       } catch (_) {}
     }
   } catch (e) {
-    console.warn('⚠️ ensureSingleActiveClubSubscription (Club only):', e?.message || e);
+    console.warn('⚠️ ensureSingleActiveClubSubscription:', e?.message || e);
   }
   return { changed };
 }
@@ -240,19 +210,6 @@ async function handleStripeEvent(event) {
   // ---- IMPAGO EN INVOICE ----
   if (event.type === 'invoice.payment_failed') {
     const invoice = event.data.object;
-  // Guard “solo Club”
-  const linePF      = invoice?.lines?.data?.[0] || null;
-  const descPF      = String(linePF?.description || linePF?.price?.nickname || '');
-  const metaTipoPF  = String(invoice?.subscription_details?.metadata?.tipo || invoice?.metadata?.tipo || '').toLowerCase();
-  const metaProdPF  = String(invoice?.subscription_details?.metadata?.producto || invoice?.metadata?.producto || '');
-  const looksClubPF = metaTipoPF === 'club' ||
-                      /club\s*laboroteca/i.test(metaProdPF) ||
-                      /club\s*laboroteca/i.test(descPF);
-  if (!looksClubPF) {
-    console.log('⏭️ [IMPAGO] Invoice no identificada como Club. No se toca MP del Club ni se cancela subs.', { invoiceId: invoice?.id });
-    return { ignored: true, reason: 'payment_failed_non_club' };
-  }
-
     const email = (
       invoice.customer_email ||
       invoice.customer_details?.email ||
@@ -425,9 +382,6 @@ if (event.type === 'invoice.paid') {
     const invoiceId = invoice.id;
     const customerId = invoice.customer;
     const billingReason = invoice.billing_reason;
-    // IDs del Club detectados en la línea cobrada
-    const clubPriceId   = invoice?.lines?.data?.[0]?.price?.id || null;
-    const clubProductId = invoice?.lines?.data?.[0]?.price?.product || null;
 
     // Gate de seguridad por motivo de facturación
     const allowManualInTest = (billingReason === 'manual' && event.livemode === false);
@@ -868,94 +822,11 @@ if (emailSeguro && emailSeguro.indexOf('@') !== -1) {
       });
     }
 
-    // Mantén la de ESTA invoice y elimina duplicadas SOLO del Club; y desprograma su cancelación si venía marcada.
+    // 🧠 POLÍTICA “una sola suscripción viva por email”
+    // Mantén la de ESTA invoice y elimina duplicadas; además, desprograma su cancelación si venía marcada.
     try {
-      await ensureSingleActiveClubSubscription({
-        email: emailSeguro,
-        keepId: invoice.subscription || null,
-        clubPriceId,
-        clubProductId
-      });
+      await ensureSingleActiveClubSubscription(emailSeguro, invoice.subscription || null);
     } catch (_) {}
-
-    // 🛟 SAFETY NET: asegura que, tras la limpieza, SIGUE habiendo una suscripción viva
-    // (si por carrera/orden de webhooks la "buena" quedase cancelada, se crea una de sustitución sin reprocesar cobro ahora).
-    try {
-      const keepSubId = invoice.subscription || null;
-      if (keepSubId) {
-        let keepSub = await stripe.subscriptions.retrieve(keepSubId);
-        const keepOk = keepSub && ACTIVE_STATUSES.includes(keepSub.status);
-        if (!keepOk) {
-          // price de la línea cobrada en esta invoice
-          const priceId = invoice?.lines?.data?.[0]?.price?.id;
-          if (priceId) {
-            // reutiliza fin de periodo ya calculado si lo tienes; si no, usa el de la subs “keep” si existe
-            let trialEnd = null;
-            try {
-              if (keepSub?.current_period_end) {
-                trialEnd = keepSub.current_period_end;
-              } else if (typeof keepSub?.schedule === 'string') {
-                // fallback raro: ignora
-              }
-            } catch (_) {}
-            // último fallback: si arriba no había, usa el "expiresAtISO" si lo calculaste antes
-            if (!trialEnd && expiresAtISO) {
-              trialEnd = Math.floor(new Date(expiresAtISO).getTime() / 1000);
-            }
-            // y si aún no hubiera, pon un pequeño margen para no cobrar ahora mismo
-            const nowTs = Math.floor(Date.now() / 1000);
-            if (!trialEnd) {
-              trialEnd = nowTs + 60; // +60s
-            }
-            if (trialEnd <= nowTs) {
-              trialEnd = nowTs + 60; // garantizar futuro
-            }
-            const newSub = await stripe.subscriptions.create({
-              customer: customerId,
-              items: [{ price: priceId }],
-              // evita nuevo cargo inmediato; cobrará al llegar trial_end (anclado a fin de ciclo)
-              trial_end: trialEnd,
-              proration_behavior: 'none',
-              collection_method: 'charge_automatically',
-              metadata: {
-                email: emailSeguro,
-                origen_realta: 'safety_autofix'
-              }
-            });
-            console.log('🧷 Re-alta: creada suscripción de seguridad', newSub.id);
-            // vuelve a asegurar unicidad dejando solo la nueva
-            try {
-              await ensureSingleActiveClubSubscription({
-                email: emailSeguro,
-                keepId: newSub.id,
-                clubPriceId: priceId,
-                clubProductId: null
-              });
-            } catch (_) {}
-            // refresca expires para MemberPress
-            try { if (newSub.current_period_end) { expiresAtISO = new Date(newSub.current_period_end * 1000).toISOString(); } } catch (_) {}
-            // reforzar estado vivo en FS/MP por si hubo una desactivación posterior
-            try {
-              await firestore.collection('usuariosClub').doc(emailSeguro).set({
-                activo: true,
-                ultimaRenovacion: new Date().toISOString(),
-                fechaBaja: FieldValue.delete()
-              }, { merge: true });
-              await syncMemberpressClub({
-                email: emailSeguro,
-                accion: 'activar',
-                membership_id: CLUB_ID,
-                ...(expiresAtISO ? { expires_at: expiresAtISO } : {})
-              });
-            } catch (_) {}
-          } else {
-            console.warn('⚠️ SAFETY: no se pudo obtener priceId de la invoice; no se recrea suscripción.');
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('⚠️ SAFETY re-alta: verificación/auto-recreación de suscripción falló:', e?.message || e);
-    }
 
     // 🔒 Re-alta segura: anular baja "pendiente" en Firestore si existe
     try {
@@ -970,7 +841,7 @@ if (emailSeguro && emailSeguro.indexOf('@') !== -1) {
           await refBaja.set({
             estadoBaja: 'anulada',
             // etiqueta de auditoría: la baja pendiente se cancela por re-alta
-            comprobacionFinal: 'anulada_por_re_alta',
+            comprobacionFinal: 'cancelada_por_re_alta',
             fechaAnulacion: new Date().toISOString()
           }, { merge: true });
           console.log('↪️ Baja programada anulada por re-alta para', redactEmail(emailSeguro));
@@ -1038,19 +909,6 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
 
   if (event.type === 'customer.subscription.deleted') {
     const subscription = event.data.object;
-    // Guard “solo Club” en la suscripción cancelada
-    const subItemsDel   = subscription?.items?.data || [];
-    const subDescDel    = String(subItemsDel?.[0]?.price?.nickname || '');
-    const subTipoDel    = String(subscription?.metadata?.tipo || subscription?.metadata?.tipoProducto || '').toLowerCase();
-    const subProdTxtDel = String(subscription?.metadata?.producto || '');
-    const isClubDeleted = subTipoDel === 'club' ||
-                          /club\s*laboroteca/i.test(subProdTxtDel) ||
-                          /club\s*laboroteca/i.test(subDescDel);
-    if (!isClubDeleted) {
-      console.log('⏭️ subscription.deleted de producto NO Club. No se toca MP del Club.');
-      return { ignored: true, reason: 'deleted_non_club' };
-    }
-
     const email = (
       subscription.metadata?.email ||
       subscription.customer_email ||
@@ -1070,18 +928,7 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
         const clientes = await stripe.customers.list({ email, limit: 100 });
         for (const c of clientes.data) {
           const subs = await stripe.subscriptions.list({ customer: c.id, status: 'all', limit: 100 });
-          if (subs.data.some(s => {
-                if (s.id === (subscriptionId || null)) return false;
-                if (!ACTIVE_STATUSES.includes(s.status)) return false;
-                const it = (s.items?.data || [])[0];
-                const nick = String(it?.price?.nickname || '');
-                const tipo = String(s?.metadata?.tipo || s?.metadata?.tipoProducto || '').toLowerCase();
-                const prod = String(s?.metadata?.producto || '');
-                const isClub = tipo === 'club' ||
-                               /club\s*laboroteca/i.test(prod) ||
-                               /club\s*laboroteca/i.test(nick);
-                return isClub;
-              })) {
+          if (subs.data.some(s => s.id !== (subscriptionId || null) && ACTIVE_STATUSES.includes(s.status))) {
           hasOtherActive = true;
             break;
           }
@@ -1116,7 +963,7 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
         try {
           await firestore.collection('bajasClub').doc(email).set({
             estadoBaja: 'anulada',
-            comprobacionFinal: 'anulada_por_re_alta',
+            comprobacionFinal: 'cancelada_por_re_alta',
             fechaAnulacion: new Date().toISOString(),
             subscriptionId_cancelada: subscriptionId
           }, { merge: true });
@@ -1374,11 +1221,7 @@ if (event.type === 'checkout.session.completed') {
             ciudad:    (m.ciudad || '').trim(),
             provincia: (m.provincia || '').trim(),
             cp:        (m.cp || m.codigo_postal || '').trim(),
-            fuente:    'fluentforms',
-            // Etiquetas para identificar SIEMPRE que es Club
-            tipo:      'club',
-            tipoProducto: 'Club',
-            producto:  'el club laboroteca'
+            fuente:    'fluentforms'
           }
         });
       }

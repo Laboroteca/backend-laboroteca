@@ -799,10 +799,9 @@ try {
   if (!customerId || !currentSubId) {
     console.log('ℹ️ Limpieza post re-alta: falta customerId o currentSubId');
   } else {
-    // Aseguramos conocer el productId del item actual
+    // 1) Obtener el productId del item actual (preferimos sacarlo del invoice y, si no, de la sub actual)
     let currentProductId = null;
 
-    // 1) Preferimos sacar el product del propio invoice (línea 0)
     const invItem = invoice?.lines?.data?.[0];
     const invPriceProduct = invItem?.price?.product;
     if (invPriceProduct) {
@@ -811,35 +810,34 @@ try {
         : (invPriceProduct.id || null);
     }
 
-    // 2) Si no lo tenemos todavía, expandimos la suscripción actual
     if (!currentProductId) {
       const currentSub = await stripe.subscriptions.retrieve(
         currentSubId,
         { expand: ['items.data.price.product'] }
       );
       const firstItem = currentSub?.items?.data?.[0];
-      const p = firstItem?.price?.product;
-      currentProductId = p ? (typeof p === 'string' ? p : (p.id || null)) : null;
+      const prod = firstItem?.price?.product;
+      currentProductId = prod ? (typeof prod === 'string' ? prod : (prod.id || null)) : null;
     }
 
     if (!currentProductId) {
       console.log('ℹ️ Limpieza post re-alta: no se pudo determinar currentProductId');
     } else {
-      // Listamos TODAS las suscripciones del cliente y filtramos las del MISMO PRODUCTO (Club),
-      // distintas de la actual y que NO estén ya canceladas.
+      // 2) Listar TODAS las suscripciones del cliente y quedarnos con las del MISMO PRODUCTO (Club)
       const list = await stripe.subscriptions.list({
         customer: customerId,
         status: 'all',
-        limit: 100
+        limit: 100,
+        expand: ['data.items.data.price.product'] // ← asegura product.id disponible en todas
       });
 
       const otrasDelMismoProducto = (list.data || []).filter(s => {
-        if (s.id === currentSubId) return false;
-        if (s.status === 'canceled') return false;
+        if (s.id === currentSubId) return false;           // no tocar la actual
+        if (s.status === 'canceled') return false;         // ya cancelada
         const items = s.items?.data || [];
         const sameProduct = items.some(it => {
-          const prod = it.price?.product;
-          const pid = typeof prod === 'string' ? prod : (prod?.id || null);
+          const p = it.price?.product;
+          const pid = (typeof p === 'string') ? p : (p?.id || null);
           return pid === currentProductId;
         });
         return sameProduct;
@@ -847,6 +845,7 @@ try {
 
       for (const s of otrasDelMismoProducto) {
         try {
+          // Cancelación inmediata (no programada a fin de ciclo)
           await stripe.subscriptions.cancel(s.id);
           console.log('🧹 Cancelada en Stripe suscripción antigua (mismo producto/Club):', s.id);
           try {
@@ -870,6 +869,7 @@ try {
 } catch (e) {
   console.warn('⚠️ Limpieza post re-alta (solo Club) falló parcialmente:', e?.message || e);
 }
+
 
   }
 } else {

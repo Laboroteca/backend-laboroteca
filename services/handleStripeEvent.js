@@ -792,26 +792,36 @@ if (emailSeguro && emailSeguro.indexOf('@') !== -1) {
     } catch (e) {
       console.warn('⚠️ No se pudo anular baja programada tras re-alta:', e?.message || e);
     }
-    // 🧹 Re-alta completa: cancelar otras suscripciones equivalentes del mismo cliente
-    //    (mismo price que la actual) para que solo subsista la nueva alta.
+    // 🧹 Re-alta completa: cancelar en STRIPE las otras suscripciones equivalentes (mismo price/product)
     try {
       const currentSubId = invoice.subscription;
-      const currentPriceId = invoice?.lines?.data?.[0]?.price?.id || null;
-      if (customerId && currentSubId && currentPriceId) {
-        const list = await stripe.subscriptions.list({
-          customer: customerId,
-          status: 'all',
-          limit: 100
-        });
+      let currentPriceId = null;
+      let currentProductId = null;
+      if (currentSubId) {
+        const currentSub = await stripe.subscriptions.retrieve(currentSubId, { expand: ['items.data.price.product'] });
+        const firstItem = currentSub?.items?.data?.[0];
+        currentPriceId   = firstItem?.price?.id || null;
+        currentProductId = (firstItem?.price?.product && (typeof firstItem.price.product === 'string'
+          ? firstItem.price.product
+          : firstItem.price.product?.id)) || null;
+      }
+      if (customerId && currentSubId && (currentPriceId || currentProductId)) {
+        const list = await stripe.subscriptions.list({ customer: customerId, status: 'all', limit: 100 });
         const otras = (list.data || []).filter(s => {
           if (s.id === currentSubId) return false;
-          const hasSamePrice = (s.items?.data || []).some(it => it.price?.id === currentPriceId);
-          return hasSamePrice;
+          const items = s.items?.data || [];
+          const samePrice   = currentPriceId   && items.some(it => it.price?.id === currentPriceId);
+          const sameProduct = currentProductId && items.some(it => {
+            const p = it.price?.product;
+            const pid = (typeof p === 'string') ? p : p?.id;
+            return pid === currentProductId;
+          });
+        return samePrice || sameProduct;
         });
         for (const s of otras) {
           try {
             await stripe.subscriptions.cancel(s.id);
-            console.log('🧹 Cancelada suscripción antigua por re-alta:', s.id);
+            console.log('🧹 Cancelada en Stripe suscripción antigua por re-alta:', s.id);
             try {
               await logBajaFirestore({
                 email: emailSeguro,
@@ -825,14 +835,15 @@ if (emailSeguro && emailSeguro.indexOf('@') !== -1) {
               });
             } catch (_) {}
           } catch (e) {
-            console.warn('⚠️ No se pudo cancelar suscripción antigua:', s.id, e?.message || e);
+            console.warn('⚠️ No se pudo cancelar suscripción antigua en Stripe:', s.id, e?.message || e);
           }
         }
+      } else {
+        console.log('ℹ️ Limpieza post re-alta: no hay price/product actual identificado. (customerId, subId)=', customerId, currentSubId);
       }
     } catch (e) {
       console.warn('⚠️ Limpieza post re-alta falló parcialmente:', e?.message || e);
     }
-
   }
 } else {
   console.warn(`❌ Email inválido en syncMemberpressClub: "${emailSeguro}"`);

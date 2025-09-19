@@ -792,58 +792,85 @@ if (emailSeguro && emailSeguro.indexOf('@') !== -1) {
     } catch (e) {
       console.warn('⚠️ No se pudo anular baja programada tras re-alta:', e?.message || e);
     }
-    // 🧹 Re-alta completa: cancelar en STRIPE las otras suscripciones equivalentes (mismo price/product)
-    try {
-      const currentSubId = invoice.subscription;
-      let currentPriceId = null;
-      let currentProductId = null;
-      if (currentSubId) {
-        const currentSub = await stripe.subscriptions.retrieve(currentSubId, { expand: ['items.data.price.product'] });
-        const firstItem = currentSub?.items?.data?.[0];
-        currentPriceId   = firstItem?.price?.id || null;
-        currentProductId = (firstItem?.price?.product && (typeof firstItem.price.product === 'string'
-          ? firstItem.price.product
-          : firstItem.price.product?.id)) || null;
-      }
-      if (customerId && currentSubId && (currentPriceId || currentProductId)) {
-        const list = await stripe.subscriptions.list({ customer: customerId, status: 'all', limit: 100 });
-        const otras = (list.data || []).filter(s => {
-          if (s.id === currentSubId) return false;
-          const items = s.items?.data || [];
-          const samePrice   = currentPriceId   && items.some(it => it.price?.id === currentPriceId);
-          const sameProduct = currentProductId && items.some(it => {
-            const p = it.price?.product;
-            const pid = (typeof p === 'string') ? p : p?.id;
-            return pid === currentProductId;
-          });
-        return samePrice || sameProduct;
-        });
-        for (const s of otras) {
-          try {
-            await stripe.subscriptions.cancel(s.id);
-            console.log('🧹 Cancelada en Stripe suscripción antigua por re-alta:', s.id);
-            try {
-              await logBajaFirestore({
-                email: emailSeguro,
-                nombre,
-                motivo: 'manual_inmediata',
-                verificacion: 'CORRECTO',
-                fechaSolicitudISO: new Date().toISOString(),
-                fechaEfectosISO: new Date().toISOString(),
-                subscriptionId: s.id,
-                source: 're_alta_cleanup'
-              });
-            } catch (_) {}
-          } catch (e) {
-            console.warn('⚠️ No se pudo cancelar suscripción antigua en Stripe:', s.id, e?.message || e);
-          }
-        }
-      } else {
-        console.log('ℹ️ Limpieza post re-alta: no hay price/product actual identificado. (customerId, subId)=', customerId, currentSubId);
-      }
-    } catch (e) {
-      console.warn('⚠️ Limpieza post re-alta falló parcialmente:', e?.message || e);
+// 🧹 Re-alta (Club): en STRIPE cancelar TODAS las demás suscripciones del MISMO PRODUCTO,
+// dejando solo la que acaba de pagar (currentSubId). No se toca nada más.
+try {
+  const currentSubId = invoice.subscription;
+  if (!customerId || !currentSubId) {
+    console.log('ℹ️ Limpieza post re-alta: falta customerId o currentSubId');
+  } else {
+    // Aseguramos conocer el productId del item actual
+    let currentProductId = null;
+
+    // 1) Preferimos sacar el product del propio invoice (línea 0)
+    const invItem = invoice?.lines?.data?.[0];
+    const invPriceProduct = invItem?.price?.product;
+    if (invPriceProduct) {
+      currentProductId = (typeof invPriceProduct === 'string')
+        ? invPriceProduct
+        : (invPriceProduct.id || null);
     }
+
+    // 2) Si no lo tenemos todavía, expandimos la suscripción actual
+    if (!currentProductId) {
+      const currentSub = await stripe.subscriptions.retrieve(
+        currentSubId,
+        { expand: ['items.data.price.product'] }
+      );
+      const firstItem = currentSub?.items?.data?.[0];
+      const p = firstItem?.price?.product;
+      currentProductId = p ? (typeof p === 'string' ? p : (p.id || null)) : null;
+    }
+
+    if (!currentProductId) {
+      console.log('ℹ️ Limpieza post re-alta: no se pudo determinar currentProductId');
+    } else {
+      // Listamos TODAS las suscripciones del cliente y filtramos las del MISMO PRODUCTO (Club),
+      // distintas de la actual y que NO estén ya canceladas.
+      const list = await stripe.subscriptions.list({
+        customer: customerId,
+        status: 'all',
+        limit: 100
+      });
+
+      const otrasDelMismoProducto = (list.data || []).filter(s => {
+        if (s.id === currentSubId) return false;
+        if (s.status === 'canceled') return false;
+        const items = s.items?.data || [];
+        const sameProduct = items.some(it => {
+          const prod = it.price?.product;
+          const pid = typeof prod === 'string' ? prod : (prod?.id || null);
+          return pid === currentProductId;
+        });
+        return sameProduct;
+      });
+
+      for (const s of otrasDelMismoProducto) {
+        try {
+          await stripe.subscriptions.cancel(s.id);
+          console.log('🧹 Cancelada en Stripe suscripción antigua (mismo producto/Club):', s.id);
+          try {
+            await logBajaFirestore({
+              email: emailSeguro,
+              nombre,
+              motivo: 'manual_inmediata',
+              verificacion: 'CORRECTO',
+              fechaSolicitudISO: new Date().toISOString(),
+              fechaEfectosISO: new Date().toISOString(),
+              subscriptionId: s.id,
+              source: 're_alta_cleanup_club'
+            });
+          } catch (_) {}
+        } catch (e) {
+          console.warn('⚠️ No se pudo cancelar suscripción antigua en Stripe:', s.id, e?.message || e);
+        }
+      }
+    }
+  }
+} catch (e) {
+  console.warn('⚠️ Limpieza post re-alta (solo Club) falló parcialmente:', e?.message || e);
+}
+
   }
 } else {
   console.warn(`❌ Email inválido en syncMemberpressClub: "${emailSeguro}"`);

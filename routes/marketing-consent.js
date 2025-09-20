@@ -551,7 +551,9 @@ router.post('/consent', async (req, res) => {
       console.log('🧾 Raw sha256:', req.rawBody ? sha256HexBuf(req.rawBody) : '(no-raw)');
     }
 
-    console.log(`🟢 [/marketing/consent] email=${email} formId=${s(req.body?.formularioId)} ip=${ip}`);
+    const emailH12 = sha256Hex(email).slice(0,12);
+    console.log('🟢 [/marketing/consent] email#%s formId=%s ip=%s',
+      emailH12, s(req.body?.formularioId), ip);
 
     // Rate limit (IP+email)
     if (!checkRateLimit(ip || '0.0.0.0', email)) {

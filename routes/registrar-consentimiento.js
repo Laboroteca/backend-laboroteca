@@ -6,6 +6,7 @@ const router = express.Router();
 
 const { registrarConsentimiento } = require('../utils/consentLogs');
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
+const crypto = require('crypto');
 
 /* ───────────── Helpers ───────────── */
 function parseConsentData(v) {
@@ -17,6 +18,15 @@ function parseConsentData(v) {
   return {};
 }
 const s = (v, def = '') => (v === undefined || v === null) ? def : String(v).trim();
+
+// Logs sin PII: en consola se oculta el email; en alertas se envía completo.
+const sha10 = (x) => crypto.createHash('sha256').update(String(x)).digest('hex').slice(0,10);
+function maskEmail(e){
+  const s = String(e||''); const i = s.indexOf('@');
+  if (i < 1) return s ? '***' : '';
+  const u = s.slice(0,i), d = s.slice(i);
+  return (u.length<=2 ? (u[0]||'') : u.slice(0,2)) + '…' + d;
+}
 
 function b(v, def = false) {
   if (v === undefined || v === null) return def;
@@ -139,7 +149,7 @@ router.post('/registrar-consentimiento', async (req, res) => {
           termsUrl, termsVersion
         };
 
-    console.log(`[CONSENT] email=${email} formId=${formularioId||source||'-'} registro=${esRegistro} privacy=${payload.privacyUrl?'yes':'no'} terms=${payload.termsUrl?'yes':'no'}`);
+    console.log(`[CONSENT] email=${maskEmail(email)}#${sha10(email)} formId=${formularioId||source||'-'} registro=${esRegistro} privacy=${payload.privacyUrl?'yes':'no'} terms=${payload.termsUrl?'yes':'no'}`);
 
     // Procesamos en background y respondemos rápido
     registrarConsentimiento(payload)
@@ -148,6 +158,7 @@ router.post('/registrar-consentimiento', async (req, res) => {
       })
       .catch(async e => {
         console.warn('❗ [CONSENT WARN]', e?.message || e);
+        // 🔔 ALERTA: email COMPLETO para que puedas identificar al afectado
         try { await alertAdmin(`❌ Error guardando consentimiento de ${email}: ${e.message}`); } catch {}
       });
 

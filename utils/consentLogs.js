@@ -96,6 +96,13 @@ function fetchHtml(rawUrl, hops = 0) {
  * Genera el HTML del snapshot con un banner de auditoría.
  */
 function buildSnapshotHtml({ rawHtmlBuffer, title, acceptedAtISO, email, ip, userAgent, extra = {} }) {
+  const maskEmail = (e) => {
+    const s = String(e || '');
+    const at = s.indexOf('@'); if (at < 1) return s ? '***' : '';
+    const u = s.slice(0, at), d = s.slice(at);
+    return (u.length <= 2 ? u[0] || '' : u.slice(0, 2)) + '…' + d;
+  };
+  const emailAudit = email ? `${maskEmail(email)} · sha256:${sha256Hex(email).slice(0,10)}` : '';
   const raw = rawHtmlBuffer ? rawHtmlBuffer.toString('utf8') : '';
   const banner = `
 <!doctype html><html lang="es"><head>
@@ -106,7 +113,7 @@ function buildSnapshotHtml({ rawHtmlBuffer, title, acceptedAtISO, email, ip, use
 <div style="border:1px solid #ddd;padding:12px;margin:12px 0;font-family:system-ui,Segoe UI,Arial,sans-serif;font-size:14px;background:#fafafa">
   <div><strong>Este es un snapshot de evidencia</strong>; no reemplaza al documento vivo.</div>
   <div>Aceptado: <code>${acceptedAtISO}</code></div>
-  <div>Email: <code>${email || ''}</code> · IP: <code>${ip || ''}</code></div>
+  <div>Email: <code>${emailAudit}</code> · IP: <code>${ip || ''}</code></div>
   <div>User-Agent: <code>${(userAgent || '').substring(0,160)}</code></div>
   <div>Extra: <code>${JSON.stringify(extra)}</code></div>
 </div>

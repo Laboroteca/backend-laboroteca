@@ -1,7 +1,9 @@
 // entradas/routes/create-session-entrada.js
 const express = require('express');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+// Verificación WP opcional (solo si STRICT=1)
 const { emailRegistradoEnWordPress } = require('../utils/wordpress');
+const WP_CHECK_STRICT = String(process.env.LAB_WP_CHECK_STRICT || '0') === '1';
 // const PRODUCTOS = require('../../utils/productos'); // (no usado)
 const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 
@@ -91,19 +93,24 @@ router.post('/crear-sesion-entrada', async (req, res) => {
       return res.status(400).json({ error: 'Descripción de producto inválida. Debe ser concreta para la factura.' });
     }
 
-    // 🔐 Verificar email en WordPress
-    const registrado = await emailRegistradoEnWordPress(email);
-    if (!registrado) {
-      console.warn('🚫 Email no registrado en WordPress:', maskEmail(email));
-      try {
-        await alertAdmin({
-          area: 'entradas.checkout.wp',
-          email, // email completo para admin
-          err: new Error('Email no registrado en WordPress'),
-          meta: { formularioId, tipoProducto, nombreProducto }
-        });
-      } catch (_) {}
-      return res.status(403).json({ error: 'El email no está registrado como usuario.' });
+    // 🔐 (Opcional) Verificación en WordPress
+    if (WP_CHECK_STRICT) {
+      const registrado = await emailRegistradoEnWordPress(email);
+      if (!registrado) {
+        console.warn('🚫 Email no registrado en WordPress (STRICT=1):', email);
+        try {
+          await alertAdmin({
+            area: 'entradas.checkout.wp',
+            email,
+            err: new Error('Email no registrado en WordPress'),
+            meta: { formularioId, tipoProducto, nombreProducto, strict: true }
+          });
+        } catch (_) {}
+        return res.status(403).json({ error: 'El email no está registrado como usuario.' });
+      }
+    } else {
+      // En modo no estricto NO bloqueamos (email viene del usuario logueado/autorrelleno)
+      console.log('ℹ️ Verificación WP omitida (LAB_WP_CHECK_STRICT=0):', email);
     }
 
     // 👥 Recoger asistentes

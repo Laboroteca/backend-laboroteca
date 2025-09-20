@@ -47,8 +47,8 @@ function verifySimpleHmacFromHeaders(req) {
     const ok = crypto.timingSafeEqual(Buffer.from(sig,'hex'), Buffer.from(expected,'hex'));
     if (!ok) return { ok:false, error:'invalid' };
   } catch { return { ok:false, error:'invalid' }; }
-  if (DEBUG_REENVIOS) console.log('[ENTRADAS GET HMAC OK]', { email, ts });
-  return { ok:true };
+  if (DEBUG_REENVIOS) console.log('[ENTRADAS GET HMAC OK]', { email, ts, sig10: sig.slice(0,10) });
+  return { ok:true, ts, sig10: sig.slice(0,10) };
 }
   
 // Bucket GCS (con alerta si credenciales mal formadas o ausentes)
@@ -193,7 +193,6 @@ function checkResendQuota(key, limit = RESEND_LIMIT_COUNT, windowMs = RESEND_LIM
 
 // ───────────────────────── Rutas lectura
 
-// GET /cuenta/entradas?email=...
 router.get('/cuenta/entradas', async (req, res) => {
   try {
     const email = String(req.query.email || '').trim().toLowerCase();
@@ -201,6 +200,7 @@ router.get('/cuenta/entradas', async (req, res) => {
     if (REQUIRE_HMAC_ENTRADAS) {
       const v = verifySimpleHmacFromHeaders(req);
       if (!v.ok) return res.status(401).json({ error: 'Firma requerida' });
+      if (DEBUG_REENVIOS) console.log('[ENTRADAS GET OK]', { email, ts: v.ts, sig10: v.sig10 });
     }
     if (!/^[a-f0-9]{64}$/i.test(sig)) {
       try {
@@ -238,6 +238,7 @@ router.get('/cuenta/entradas-lite', async (req, res) => {
     if (REQUIRE_HMAC_ENTRADAS) {
       const v = verifySimpleHmacFromHeaders(req);
       if (!v.ok) return res.status(401).json({ error: 'Firma requerida' });
+      if (DEBUG_REENVIOS) console.log('[ENTRADAS GET LITE OK]', { email, ts: v.ts, sig10: v.sig10 });
     }
 
     const items = await cargarEventosFuturos(email);

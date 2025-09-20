@@ -48,13 +48,16 @@ const FROM_NAME              = String(process.env.EMAIL_FROM_NAME || process.env
 
 const UNSUB_SECRET           = String(process.env.MKT_UNSUB_SECRET || 'laboroteca-unsub').trim();
 const UNSUB_PAGE             = String(process.env.MKT_UNSUB_PAGE   || 'https://www.laboroteca.es/baja-newsletter').trim();
-
+// Testing list (modo testOnly)
+const TEST_TO                = String(process.env.MKT_TEST_TO || 'ignacio.solsona@icacs.com,laboroteca@gmail.com').split(',').map(s=>s.trim()).filter(Boolean);
 const MAX_JOBS_PER_RUN       = Number(process.env.CRON_MAX_JOBS || 6);
 const MAX_ATTEMPTS           = Number(process.env.CRON_MAX_ATTEMPTS || 5);
 const LEASE_MINUTES          = Number(process.env.CRON_LEASE_MIN || 5);
 const RATE_DELAY_MS          = Number(process.env.CRON_RATE_DELAY_MS || 0); // pause entre envíos individuales
 const CONCURRENCY            = Math.max(1, Number(process.env.CRON_CONCURRENCY || 5)); // hilos de envío
 const CHUNK_SIZE             = Math.max(10, Number(process.env.CRON_CHUNK_SIZE || 200)); // destinatarios por lote
+// Límite duro de HTML que se envía por email (protección)
+const MAX_HTML_BYTES         = Number(process.env.MKT_SEND_MAX_HTML_BYTES || 250 * 1024);
 const SUPPRESSION_TTL_MS     = Number(process.env.CRON_SUPPRESSION_TTL_MS || (10*60*1000)); // 10 min
 const LAB_DEBUG              = String(process.env.LAB_DEBUG || '') === '1';
 
@@ -226,7 +229,7 @@ async function loadSuppressionSetCached() {
 
 // ───────── Resolución de destinatarios ─────────
 async function resolveRecipients({ materias, testOnly, onlyCommercial }) {
-  if (testOnly) return ['ignacio.solsona@icacs.com', 'laboroteca@gmail.com'];
+  if (testOnly) return TEST_TO;
 
   const snap = await db.collection('marketingConsents')
     .where('consent_marketing', '==', true)
@@ -373,6 +376,12 @@ async function processChunk({ ref, job, recipients, startIndex, chunkSize }) {
     try {
       const unsubUrl  = buildUnsubUrl(to);
       const finalHtml = ensureLegalAndUnsub(htmlBase, unsubUrl);
+
+      // Protección: tamaño máximo del HTML final
+      const bytes = Buffer.byteLength(finalHtml || '', 'utf8');
+      if (bytes > MAX_HTML_BYTES) {
+        throw new Error(`HTML_TOO_LARGE (${bytes} > ${MAX_HTML_BYTES})`);
+      }
 
       await sendSMTP2GO({
         to,

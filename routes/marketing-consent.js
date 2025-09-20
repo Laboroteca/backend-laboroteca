@@ -94,6 +94,7 @@ const MATERIAS_ORDER = [
   'bajas_ip',
   'jubilacion',
   'ahorro_privado',
+  'autonomos',
   'otras_prestaciones'
 ];
 
@@ -104,6 +105,7 @@ const MATERIAS_MATCHERS = [
   ['bajas_ip',           [/baja/i, /incapac/i]],
   ['jubilacion',         [/jubil/i]],
   ['ahorro_privado',     [/ahorro/i, /plan/i, /pensi/i, /invers/i]],
+  ['autonomos',          [/autonom/i, /autónom/i, /freelanc/i]],
   ['otras_prestaciones', [/otras/i, /prestac/i]]
 ];
 

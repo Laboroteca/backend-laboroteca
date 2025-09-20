@@ -198,7 +198,7 @@ async function handleUnsubscribe(req, res){
             consent_comercial: false,
             materias: {
               derechos:false, cotizaciones:false, desempleo:false, bajas_ip:false,
-              jubilacion:false, ahorro_privado:false, otras_prestaciones:false
+              jubilacion:false, ahorro_privado:false, autonomos:false, otras_prestaciones:false
             },
             materiasList: [],
             updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
@@ -211,9 +211,9 @@ async function handleUnsubscribe(req, res){
         try {
           await consRef.set({
             consent_marketing:false, consent_comercial:false,
-            materias:{
+            materias: {
               derechos:false, cotizaciones:false, desempleo:false, bajas_ip:false,
-              jubilacion:false, ahorro_privado:false, otras_prestaciones:false
+              jubilacion:false, ahorro_privado:false, autonomos:false, otras_prestaciones:false
             },
             materiasList: [],
             updatedAt: admin.firestore.Timestamp.fromDate(new Date()),

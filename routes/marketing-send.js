@@ -55,6 +55,17 @@ const UNSUB_PAGE   = String(process.env.MKT_UNSUB_PAGE || 'https://www.laborotec
 // Rate opcional para inmediatos (ms entre emails)
 const SEND_RATE_DELAY_MS = Number(process.env.SEND_RATE_DELAY_MS || 0);
 
+// ───────── Protección adicional opcional ─────────
+// a) Rate-limit perimetral del endpoint (requests → programación o envío inmediato)
+const SEND_RL_WINDOW_MS = Number(process.env.MKT_SEND_RL_WINDOW_MS || 10 * 1000);
+const SEND_RL_MAX       = Number(process.env.MKT_SEND_RL_MAX || 1);
+const sendLimiter = rateLimit({
+  windowMs: SEND_RL_WINDOW_MS,
+  max: SEND_RL_MAX,
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
 const LOG_PREFIX = '[marketing/send]';
 const LAB_DEBUG  = process.env.LAB_DEBUG === '1';
 
@@ -311,7 +322,7 @@ async function sendSMTP2GO({ to, subject, html, headers = [] }) {
 }
 
 // ───────── Ruta principal ─────────
-router.post(['/send', '/send-newsletter'], async (req, res) => {
+router.post(['/send', '/send-newsletter'], sendLimiter, async (req, res) => {
   const ts = nowISO();
   try {
     if (!SECRET) {
@@ -322,6 +333,19 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
     const ct = String(req.headers['content-type'] || '').toLowerCase();
     if (!ct.startsWith('application/json')) {
       return res.status(415).json({ ok:false, error:'UNSUPPORTED_MEDIA_TYPE' });
+    }
+
+    // Límite duro de tamaño del payload/html (protección DoS/accidentales)
+    // – por defecto 250 KB; configurable con MKT_SEND_MAX_HTML_BYTES
+    const MAX_HTML_BYTES = Number(process.env.MKT_SEND_MAX_HTML_BYTES || 250 * 1024);
+    if (!Buffer.isBuffer(req.rawBody)) {
+      return res.status(400).json({ ok:false, error:'NO_RAW_BODY' });
+    }
+    if (req.rawBody.length > MAX_HTML_BYTES) {
+      if (LAB_DEBUG) {
+        try { res.setHeader('X-Payload-Bytes', String(req.rawBody.length)); } catch (_) {}
+      }
+      return res.status(413).json({ ok:false, error:'PAYLOAD_TOO_LARGE' });
     }
 
     // HMAC obligatorio (único modo)
@@ -393,12 +417,15 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
     const materias = (req.body && typeof req.body === 'object' && req.body.materias) ? req.body.materias : {};
     const testOnly = !!req.body?.testOnly;
     const onlyCommercial = !!req.body?.onlyCommercial;
+    // Lista de testers configurable: MKT_TEST_TO="a@b.com,c@d.com"
+    const TEST_TO = String(process.env.MKT_TEST_TO || 'ignacio.solsona@icacs.com,laboroteca@gmail.com')
+      .split(',').map(s=>s.trim()).filter(Boolean);
 
     if (!subject)  return res.status(400).json({ ok: false, error: 'SUBJECT_REQUIRED' });
     if (!htmlBase) return res.status(400).json({ ok: false, error: 'HTML_REQUIRED' });
 
     // Normaliza materias válidas
-    const allowedKeys = ['derechos','cotizaciones','desempleo','bajas_ip','jubilacion','ahorro_privado','otras_prestaciones'];
+    const allowedKeys = ['derechos','cotizaciones','desempleo','bajas_ip','jubilacion','ahorro_privado','autonomos','otras_prestaciones'];
     const materiasNorm = {};
     let anyMateria = false;
     for (const k of allowedKeys) {
@@ -456,7 +483,7 @@ router.post(['/send', '/send-newsletter'], async (req, res) => {
     // Destinatarios
     let recipients = [];
     if (testOnly) {
-      recipients = ['ignacio.solsona@icacs.com', 'laboroteca@gmail.com'];
+      recipients = TEST_TO;
     } else {
       // base: newsletter consent
       const snap = await db.collection('marketingConsents')

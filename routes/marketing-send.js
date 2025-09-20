@@ -31,6 +31,7 @@ const express = require('express');
 const crypto  = require('crypto');
 const admin   = require('firebase-admin');
 const fetch   = require('node-fetch');
+const rateLimit = require('express-rate-limit');
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
 const router = express.Router();

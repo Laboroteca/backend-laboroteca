@@ -31,6 +31,8 @@ const redact = (v) => (process.env.NODE_ENV === 'production' ? hash12(String(v |
 const redactEmail = (e) => redact((e || '').toString().toLowerCase().trim());
 const { ensureOnce } = require('../utils/dedupe');
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
+// Estados que consideramos “vivos” en Stripe
+const ACTIVE_STATUSES = ['active', 'trialing', 'past_due'];
 
 // ——— LRU en memoria para idempotencia cuando Firestore falle (no bloqueante) ———
 const EVT_RECENT_MAX = Number(process.env.EVT_RECENT_MAX || 5000);
@@ -48,6 +50,56 @@ function evtRemember(id) {
 setInterval(() => {
   const now = Date.now(); for (const [k,exp] of _evts) if (exp<=now) _evts.delete(k);
 }, 10*60*1000).unref();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Re-ALTA guard: deja SOLO UNA suscripción activa por email
+// 1) Quita cancel_at_period_end a la suscripción “keepId” (si venía programada).
+// 2) Cancela inmediatamente las demás suscripciones activas de ese email.
+async function ensureSingleActiveClubSubscription(email, keepId = null) {
+  if (!email || !email.includes('@')) return { changed: false };
+  let changed = false;
+  try {
+    const clientes = await stripe.customers.list({ email, limit: 100 });
+    for (const c of clientes.data) {
+      const subs = await stripe.subscriptions.list({ customer: c.id, status: 'all', limit: 100 });
+      for (const sub of subs.data) {
+        const isActive = ACTIVE_STATUSES.includes(sub.status);
+        // 1) la “buena” → quitar cancel_at_period_end si estuviera programada
+        if (keepId && sub.id === keepId) {
+          if (sub.cancel_at_period_end) {
+            await stripe.subscriptions.update(sub.id, { cancel_at_period_end: false });
+            console.log('↪️ cancel_at_period_end=false por re-alta (invoice.paid):', sub.id);
+            changed = true;
+          }
+          continue;
+        }
+        // 2) cualquier otra activa → cancelar YA para que solo quede una
+        if (isActive) {
+          try {
+            await stripe.subscriptions.cancel(sub.id, { invoice_now: false, prorate: false });
+            console.log('🛑 Subs antigua cancelada por re-alta:', sub.id);
+            changed = true;
+          } catch (e) {
+            console.warn('⚠️ No se pudo cancelar subs antigua:', sub.id, e?.message || e);
+          }
+        }
+      }
+    }
+    if (changed) {
+      // Dejar huella en bajasClub: anulada por re-alta (estado vivo limpio)
+      try {
+        await firestore.collection('bajasClub').doc(email).set({
+          estadoBaja: 'anulada',
+          comprobacionFinal: 'anulada_por_re_alta',
+          fechaAnulacion: new Date().toISOString()
+        }, { merge: true });
+      } catch (_) {}
+    }
+  } catch (e) {
+    console.warn('⚠️ ensureSingleActiveClubSubscription:', e?.message || e);
+  }
+  return { changed };
+}
 
 // ——— Helpers comunes ———
 async function nombreCompletoPorEmail(email, fallbackNombre = '', fallbackApellidos = '') {
@@ -770,6 +822,80 @@ if (emailSeguro && emailSeguro.indexOf('@') !== -1) {
       });
     }
 
+    // 🧠 POLÍTICA “una sola suscripción viva por email”
+    // Mantén la de ESTA invoice y elimina duplicadas; además, desprograma su cancelación si venía marcada.
+    try {
+      await ensureSingleActiveClubSubscription(emailSeguro, invoice.subscription || null);
+    } catch (_) {}
+
+    // 🛟 SAFETY NET: asegura que, tras la limpieza, SIGUE habiendo una suscripción viva
+    // (si por carrera/orden de webhooks la "buena" quedase cancelada, se crea una de sustitución sin reprocesar cobro ahora).
+    try {
+      const keepSubId = invoice.subscription || null;
+      if (keepSubId) {
+        let keepSub = await stripe.subscriptions.retrieve(keepSubId);
+        const keepOk = keepSub && ACTIVE_STATUSES.includes(keepSub.status);
+        if (!keepOk) {
+          // price de la línea cobrada en esta invoice
+          const priceId = invoice?.lines?.data?.[0]?.price?.id;
+          if (priceId) {
+            // reutiliza fin de periodo ya calculado si lo tienes; si no, usa el de la subs “keep” si existe
+            let trialEnd = null;
+            try {
+              if (keepSub?.current_period_end) {
+                trialEnd = keepSub.current_period_end;
+              } else if (typeof keepSub?.schedule === 'string') {
+                // fallback raro: ignora
+              }
+            } catch (_) {}
+            // último fallback: si arriba no había, usa el "expiresAtISO" si lo calculaste antes
+            if (!trialEnd && expiresAtISO) {
+              trialEnd = Math.floor(new Date(expiresAtISO).getTime() / 1000);
+            }
+            // y si aún no hubiera, pon un pequeño margen para no cobrar ahora mismo
+            if (!trialEnd) {
+              trialEnd = Math.floor(Date.now() / 1000) + 60; // +60s
+            }
+            const newSub = await stripe.subscriptions.create({
+              customer: customerId,
+              items: [{ price: priceId }],
+              // evita nuevo cargo inmediato; cobrará al llegar trial_end (anclado a fin de ciclo)
+              trial_end: trialEnd,
+              proration_behavior: 'none',
+              collection_method: 'charge_automatically',
+              metadata: {
+                email: emailSeguro,
+                origen_realta: 'safety_autofix'
+              }
+            });
+            console.log('🧷 Re-alta: creada suscripción de seguridad', newSub.id);
+            // vuelve a asegurar unicidad dejando solo la nueva
+            try { await ensureSingleActiveClubSubscription(emailSeguro, newSub.id); } catch (_) {}
+            // refresca expires para MemberPress
+            try { if (newSub.current_period_end) { expiresAtISO = new Date(newSub.current_period_end * 1000).toISOString(); } } catch (_) {}
+            // reforzar estado vivo en FS/MP por si hubo una desactivación posterior
+            try {
+              await firestore.collection('usuariosClub').doc(emailSeguro).set({
+                activo: true,
+                ultimaRenovacion: new Date().toISOString(),
+                fechaBaja: FieldValue.delete()
+              }, { merge: true });
+              await syncMemberpressClub({
+                email: emailSeguro,
+                accion: 'activar',
+                membership_id: CLUB_ID,
+                ...(expiresAtISO ? { expires_at: expiresAtISO } : {})
+              });
+            } catch (_) {}
+          } else {
+            console.warn('⚠️ SAFETY: no se pudo obtener priceId de la invoice; no se recrea suscripción.');
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ SAFETY re-alta: verificación/auto-recreación de suscripción falló:', e?.message || e);
+    }
+
     // 🔒 Re-alta segura: anular baja "pendiente" en Firestore si existe
     try {
       const refBaja  = firestore.collection('bajasClub').doc(emailSeguro);
@@ -792,84 +918,6 @@ if (emailSeguro && emailSeguro.indexOf('@') !== -1) {
     } catch (e) {
       console.warn('⚠️ No se pudo anular baja programada tras re-alta:', e?.message || e);
     }
-// 🧹 Re-alta (Club): en STRIPE cancelar TODAS las demás suscripciones del MISMO PRODUCTO,
-// dejando solo la que acaba de pagar (currentSubId). No se toca nada más.
-try {
-  const currentSubId = invoice.subscription;
-  if (!customerId || !currentSubId) {
-    console.log('ℹ️ Limpieza post re-alta: falta customerId o currentSubId');
-  } else {
-    // 1) Obtener el productId del item actual (preferimos sacarlo del invoice y, si no, de la sub actual)
-    let currentProductId = null;
-
-    const invItem = invoice?.lines?.data?.[0];
-    const invPriceProduct = invItem?.price?.product;
-    if (invPriceProduct) {
-      currentProductId = (typeof invPriceProduct === 'string')
-        ? invPriceProduct
-        : (invPriceProduct.id || null);
-    }
-
-    if (!currentProductId) {
-      const currentSub = await stripe.subscriptions.retrieve(
-        currentSubId,
-        { expand: ['items.data.price.product'] }
-      );
-      const firstItem = currentSub?.items?.data?.[0];
-      const prod = firstItem?.price?.product;
-      currentProductId = prod ? (typeof prod === 'string' ? prod : (prod.id || null)) : null;
-    }
-
-    if (!currentProductId) {
-      console.log('ℹ️ Limpieza post re-alta: no se pudo determinar currentProductId');
-    } else {
-      // 2) Listar TODAS las suscripciones del cliente y quedarnos con las del MISMO PRODUCTO (Club)
-      const list = await stripe.subscriptions.list({
-        customer: customerId,
-        status: 'all',
-        limit: 100,
-        expand: ['data.items.data.price.product'] // ← asegura product.id disponible en todas
-      });
-
-      const otrasDelMismoProducto = (list.data || []).filter(s => {
-        if (s.id === currentSubId) return false;           // no tocar la actual
-        if (s.status === 'canceled') return false;         // ya cancelada
-        const items = s.items?.data || [];
-        const sameProduct = items.some(it => {
-          const p = it.price?.product;
-          const pid = (typeof p === 'string') ? p : (p?.id || null);
-          return pid === currentProductId;
-        });
-        return sameProduct;
-      });
-
-      for (const s of otrasDelMismoProducto) {
-        try {
-          // Cancelación inmediata (no programada a fin de ciclo)
-          await stripe.subscriptions.cancel(s.id);
-          console.log('🧹 Cancelada en Stripe suscripción antigua (mismo producto/Club):', s.id);
-          try {
-            await logBajaFirestore({
-              email: emailSeguro,
-              nombre,
-              motivo: 'manual_inmediata',
-              verificacion: 'CORRECTO',
-              fechaSolicitudISO: new Date().toISOString(),
-              fechaEfectosISO: new Date().toISOString(),
-              subscriptionId: s.id,
-              source: 're_alta_cleanup_club'
-            });
-          } catch (_) {}
-        } catch (e) {
-          console.warn('⚠️ No se pudo cancelar suscripción antigua en Stripe:', s.id, e?.message || e);
-        }
-      }
-    }
-  }
-} catch (e) {
-  console.warn('⚠️ Limpieza post re-alta (solo Club) falló parcialmente:', e?.message || e);
-}
-
 
   }
 } else {
@@ -941,6 +989,23 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
 
     const subscriptionId = subscription.id || subscription.subscription || null;
 
+    // ¿existe OTRA suscripción activa para este email? (re-alta)
+    let hasOtherActive = false;
+    try {
+      if (email && email.includes('@')) {
+        const clientes = await stripe.customers.list({ email, limit: 100 });
+        for (const c of clientes.data) {
+          const subs = await stripe.subscriptions.list({ customer: c.id, status: 'all', limit: 100 });
+          if (subs.data.some(s => s.id !== (subscriptionId || null) && ACTIVE_STATUSES.includes(s.status))) {
+          hasOtherActive = true;
+            break;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ No se pudo verificar otras suscripciones activas:', e?.message || e);
+    }
+
     // ⛔️ DEDUPE de BAJA por suscripción/email
     const bajaKey = `baja:${subscriptionId || email}`;
     const isFirstBaja = await ensureOnce('bajasClub_idx', bajaKey);
@@ -960,27 +1025,18 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
     const eraFinDeCiclo  = !!subscription?.cancel_at_period_end; // programada a fin de ciclo
 
     if (email) {
-      // 🛡️ Blindaje: si existe otra suscripción activa equivalente, NO desactivar MP
-      try {
-        const priceRef = subscription?.items?.data?.[0]?.price?.id || null;
-        let hasAnotherActive = false;
-        if (subscription.customer && priceRef) {
-          const list = await stripe.subscriptions.list({
-            customer: subscription.customer,
-            status: 'active',
-            limit: 100
-          });
-          hasAnotherActive = (list.data || []).some(s =>
-            s.id !== subscription.id &&
-            (s.items?.data || []).some(it => it.price?.id === priceRef)
-          );
-        }
-        if (hasAnotherActive) {
-          console.log('↪️ Otra suscripción activa equivalente detectada. No desactivo MP.');
-          return { success: true, baja_antigua_ignorando_acceso: true };
-        }
-      } catch (e) {
-        console.warn('⚠️ Filtro de protección re-alta (deleted) falló:', e?.message || e);
+      // 🔒 Re-alta detectada → NO desactivar MemberPress ni marcar inactivo
+      if (hasOtherActive) {
+        console.log(`↪️ ${redactEmail(email)} tiene otra suscripción activa; se ignora desactivación de MP por la cancelación de ${subscriptionId}.`);
+        try {
+          await firestore.collection('bajasClub').doc(email).set({
+            estadoBaja: 'anulada',
+            comprobacionFinal: 'cancelada_por_re_alta',
+            fechaAnulacion: new Date().toISOString(),
+            subscriptionId_cancelada: subscriptionId
+          }, { merge: true });
+        } catch (_) {}
+        return { skipped_memberpress_deactivation: true };
       }
       try {
         console.log(`❌ Suscripción cancelada: ${redactEmail(email)} (motivo=${motivo}, finDeCiclo=${eraFinDeCiclo})`);
@@ -1176,31 +1232,7 @@ Acceso: https://www.laboroteca.es/mi-cuenta/
     }
     return { noted_subscription_updated: true };
   }
-  // 🟢 Desprogramación de baja: reflejar "anulada" en Firestore si cancel_at_period_end pasa a false
-  if (event.type === 'customer.subscription.updated') {
-    const sub = event.data.object;
-    if (sub.cancel_at_period_end === false) {
-      const emailUpd = (
-        sub.metadata?.email ||
-        sub.customer_email ||
-        sub.customer_details?.email
-      )?.toLowerCase().trim();
-      if (emailUpd) {
-        try {
-          await firestore.collection('bajasClub').doc(emailUpd).set({
-            estadoBaja: 'anulada',
-            comprobacionFinal: 'cancelada_por_usuario',
-            fechaAnulacion: new Date().toISOString(),
-            subscriptionId: sub.id
-          }, { merge: true });
-          console.log('↪️ Baja programada ANULADA (cancel_at_period_end=false) para', redactEmail(emailUpd));
-        } catch (e) {
-          await alertAdmin({ area: 'baja_desprogramada_firestore', email: emailUpd, err: e, meta: { subscriptionId: sub.id } });
-        }
-      }
-      return { noted_subscription_updated: true };
-    }
-  }
+
 if (event.type === 'checkout.session.completed') {
   const session = event.data.object;
 

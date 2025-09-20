@@ -1,16 +1,36 @@
+// entradas/routes/create-session-entrada.js
 const express = require('express');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const { emailRegistradoEnWordPress } = require('../utils/wordpress');
-const PRODUCTOS = require('../../utils/productos');
+// const PRODUCTOS = require('../../utils/productos'); // (no usado)
 const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 
 const router = express.Router();
 const URL_IMAGEN_DEFAULT = 'https://www.laboroteca.es/wp-content/uploads/2025/08/logo-entradas-laboroteca-scaled.webp';
 
+// ——— utilidades locales (para logs, no para alertas) ———
+const maskEmail = (e) => {
+  if (!e || typeof e !== 'string') return '';
+  const [u, d] = e.split('@');
+  const uh = (u || '').slice(0, 2);
+  return `${uh}***@***.${(d || '').split('.').pop() || ''}`;
+};
+const safeLogMeta = ({ totalAsistentes, tipoProducto, nombreProducto, formularioId, fechaActuacion }) => ({
+  totalAsistentes, tipoProducto, nombreProducto, formularioId, fechaActuacion
+});
+
+
 router.post('/crear-sesion-entrada', async (req, res) => {
   try {
     const datos = req.body;
-    console.log('📥 Datos crudos recibidos:\n', JSON.stringify(datos, null, 2));
+    // Log seguro (sin PII)
+    console.log('📥 crear-sesion-entrada', safeLogMeta({
+      totalAsistentes: datos?.totalAsistentes,
+      tipoProducto: datos?.tipoProducto,
+      nombreProducto: datos?.nombreProducto,
+      formularioId: datos?.formularioId,
+      fechaActuacion: datos?.fechaActuacion
+    }));
 
     // 🧍 Datos del comprador
     const nombre = (datos.nombre || '').trim();
@@ -25,7 +45,7 @@ router.post('/crear-sesion-entrada', async (req, res) => {
     // 🎟️ Datos del evento
     const tipoProducto = (datos.tipoProducto || '').trim();
     const nombreProducto = (datos.nombreProducto || '').trim();
-    const descripcionProducto = (datos.descripcionProducto || `Entrada "${nombreProducto}"`).trim();
+    const descripcionProducto = String(datos.descripcionProducto || '').trim();
     const direccionEvento = (datos.direccionEvento || '').trim();
     const imagenPDF = (datos.imagenEvento || '').trim();
     const fechaActuacion = (datos.fechaActuacion || '').trim();
@@ -33,7 +53,7 @@ router.post('/crear-sesion-entrada', async (req, res) => {
     const imagenStripe = URL_IMAGEN_DEFAULT;
 
     // 🧮 Cálculo del precio
-    const totalAsistentes = parseInt(String(datos.totalAsistentes || '').trim());
+    const totalAsistentes = parseInt(String(datos.totalAsistentes || '').trim(), 10);
     if (isNaN(totalAsistentes) || totalAsistentes < 1) {
       console.warn('⚠️ totalAsistentes inválido:', datos.totalAsistentes);
       try {
@@ -48,14 +68,7 @@ router.post('/crear-sesion-entrada', async (req, res) => {
     }
     const precioTotal = totalAsistentes * 1500;
 
-    console.log('🧪 DEBUG PRECIO:', {
-      totalAsistentes,
-      precioTotalEnCentimos: precioTotal,
-      precioUnitarioEuros: 15,
-      tipoProducto,
-      nombreProducto,
-      descripcionProducto
-    });
+    console.log('🧪 Precio entradas:', { totalAsistentes, precioTotalEnCentimos: precioTotal, precioUnitarioEuros: 15 });
 
     // ✅ Validación de campos obligatorios
     if (
@@ -65,7 +78,7 @@ router.post('/crear-sesion-entrada', async (req, res) => {
       try {
         await alertAdmin({
           area: 'entradas.checkout.validacion',
-          email,
+          email, // email completo para admin
           err: new Error('Faltan datos obligatorios'),
           meta: { nombre, nombreProducto, tipoProducto, formularioId, fechaActuacion, campos: Object.keys(datos || {}) }
         });
@@ -73,14 +86,19 @@ router.post('/crear-sesion-entrada', async (req, res) => {
       return res.status(400).json({ error: 'Faltan datos obligatorios para crear la sesión.' });
     }
 
+    // 🔎 Validación estricta de descripción (factura no ambigua)
+    if (!descripcionProducto || /^entrada\s*$/i.test(descripcionProducto)) {
+      return res.status(400).json({ error: 'Descripción de producto inválida. Debe ser concreta para la factura.' });
+    }
+
     // 🔐 Verificar email en WordPress
     const registrado = await emailRegistradoEnWordPress(email);
     if (!registrado) {
-      console.warn('🚫 Email no registrado en WordPress:', email);
+      console.warn('🚫 Email no registrado en WordPress:', maskEmail(email));
       try {
         await alertAdmin({
           area: 'entradas.checkout.wp',
-          email,
+          email, // email completo para admin
           err: new Error('Email no registrado en WordPress'),
           meta: { formularioId, tipoProducto, nombreProducto }
         });
@@ -91,8 +109,13 @@ router.post('/crear-sesion-entrada', async (req, res) => {
     // 👥 Recoger asistentes
     const metadataAsistentes = {};
     for (let i = 1; i <= totalAsistentes; i++) {
-      metadataAsistentes[`asistente_${i}_nombre`] = datos[`asistente_${i}_nombre`] || '';
-      metadataAsistentes[`asistente_${i}_apellidos`] = datos[`asistente_${i}_apellidos`] || '';
+      const nom = String(datos[`asistente_${i}_nombre`] || '').trim();
+      const ape = String(datos[`asistente_${i}_apellidos`] || '').trim();
+      if (!nom || !ape) {
+        return res.status(400).json({ error: `Faltan datos del asistente ${i}.` });
+      }
+      metadataAsistentes[`asistente_${i}_nombre`] = nom;
+      metadataAsistentes[`asistente_${i}_apellidos`] = ape;
     }
 
     // 💳 Crear sesión de Stripe
@@ -112,7 +135,8 @@ router.post('/crear-sesion-entrada', async (req, res) => {
           }
         }
       }],
-      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(nombreProducto)}&tipoProducto=${encodeURIComponent(tipoProducto)}`,
+      // Evitar PII en URL; el frontend puede leer la sesión por {CHECKOUT_SESSION_ID}
+      success_url: 'https://laboroteca.es/gracias?ok=1&sid={CHECKOUT_SESSION_ID}',
       cancel_url: 'https://laboroteca.es/error',
       metadata: {
         nombre,
@@ -141,7 +165,7 @@ router.post('/crear-sesion-entrada', async (req, res) => {
       try {
         await alertAdmin({
           area: 'entradas.checkout.stripe',
-          email,
+          email, // email completo para admin
           err: new Error('Stripe no devolvió URL'),
           meta: { totalAsistentes, precioTotal, tipoProducto, nombreProducto, formularioId }
         });
@@ -149,7 +173,7 @@ router.post('/crear-sesion-entrada', async (req, res) => {
       return res.status(500).json({ error: 'Stripe no devolvió una URL válida.' });
     }
 
-    console.log('✅ Sesión Stripe creada correctamente:', session.url);
+    console.log('✅ Sesión Stripe creada:', { sid: (session.id || '').slice(0,12) + '…' });
     return res.json({ url: session.url });
 
   } catch (err) {

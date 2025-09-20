@@ -48,6 +48,16 @@ async function enviarEmailConEntradas({
   subject,
   html
 }) {
+
+  const requestId = (Math.random().toString(36).slice(2) + Date.now().toString(36)).toUpperCase();
+  const maskEmail = (e) => {
+    if (!e) return '';
+    const [u, d] = String(e).split('@');
+    const uh = (u || '').slice(0,2);
+    const tld = (d || '').split('.').pop() || '';
+    return `${uh}***@***.${tld}`;
+  };
+
   // Validaciones mínimas
   if (!email || typeof email !== 'string') {
     throw new Error('Email de destino inválido.');
@@ -58,7 +68,14 @@ async function enviarEmailConEntradas({
   if (!descripcionProducto) {
     throw new Error('Falta descripcionProducto.');
   }
-
+  // Cada entrada debe traer un Buffer válido
+  if (!entradas.every(e => e && Buffer.isBuffer(e.buffer))) {
+    throw new Error('Formato de entradas inválido: se esperaba Buffer en cada elemento.');
+  }
+  // Si viene factura, debe ser Buffer
+  if (facturaAdjunta && !Buffer.isBuffer(facturaAdjunta)) {
+    throw new Error('Formato de facturaAdjunta inválido: se esperaba Buffer.');
+  }
   // Utilidades
   const displayName = (nombre && String(nombre).trim()) || String(email).split('@')[0] || '';
   const numEntradas = entradas.length;
@@ -97,6 +114,10 @@ async function enviarEmailConEntradas({
         : `🎟️ Tus entradas para «${descripcionProducto}»`;
 
   const finalSubject = subject || defaultSubject;
+  // Sanitizar subject para evitar inyección de cabeceras (CRLF)
+  const safeSubject = String(finalSubject || '')
+    .replace(/[\r\n]+/g, ' ')
+    .slice(0, 200); // límite razonable
 
   // Cuerpos por defecto (HTML)
   const htmlPorDefecto =
@@ -229,7 +250,7 @@ ${politicaTEXT || ''}`;
   try {
     await enviarEmailPersonalizado({
       to: email,
-      subject: finalSubject,
+      subject: safeSubject,
       html: html || htmlPorDefecto,
       text: textPorDefecto,
       attachments
@@ -245,7 +266,8 @@ ${politicaTEXT || ''}`;
           modo,
           descripcionProducto,
           numEntradas,
-          hasFactura: !!facturaAdjunta
+          hasFactura: !!facturaAdjunta,
+          requestId
         }
       });
     } catch (_) {}
@@ -253,7 +275,7 @@ ${politicaTEXT || ''}`;
   }
 
 
-  console.log(`📧 Email (${modo}) con ${numEntradas} entrada(s) enviado a ${email}`);
+  console.log(`📧 Email (${modo}) con ${numEntradas} entrada(s) enviado a ${maskEmail(email)} [${requestId}]`);
 }
 
 /** Escapa caracteres HTML básicos */

@@ -20,6 +20,17 @@ const HMAC_SHARED_SECRET =
 const DEBUG_REENVIOS = process.env.DEBUG_REENVIOS === '1';
 const REQUIRE_HMAC_ENTRADAS = process.env.LAB_REQUIRE_HMAC_ENTRADAS === '1';
 
+// ——— Utilidades de logging (evitar PII en consola) ———
+function maskEmail(e) {
+  if (!e) return '';
+  const s = String(e);
+  const [u, d] = s.split('@');
+  const uh = (u || '').slice(0, 2);
+  const tld = (d || '').split('.').pop() || '';
+  return `${uh}***@***.${tld}`;
+}
+
+
 // ───────────────────────── HMAC simple para GET (email|ts)
 function verifySimpleHmacFromHeaders(req) {
   if (!HMAC_SHARED_SECRET) return { ok:false, error:'secret_missing' };
@@ -29,6 +40,7 @@ function verifySimpleHmacFromHeaders(req) {
   if (!ts || !sig || !email) return { ok:false, error:'missing_params' };
   const now = Math.floor(Date.now()/1000);
   if (Math.abs(now - ts) > 900) return { ok:false, error:'expired' };
+  if (!/^[a-f0-9]{64}$/i.test(sig)) return { ok:false, error:'bad_sig_format' };
   const base = `${email}|${ts}`;
   const expected = crypto.createHmac('sha256', HMAC_SHARED_SECRET).update(base).digest('hex');
   try {
@@ -189,6 +201,17 @@ router.get('/cuenta/entradas', async (req, res) => {
     if (REQUIRE_HMAC_ENTRADAS) {
       const v = verifySimpleHmacFromHeaders(req);
       if (!v.ok) return res.status(401).json({ error: 'Firma requerida' });
+    }
+    if (!/^[a-f0-9]{64}$/i.test(sig)) {
+      try {
+        await alertAdmin({
+          area: 'micuenta.reenvio.hmac',
+          email: comprador,
+          err: new Error('Formato de firma inválido'),
+          meta: { to: toFromBody, desc }
+        });
+      } catch (_) {}
+      return res.status(401).json({ error: 'Firma inválida' });
     }
 
     const items = await cargarEventosFuturos(email);
@@ -366,14 +389,14 @@ router.post('/entradas/reenviar', async (req, res) => {
       if (DEBUG_REENVIOS) {
         console.warn('[REENVIO DEBUG] Firma inválida', {
           base,
-          sig,
-          expected,
+          sig: sig.slice(0, 10) + '…',
+          expected: expected.slice(0, 10) + '…',
           compradorNorm,
           descNorm
         });
         return res.status(401).json({
           error: 'Firma inválida',
-          debug: { base, sig, expected, compradorNorm, descNorm }
+          debug: { base, sig: sig.slice(0,10)+'…', compradorNorm, descNorm }
         });
       }
       try {
@@ -496,7 +519,7 @@ router.post('/entradas/reenviar', async (req, res) => {
     // ── Auditoría
     try {
       await firestore.collection('entradasReenvios').add({
-        emailComprador: comprador,
+        emailComprador: compradorNorm,
         emailDestino: to,
         descripcionProducto: desc,
         cantidadAdjuntos: buffers.length,
@@ -511,7 +534,7 @@ router.post('/entradas/reenviar', async (req, res) => {
 
     res.json({ ok: true, reenviadas: buffers.length });
   } catch (e) {
-    console.error('❌ POST /entradas/reenviar', e);
+    console.error('❌ POST /entradas/reenviar', e?.message || e);
     try {
       await alertAdmin({
         area: 'micuenta.reenvio.route',

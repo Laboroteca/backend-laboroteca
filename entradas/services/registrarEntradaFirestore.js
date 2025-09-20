@@ -14,7 +14,8 @@ async function registrarEntradaFirestore({
   nombreEvento = '',
   descripcionProducto = '',
   direccionEvento = '',
-  fechaActuacion = '' // "DD/MM/YYYY - HH:mm"
+  fechaActuacion = '', // "DD/MM/YYYY - HH:mm"
+  requestId = undefined  // opcional para trazabilidad en alertas
 }) {
   if (!codigoEntrada || !emailComprador) {
     throw new Error('registrarEntradaFirestore: faltan codigoEntrada o emailComprador');
@@ -27,60 +28,55 @@ async function registrarEntradaFirestore({
   const nombreSolo = partes.length > 1 ? partes.slice(0, -1).join(' ') : (partes[0] || '');
   const apellidosSolo = partes.length > 1 ? partes.slice(-1).join(' ') : '';
 
-  // 1) Colección principal (compat)
-  try {
-    await firestore.collection('entradas').doc(codigoEntrada).set({
-      codigo             : codigoEntrada,
-      email              : emailNorm,
-      emailComprador     : emailNorm,
-      nombre             : nombreSolo,
-      apellidos          : apellidosSolo,
-      slugEvento         : slugEvento,
-      nombreEvento       : nombreEvento || descripcionProducto || slugEvento || 'Evento',
-      descripcionProducto: descripcionProducto || '',
-      direccionEvento    : direccionEvento || '',
-      fechaEvento        : fechaActuacion || '',
-      fechaActuacion     : fechaActuacion || '',
-      usada              : false,
-      fechaCompra        : nowIso,
-      timestamp          : Date.now()
-    }, { merge: true });
-  } catch (e) {
-    try {
-      await alertAdmin({
-        area: 'entradas.firestore.entradas',
-        email: emailNorm,
-        err: e,
-        meta: { codigoEntrada, slugEvento, descripcionProducto }
-      });
-    } catch (_) {}
-    throw new Error(`registrarEntradaFirestore: fallo guardando en 'entradas': ${e?.message || e}`);
-  }
+  // Escritura atómica con batch (idempotente por docId = codigoEntrada)
+  const docEntradas = firestore.collection('entradas').doc(codigoEntrada);
+  const docCompradas = firestore.collection('entradasCompradas').doc(codigoEntrada);
 
-  // 2) Colección usada por “Mi cuenta”
+  const entradaData = {
+    codigo             : codigoEntrada,
+    email              : emailNorm,
+    emailComprador     : emailNorm,
+    nombre             : nombreSolo,
+    apellidos          : apellidosSolo,
+    slugEvento         : slugEvento,
+    nombreEvento       : nombreEvento || descripcionProducto || slugEvento || 'Evento',
+    descripcionProducto: descripcionProducto || '',
+    direccionEvento    : direccionEvento || '',
+    fechaEvento        : fechaActuacion || '',
+    fechaActuacion     : fechaActuacion || '',
+    usada              : false,
+    fechaCompra        : nowIso,
+    timestamp          : Date.now()
+  };
+
+  const compradaData = {
+    codigo              : codigoEntrada,
+    emailComprador      : emailNorm,
+    nombreEvento        : nombreEvento || descripcionProducto || slugEvento || 'Evento',
+    descripcionProducto : descripcionProducto || '',
+    slugEvento          : slugEvento || '',
+    direccionEvento     : direccionEvento || '',
+    fechaEvento         : fechaActuacion || '',
+    fechaActuacion      : fechaActuacion || '',
+    usado               : false,
+    fechaCompra         : nowIso
+  };
+
   try {
-    await firestore.collection('entradasCompradas').doc(codigoEntrada).set({
-      codigo              : codigoEntrada,
-      emailComprador      : emailNorm,
-      nombreEvento        : nombreEvento || descripcionProducto || slugEvento || 'Evento',
-      descripcionProducto : descripcionProducto || '',
-      slugEvento          : slugEvento || '',
-      direccionEvento     : direccionEvento || '',
-      fechaEvento         : fechaActuacion || '',
-      fechaActuacion      : fechaActuacion || '',
-      usado               : false,
-      fechaCompra         : nowIso
-    }, { merge: true });
+    const batch = firestore.batch();
+    batch.set(docEntradas, entradaData, { merge: true });
+    batch.set(docCompradas, compradaData, { merge: true });
+    await batch.commit();
   } catch (e) {
     try {
       await alertAdmin({
-        area: 'entradas.firestore.compradas',
+        area: 'entradas.firestore.batch',
         email: emailNorm,
         err: e,
-        meta: { codigoEntrada, slugEvento, descripcionProducto }
+        meta: { codigoEntrada, slugEvento, descripcionProducto, requestId }
       });
     } catch (_) {}
-    throw new Error(`registrarEntradaFirestore: fallo guardando en 'entradasCompradas': ${e?.message || e}`);
+    throw new Error(`registrarEntradaFirestore: fallo guardando documentos: ${e?.message || e}`);
   }
 }
 module.exports = { registrarEntradaFirestore };

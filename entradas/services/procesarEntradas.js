@@ -10,12 +10,20 @@ const { registrarEntradaFirestore } = require('./registrarEntradaFirestore');
 const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 
 module.exports = async function procesarEntradas({ session, datosCliente, pdfBuffer = null }) {
+  const requestId = (Math.random().toString(36).slice(2) + Date.now().toString(36)).toUpperCase();
+  const maskEmail = (e) => {
+    if (!e) return '';
+    const [u, d] = String(e).split('@');
+    const uh = (u || '').slice(0,2);
+    const tld = (d || '').split('.').pop() || '';
+    return `${uh}***@***.${tld}`;
+  };
   const emailComprador = datosCliente.email;
 
   // ⚙️ Datos del evento (preferimos descripcionProducto para carpeta/etiquetas)
   const md = session?.metadata || {};
   const nombreActuacion = md.nombreProducto || 'Evento Laboroteca';
-  const descripcionProd = (md.descripcionProducto || nombreActuacion).trim();
+  const descripcionProd = String(md.descripcionProducto || nombreActuacion).trim();
   const fechaActuacion  = md.fechaActuacion || '';
   const imagenFondo     = md.imagenEvento || null;
   const formularioId    = md.formularioId;
@@ -24,6 +32,9 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
 
   if (!formularioId) throw new Error('Falta el formularioId en metadata');
   if (!total || total <= 0) throw new Error('Falta totalAsistentes válido');
+  if (!descripcionProd || /^entrada\s*$/i.test(descripcionProd)) {
+    throw new Error('Descripción de producto inválida para la factura');
+  }
 
   // slug del evento para el código (seguimos usando el “nombreActuacion” como antes)
   const slugEvento = nombreActuacion.toLowerCase().replace(/[^a-z0-9]+/g, '-');
@@ -35,22 +46,42 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
   const asistentes = Array.from({ length: total }, () => ({ nombre: '', apellidos: '' }));
   const archivosPDF = []; // [{ buffer }]
   const codigos = [];     // códigos por entrada (mismo índice que archivosPDF)
+  const codigosSet = new Set(); // evitar colisiones accidentales
 
   for (let i = 0; i < asistentes.length; i++) {
-    const codigo = generarCodigoEntrada(slugEvento);
-    const pdfBufferEntrada = await generarEntradaPDF({
-      nombre: asistentes[i].nombre,
-      apellidos: asistentes[i].apellidos,
-      codigo,
-      nombreActuacion,
-      fechaActuacion,
-      descripcionProducto: descripcionProd,
-      direccionEvento,
-      imagenFondo
-    });
-
-    archivosPDF.push({ buffer: pdfBufferEntrada });
-    codigos.push(codigo);
+    // Generar código único (reintentos acotados por si colisiona)
+    let codigo = generarCodigoEntrada(slugEvento);
+    let tries = 0;
+    while (codigosSet.has(codigo) && tries < 3) {
+      codigo = generarCodigoEntrada(slugEvento);
+      tries++;
+    }
+    codigosSet.add(codigo);
+    try {
+      const pdfBufferEntrada = await generarEntradaPDF({
+        nombre: asistentes[i].nombre,
+        apellidos: asistentes[i].apellidos,
+        codigo,
+        nombreActuacion,
+        fechaActuacion,
+        descripcionProducto: descripcionProd,
+        direccionEvento,
+        imagenFondo
+      });
+      archivosPDF.push({ buffer: pdfBufferEntrada });
+      codigos.push(codigo);
+    } catch (e) {
+      // No bloquea: seguimos con el resto, avisamos y registramos error luego
+      try {
+        await alertAdmin({
+          area: 'entradas.procesar.pdf',
+          email: emailComprador,
+          err: e,
+          meta: { requestId, idx: i + 1, codigo, descripcionProducto: descripcionProd }
+        });
+      } catch (_) {}
+      // No añadimos entrada inválida al array: enviamos las que sí se generaron
+    }
   }
 
   // 2) Enviar SIEMPRE email al comprador con los PDFs (este es el hito incondicional)
@@ -76,7 +107,8 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
           sessionId: session?.id || '-',
           totalAsistentes: parseInt(md.totalAsistentes || 0, 10) || 0,
           descripcionProducto: descripcionProd,
-          hadFacturaAdjunta: !!pdfBuffer
+          hadFacturaAdjunta: !!pdfBuffer,
+          requestId
         }
       });
     } catch (_) {}
@@ -100,7 +132,8 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
           meta: {
             sessionId: session?.id || '-',
             descripcionProducto: descripcionProd,
-            nota: 'Fallo en segundo intento de envío (sin factura)'
+            nota: 'Fallo en segundo intento de envío (sin factura)',
+            requestId
           }
         });
       } catch (_) {}
@@ -165,7 +198,7 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
           area: 'entradas.procesar.gcs',
           email: emailComprador,
           err: e,
-          meta: { codigo, carpeta: carpetaDescripcion }
+          meta: { codigo, carpeta: carpetaDescripcion, requestId }
         });
       } catch (_) {}
       errores.push({
@@ -194,7 +227,7 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
             area: 'entradas.procesar.sheets',
             email: emailComprador,
             err: e,
-            meta: { codigo, sheetId, fecha: fechaGeneracion, descripcionProducto: descripcionProd }
+            meta: { codigo, sheetId, fecha: fechaGeneracion, descripcionProducto: descripcionProd, requestId }
           });
         } catch (_) {}
         errores.push({
@@ -225,7 +258,7 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
           area: 'entradas.procesar.firestore',
           email: emailComprador,
           err: e,
-          meta: { codigo, slugEvento, descripcionProducto: descripcionProd }
+          meta: { codigo, slugEvento, descripcionProducto: descripcionProd, requestId }
         });
       } catch (_) {}
       errores.push({
@@ -316,7 +349,8 @@ ${textoErrores}
             formularioId,
             sessionId: session?.id || '-',
             codigos,
-            motivos: motivosUnicos
+            motivos: motivosUnicos,
+            requestId
           }
         });
       } catch (_) {}
@@ -325,7 +359,7 @@ ${textoErrores}
     }
   }
 
-  console.log(`✅ Entradas generadas y enviadas a ${emailComprador}: ${archivosPDF.length}`);
+  console.log(`✅ Entradas generadas y enviadas a ${maskEmail(emailComprador)}: ${archivosPDF.length} [${requestId}]`);
 };
 
 function obtenerSheetIdPorFormulario(formularioId) {

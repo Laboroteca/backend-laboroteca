@@ -120,22 +120,34 @@ async function generarEntradas({
     const asistente = asistentes[i] || { nombre, apellidos };
     const codigo = generarCodigoUnico(slugEvento);
     const qrData = `https://laboroteca.es/validar-entrada?codigo=${codigo}`;
-    const qrImage = await QRCode.toBuffer(qrData);
+    // QR de alta resolución para nitidez en PDF
+    const qrImage = await QRCode.toBuffer(qrData, {
+      errorCorrectionLevel: 'H',
+      type: 'png',
+      width: 600,     // alta resolución
+      margin: 1
+    });
     const fechaVenta = formatearFechaES();
     const nombreCompleto = `${asistente.nombre} ${asistente.apellidos}`.trim();
 
-    // Generar PDF
-    const pdf = new PDFDocument({ size: 'A4', margin: 0 });
+    // Generar PDF (sin compresión para no degradar imágenes)
+    const pdf = new PDFDocument({ size: 'A4', margin: 0, compress: false });
     const buffers = [];
     pdf.on('data', buffers.push.bind(buffers));
 
     if (imagenFondo && imagenFondo.startsWith('http')) {
       try {
         const fondoData = await fetch(imagenFondo).then((r) => r.arrayBuffer());
-        const fondoPath = path.join(__dirname, `../../temp_fondo_${codigo}.jpg`);
-        await fs.writeFile(fondoPath, Buffer.from(fondoData));
-        pdf.image(fondoPath, 0, 0, { width: 595.28, height: 841.89 });
-        await fs.unlink(fondoPath);
+    // Cargar imagen en memoria y embutir directamente (sin JPG temporal ni recomprimir)
+    const fondoBuf = Buffer.from(fondoData);
+    try {
+      // Ajustar a página completa manteniendo la calidad
+      const pageW = pdf.page.width;
+      const pageH = pdf.page.height;
+      pdf.image(fondoBuf, 0, 0, { fit: [pageW, pageH] });
+    } catch (e) {
+      console.warn(`⚠️ Imagen de fondo no soportada para ${codigo}:`, e?.message || e);
+    }
       } catch (err) {
         console.warn(`⚠️ No se pudo cargar imagen de fondo para ${codigo}:`, err.message);
       }
@@ -146,6 +158,7 @@ async function generarEntradas({
     pdf.text(`Fecha: ${fechaEvento}`, 50, 160);
     pdf.text(`Dirección: ${direccionEvento}`, 50, 180);
     pdf.text(`Código: ${codigo}`, 50, 220);
+    // Insertar QR reescalando hacia abajo (queda muy nítido)
     pdf.image(qrImage, 50, 260, { width: 120 });
     pdf.end();
 
@@ -156,7 +169,11 @@ async function generarEntradas({
     // ───────── Subida a GCS ─────────
     const nombreArchivo = `entradas/${carpetaEvento}/${codigo}.pdf`;
     try {
-      await bucket.file(nombreArchivo).save(pdfBuffer);
+      await bucket.file(nombreArchivo).save(pdfBuffer, {
+        contentType: 'application/pdf',
+        resumable: false,
+        metadata: { cacheControl: 'private, max-age=0' }
+      });
       console.log(`✅ Entrada subida a GCS: ${nombreArchivo}`);
     } catch (err) {
       console.error(`❌ Error GCS ${codigo}:`, err.message);

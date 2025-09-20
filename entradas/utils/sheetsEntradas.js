@@ -22,26 +22,44 @@ function fechaCompraES(d = new Date()) {
   return `${fecha} - ${hora}h`;
 }
 
-/** Devuelve sheets client y sheetIdNum de la primera pestaña */
-async function getSheetsAndSheetId(spreadsheetId) {
-  const authClient = await auth();
-  const sheets = google.sheets({ version: 'v4', auth: authClient });
-  const spreadsheetData = await sheets.spreadsheets.get({ spreadsheetId });
-  const sheetIdNum = spreadsheetData.data.sheets?.[0]?.properties?.sheetId || 0;
-  return { sheets, sheetIdNum };
+/** Devuelve cliente Sheets cacheado */
+let __sheets = null;
+async function getSheets(spreadsheetId) {
+  if (!__sheets) {
+    const authClient = await auth();
+    __sheets = google.sheets({ version: 'v4', auth: authClient });
+  }
+  // Llamada liviana para verificar acceso si hiciera falta:
+  // await __sheets.spreadsheets.get({ spreadsheetId });
+  return __sheets;
 }
 
-/** Busca la fila (1-based) por código en la columna D (índice 3) */
+/** Reintentos con backoff simple (resiliencia) */
+async function withRetry(fn, { tries = 3, baseMs = 300, label = 'sheets_op' } = {}) {
+  let lastErr;
+  for (let i = 0; i < tries; i++) {
+    try { return await fn(); }
+    catch (e) {
+      lastErr = e;
+      if (i === tries - 1) break;
+      await new Promise(r => setTimeout(r, baseMs * Math.pow(2, i)));
+    }
+  }
+  throw Object.assign(lastErr || new Error(`${label}_failed`), { label });
+}
+
+/** Busca la fila (1-based) por código leyendo sólo la columna D */
 async function findRowByCode({ sheets, spreadsheetId, codigo }) {
-  const getRes = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: 'A:F'
-  });
-  const filas = getRes.data.values || [];
-  for (let i = 1; i < filas.length; i++) {
-    const fila = filas[i];
-    if (fila[3] && String(fila[3]).trim().toUpperCase() === String(codigo).trim().toUpperCase()) {
-      return i + 1;
+  const getRes = await withRetry(
+    () => sheets.spreadsheets.values.get({ spreadsheetId, range: 'D:D' }),
+    { label: 'sheets_get_D' }
+  );
+  const col = getRes.data.values || [];
+  // col[0] es cabecera (si existe); empezar en 1
+  for (let i = 1; i < col.length; i++) {
+    const val = col[i]?.[0];
+    if (val && String(val).trim().toUpperCase() === String(codigo).trim().toUpperCase()) {
+      return i + 1; // 1-based
     }
   }
   return -1;
@@ -56,15 +74,17 @@ async function guardarEntradaEnSheet({ sheetId, comprador, descripcionProducto =
     const fechaVenta = fecha ? fechaCompraES(new Date(fecha)) : fechaCompraES();
     const fila = [fechaVenta, descripcionProducto, comprador, codigo, 'NO', 'NO'];
 
-    const { sheets } = await getSheetsAndSheetId(sheetId);
-
-    const appendRes = await sheets.spreadsheets.values.append({
-      spreadsheetId: sheetId,
-      range: 'A:F',
-      valueInputOption: 'USER_ENTERED',
-      insertDataOption: 'INSERT_ROWS',
-      requestBody: { values: [fila] }
-    });
+    const sheets = await getSheets(sheetId);
+    await withRetry(
+      () => sheets.spreadsheets.values.append({
+        spreadsheetId: sheetId,
+        range: 'A:F',
+        valueInputOption: 'USER_ENTERED',
+        insertDataOption: 'INSERT_ROWS',
+        requestBody: { values: [fila] }
+      }),
+      { label: 'sheets_append' }
+    );
 
     console.log(`✅ Entrada registrada en hoja (${sheetId}) código ${codigo}`);
   } catch (err) {
@@ -104,28 +124,42 @@ async function marcarEntradaComoUsada(codigoEntrada, slugEvento) {
       } catch {}
     }
 
-    const { sheets } = await getSheetsAndSheetId(spreadsheetId);
+    const sheets = await getSheets(spreadsheetId);
 
     const row1 = await findRowByCode({ sheets, spreadsheetId, codigo });
     if (row1 === -1) return { error: 'Código no encontrado en la hoja.' };
 
-    // E (index 4) → "SÍ" (sin formato especial)
-    await sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range: `E${row1}`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [['SÍ']] }
-    });
+    // Idempotencia: si ya está "SÍ" en E, no reescribir ni fallar
+    const eCell = await withRetry(
+      () => sheets.spreadsheets.values.get({ spreadsheetId, range: `E${row1}` }),
+      { label: 'sheets_get_E' }
+    );
+    const already = String(eCell.data.values?.[0]?.[0] || '').toUpperCase() === 'SÍ';
+    if (!already) {
+      await withRetry(
+        () => sheets.spreadsheets.values.update({
+          spreadsheetId,
+          range: `E${row1}`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: { values: [['SÍ']] }
+        }),
+        { label: 'sheets_update_E' }
+      );
+    }
+ 
 
     console.log(`🎟️ Entrada ${codigo} VALIDADA en fila ${row1}`);
 
     // obtener datos de la fila
-    const getRes = await sheets.spreadsheets.values.get({ spreadsheetId, range: `A${row1}:F${row1}` });
+    const getRes = await withRetry(
+      () => sheets.spreadsheets.values.get({ spreadsheetId, range: `A${row1}:F${row1}` }),
+      { label: 'sheets_get_row' }
+    );
     const fila = getRes.data.values?.[0] || [];
     const emailComprador  = fila[2] || '';
     const descripcionProd = fila[1] || '';
 
-    return { ok: true, emailComprador, descripcionProd };
+    return { ok: true, emailComprador, descripcionProd, already };
   } catch (err) {
     console.error('❌ Error al marcar entrada como usada:', err);
     return { error: `Error al actualizar la hoja: ${err.message}` };
@@ -149,21 +183,31 @@ async function marcarEntradaComoCanjeadaPorLibro(codigoEntrada, slugEvento) {
       } catch {}
     }
 
-    const { sheets } = await getSheetsAndSheetId(spreadsheetId);
+    const sheets = await getSheets(spreadsheetId);
 
     const row1 = await findRowByCode({ sheets, spreadsheetId, codigo });
     if (row1 === -1) return { error: 'Código no encontrado en la hoja.' };
 
-    // F (index 5) → "SÍ" (sin formato especial)
-    await sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range: `F${row1}`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [['SÍ']] }
-    });
+    // Idempotencia: si ya está "SÍ" en F, no reescribir ni fallar
+    const fCell = await withRetry(
+      () => sheets.spreadsheets.values.get({ spreadsheetId, range: `F${row1}` }),
+      { label: 'sheets_get_F' }
+    );
+    const already = String(fCell.data.values?.[0]?.[0] || '').toUpperCase() === 'SÍ';
+    if (!already) {
+      await withRetry(
+        () => sheets.spreadsheets.values.update({
+          spreadsheetId,
+          range: `F${row1}`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: { values: [['SÍ']] }
+        }),
+        { label: 'sheets_update_F' }
+      );
+    }
 
     console.log(`📕 Entrada ${codigo} CANJEADA POR LIBRO en fila ${row1}`);
-    return { ok: true };
+    return { ok: true, already };
   } catch (err) {
     console.error('❌ Error al marcar canje por libro:', err);
     return { error: `Error al actualizar la hoja: ${err.message}` };

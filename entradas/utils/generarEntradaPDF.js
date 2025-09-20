@@ -22,7 +22,8 @@ async function generarEntradaPDF({
   direccionEvento,
   imagenFondo
 }) {
-  const doc = new PDFDocument({ size: 'A4', margin: 0 });
+  // No comprimir el PDF para preservar calidad de imágenes
+  const doc = new PDFDocument({ size: 'A4', margin: 0, compress: false });
   const buffers = [];
   doc.on('data', buffers.push.bind(buffers));
 
@@ -31,18 +32,32 @@ async function generarEntradaPDF({
     ? imagenFondo
     : 'https://www.laboroteca.es/wp-content/uploads/2025/08/logo-entradas-laboroteca-qr-scaled.jpg';
 
-
   let imagenHeight = 0;
-  try {
-    const response = await fetch(urlFondo);
+   try {
+    const controller = new AbortController();
+    const to = setTimeout(() => controller.abort(), 10000);
+    const response = await fetch(urlFondo, { signal: controller.signal });
+    clearTimeout(to);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const inputBuffer = Buffer.from(await response.arrayBuffer());
-    const metadata = await sharp(inputBuffer).metadata();
-    const renderWidth = doc.page.width;
-    const scale = renderWidth / metadata.width;
-    imagenHeight = metadata.height * scale;
 
-    const resizedImage = await sharp(inputBuffer).resize({ width: Math.round(renderWidth) }).png().toBuffer();
-    doc.image(resizedImage, 0, 0, { width: renderWidth });
+    // Intentamos embeber el buffer original (sin recomprimir).
+    // Si es un formato no soportado por PDFKit (p.ej. WebP), convertimos a PNG **sin** redimensionar.
+    let embedBuffer = inputBuffer;
+    try {
+      const meta = await sharp(inputBuffer).metadata();
+      const fmt = (meta.format || '').toLowerCase();
+      if (fmt === 'webp' || fmt === 'gif' || fmt === 'tiff') {
+        embedBuffer = await sharp(inputBuffer).png().toBuffer(); // conversión sin resize (sin pérdida adicional respecto a PNG)
+      }
+      // Altura proporcional a página al usar fit
+      imagenHeight = doc.page.height;
+      doc.image(embedBuffer, 0, 0, { fit: [doc.page.width, doc.page.height] });
+    } catch (e) {
+      // Fallback directo (si falla sharp, intentamos igualmente embeber tal cual)
+      imagenHeight = doc.page.height;
+      doc.image(embedBuffer, 0, 0, { fit: [doc.page.width, doc.page.height] });
+    }
   } catch (err) {
     console.warn(`⚠️ No se pudo cargar imagen de fondo para ${codigo}:`, err.message);
   }
@@ -54,7 +69,13 @@ async function generarEntradaPDF({
   const qrPadding = 10;
   let qrBuffer;
   try {
-    qrBuffer = await QRCode.toBuffer(`https://laboroteca.es/validar-entrada?codigo=${codigo}`);
+    // QR en alta resolución para máxima nitidez (re-escalado hacia abajo en el PDF)
+    qrBuffer = await QRCode.toBuffer(`https://laboroteca.es/validar-entrada?codigo=${codigo}`, {
+      errorCorrectionLevel: 'H',
+      type: 'png',
+      width: 600,
+      margin: 1
+    });
   } catch (err) {
     // 🚨 Esto sí requiere intervención: sin QR la entrada no es válida
     alertOnce(`entradas.pdf.qr.${codigo || 'sin_codigo'}`, {
@@ -87,7 +108,9 @@ async function generarEntradaPDF({
   doc.fillColor('black').text(codigoTexto, qrX, codigoY);
 
   // ✅ Datos de entrada
-  let textY = imagenHeight + 40;
+  // Al ocupar el fondo toda la página con fit, colocamos el texto con margen superior estable
+  let textY = Math.min(imagenHeight, doc.page.height) + 40;
+  if (textY < 200) textY = 200; // salvaguarda para layouts con fondos pequeños
   const textX = 50;
   const lineSpacing = 28;
 
@@ -171,7 +194,10 @@ for (let i = 0; i < tablaItems.length; i += 2) {
   const clubImgURL = 'https://www.laboroteca.es/wp-content/uploads/2025/08/CLUB-LABOROTECA-scaled.jpg';
 
   try {
-    const clubResponse = await fetch(clubImgURL);
+    const controller2 = new AbortController();
+    const to2 = setTimeout(() => controller2.abort(), 10000);
+    const clubResponse = await fetch(clubImgURL, { signal: controller2.signal });
+    clearTimeout(to2);
     if (!clubResponse.ok) throw new Error(`Error ${clubResponse.status}`);
     const clubBuffer = Buffer.from(await clubResponse.arrayBuffer());
 

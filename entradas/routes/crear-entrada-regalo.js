@@ -72,6 +72,10 @@ function verifyAuth(req) {
   if (!/^\d+$/.test(tsHeader) || !sigHeader) {
     return { ok: false, code: 401, msg: 'Missing HMAC headers' };
   }
+  // La firma debe ser SHA-256 hex (64 chars)
+  if (!/^[a-f0-9]{64}$/i.test(sigHeader)) {
+    return { ok: false, code: 401, msg: 'Bad signature' };
+  }
 
   // Ventana temporal
   const now = Date.now();
@@ -98,11 +102,12 @@ function verifyAuth(req) {
   let okSig = false;
   let matchedVariant = 'none';
   try {
-    if (expRaw && expRaw.length === sigHeader.length &&
-        crypto.timingSafeEqual(Buffer.from(expRaw, 'utf8'), Buffer.from(sigHeader, 'utf8'))) {
+    // Comparar SIEMPRE como bytes HEX (constant-time)
+    if (expRaw &&
+        crypto.timingSafeEqual(Buffer.from(expRaw, 'hex'), Buffer.from(sigHeader, 'hex'))) {
       okSig = true; matchedVariant = 'raw';
-    } else if (expJson && expJson.length === sigHeader.length &&
-        crypto.timingSafeEqual(Buffer.from(expJson, 'utf8'), Buffer.from(sigHeader, 'utf8'))) {
+    } else if (expJson &&
+        crypto.timingSafeEqual(Buffer.from(expJson, 'hex'), Buffer.from(sigHeader, 'hex'))) {
       okSig = true; matchedVariant = 'json';
     }
   } catch { okSig = false; }

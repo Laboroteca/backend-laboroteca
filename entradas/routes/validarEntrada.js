@@ -93,6 +93,13 @@ function verifyAuth(req){
       console.warn('[AUTH]', 'API key mismatch', { got: maskTail(hdrKey), exp: maskTail(API_KEY), ip });
       return { ok:false, code:401, msg:'Unauthorized' };
     }
+
+    // firma debe ser hex (sha256 → 64 chars)
+    if (!/^[a-f0-9]{64}$/i.test(sig)) {
+      console.warn('[AUTH]', 'Signature format', { ip });
+      return { ok:false, code:401, msg:'Unauthorized' };
+    }
+
     if (!/^\d+$/.test(ts)) {
       console.warn('[AUTH]', 'Timestamp inválido', { ts, ip });
       return { ok:false, code:401, msg:'Unauthorized' };
@@ -113,8 +120,9 @@ function verifyAuth(req){
       const base = `${ts}.POST.${p}.${bodyHash}`;
       const exp  = crypto.createHmac('sha256', HMAC_SECRET).update(base).digest('hex');
       try {
-        const a = Buffer.from(exp, 'utf8');
-        const b = Buffer.from(sig, 'utf8');
+        // comparar como bytes HEX reales (constant-time)
+        const a = Buffer.from(exp, 'hex');
+        const b = Buffer.from(sig, 'hex');
         if (a.length === b.length && crypto.timingSafeEqual(a, b)) { ok = true; break; }
       } catch {}
     }

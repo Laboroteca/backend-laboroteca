@@ -46,7 +46,14 @@ function mask(s) {
   const str = String(s);
   return str.length <= 4 ? '••••' : `••••${str.slice(-4)}`;
 }
-
+function maskEmail(e) {
+  if (!e) return '';
+  const s = String(e);
+  const [u, d] = s.split('@');
+  const uh = (u || '').slice(0, 2);
+  const tld = (d || '').split('.').pop() || '';
+  return `${uh}***@***.${tld}`;
+}
 /* ───────────────────── alertAdmin seguro ───────────────────── */
 let warnedConfigMissing = false;
 async function safeAlert(mensaje, extra = {}) {
@@ -54,7 +61,7 @@ async function safeAlert(mensaje, extra = {}) {
     // Adaptado a la firma real: { area, email, err, meta }
     await alertAdmin({
       area: 'entradas.crear',
-      email: String(extra.email || '-').toLowerCase(),
+      email: String(extra.email || '-').toLowerCase(), // email completo para admin
       err: new Error(String(mensaje)),
       meta: {
         contexto: 'entradas/routes/crearEntrada.js',
@@ -79,7 +86,7 @@ function verifyHmac(req, expectedPath) {
     return { ok: false, code: 500, msg: 'Config incompleta' };
   }
   if (apiKeyHdr !== API_KEY)  return { ok: false, code: 401, msg: 'Unauthorized' };
-  if (!/^\d+$/.test(ts || '')) return { ok: false, code: 401, msg: 'Unauthorized' };
+  if (!sig || !/^[a-f0-9]{64}$/i.test(String(sig))) return { ok: false, code: 401, msg: 'Bad signature format' };
 
   const tsNum = Number(ts);
   const now   = Date.now();
@@ -136,6 +143,7 @@ router.use((req, _res, next) => {
 
 /* ───────────────────── Dedupe básica ───────────────────── */
 const processed = new Set();
+const DEDUPE_TTL_MS = 15 * 60 * 1000; // 15 min para evitar crecimiento infinito
 
 /* ───────────────────── Handler principal ───────────────────── */
 router.post('/', async (req, res) => {
@@ -220,7 +228,7 @@ router.post('/', async (req, res) => {
     console.warn('⚠️ Datos incompletos para crear entrada');
     // aviso ALTA (bloquea generación)
     safeAlert('⚠️ Datos incompletos en /entradas/crear', {
-      email,
+      email, // admin ve email completo
       slugEvento: !!slugEvento,
       fechaEvento: !!fechaEvento,
       descripcionProducto: !!descripcionProducto,
@@ -231,10 +239,11 @@ router.post('/', async (req, res) => {
 
   const hashUnico = `${email}-${slugEvento}-${numEntradas}-${importe}`;
   if (processed.has(hashUnico)) {
-    console.warn(`⛔️ Solicitud duplicada ignorada para ${email}`);
+    console.warn(`⛔️ Solicitud duplicada ignorada para ${maskEmail(email)}`);
     return res.status(200).json({ ok: true, mensaje: 'Duplicado ignorado' });
   }
   processed.add(hashUnico);
+  setTimeout(() => processed.delete(hashUnico), DEDUPE_TTL_MS);
 
   try {
     // 3) Generar entradas
@@ -265,7 +274,7 @@ router.post('/', async (req, res) => {
     } catch (e) {
       console.error('❌ Error enviando email de entradas:', e.message || e);
       await safeAlert('❌ Fallo crítico enviando email de entradas', {
-        email,
+        email, // admin ve email completo
         slugEvento,
         detalle: e?.message || String(e),
       });
@@ -286,19 +295,19 @@ router.post('/', async (req, res) => {
       }
       // alerta discreta adicional
       safeAlert('⚠️ Errores no críticos en generarEntradas', {
-        email,
+        email, // admin ve email completo
         slugEvento,
         idFormulario,
         errores,
       });
     }
 
-    console.log(`✅ Entradas generadas y enviadas a ${email} (${numEntradas})`);
+    console.log(`✅ Entradas generadas y enviadas a ${maskEmail(email)} (${numEntradas})`);
     return res.status(200).json({ ok: true, mensaje: 'Entradas generadas y enviadas' });
   } catch (err) {
     console.error('❌ Error en /entradas/crear:', err.message || err);
     await safeAlert('❌ Error generando entradas', {
-      email,
+      email, // admin ve email completo
       slugEvento,
       detalle: err?.message || String(err),
     });

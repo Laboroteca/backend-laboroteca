@@ -97,9 +97,28 @@ function parseFechaDMY(fecha) {
   return isNaN(d.getTime()) ? null : d;
 }
 
+// ——— Visibilidad hasta medianoche (zona Europe/Madrid) ———
+// Extrae solo la parte de FECHA (dd/mm/yyyy) y compara con la fecha "hoy" en Madrid.
+function visibleHastaMedianocheMadrid(fechaStr) {
+  if (!fechaStr) return false;
+  const m = String(fechaStr).match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+  if (!m) return false;
+  const [_, dd, mm, yyyy] = m;
+  // "hoy" en Madrid (solo fecha)
+  const hoyES = new Intl.DateTimeFormat('es-ES', {
+    timeZone: 'Europe/Madrid', day: '2-digit', month: '2-digit', year: 'numeric'
+  }).format(new Date()); // p.ej. "21/09/2025"
+  const [ddH, mmH, yyyyH] = hoyES.split('/');
+  // Compara YYYY-MM-DD lexicográficamente
+  const ymdEvento = `${yyyy}-${mm}-${dd}`;
+  const ymdHoy    = `${yyyyH}-${mmH}-${ddH}`;
+  // Visible hasta 23:59 del día del evento ⇒ se oculta cuando ymdEvento < ymdHoy
+  return ymdEvento >= ymdHoy;
+}
+
+
 // agrupa por (desc+dir+fecha), SOLO futuros, y deduplica por código
 async function cargarEventosFuturos(email) {
-  const ahora = new Date();
   const grupos = new Map(); // key -> { descripcionProducto, direccionEvento, fechaEvento, codigos:Set }
 
   function acumula(id, d) {
@@ -107,8 +126,8 @@ async function cargarEventosFuturos(email) {
     const desc  = d.descripcionProducto || d.nombreEvento || d.slugEvento || 'Evento';
     const dir   = d.direccionEvento || '';
     const fecha = d.fechaActuacion || d.fechaEvento || '';
-    const f = parseFechaDMY(fecha);
-    if (!f || f < ahora) return;
+    // Mostrar hasta 23:59 del día del evento (Madrid)
+    if (!visibleHastaMedianocheMadrid(fecha)) return;
 
     // código único de la entrada (preferimos campo de datos; si no, doc.id)
     const codigo = (d.codigo || d.codigoEntrada || '').toString().trim() || String(id || '').trim();
@@ -201,17 +220,6 @@ router.get('/cuenta/entradas', async (req, res) => {
       const v = verifySimpleHmacFromHeaders(req);
       if (!v.ok) return res.status(401).json({ error: 'Firma requerida' });
       if (DEBUG_REENVIOS) console.log('[ENTRADAS GET OK]', { email, ts: v.ts, sig10: v.sig10 });
-    }
-    if (!/^[a-f0-9]{64}$/i.test(sig)) {
-      try {
-        await alertAdmin({
-          area: 'micuenta.reenvio.hmac',
-          email: comprador,
-          err: new Error('Formato de firma inválido'),
-          meta: { to: toFromBody, desc }
-        });
-      } catch (_) {}
-      return res.status(401).json({ error: 'Firma inválida' });
     }
 
     const items = await cargarEventosFuturos(email);

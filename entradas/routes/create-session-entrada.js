@@ -27,19 +27,30 @@ function maskDni(v) {
 
 // ——— utilidades locales (solo para logs; sin PII) ———
 const safeLogMeta = ({ totalAsistentes, tipoProducto, nombreProducto, formularioId, fechaActuacion }) => ({
+  totalAsistentes,
+  tipoProducto,
+  nombreProducto,
+  formularioId,
+  fechaActuacion
 });
 
 
 router.post('/crear-sesion-entrada', async (req, res) => {
   try {
     const datos = req.body;
+    // Log crudo (debug puntual). NO incluye PII en alertas.
+    try { console.log('📥 Datos crudos recibidos:\n', JSON.stringify(datos, null, 2)); } catch {}
+    // Si algún middleware anterior marcó rate-limit, corta limpio
+    if (res.locals && res.locals.rateLimited) {
+      return res.status(429).json({ error: 'Demasiadas solicitudes. Espera unos segundos e inténtalo de nuevo.' });
+    }
     // Log seguro (sin PII)
     console.log('📥 crear-sesion-entrada', safeLogMeta({
       totalAsistentes: datos?.totalAsistentes,
       tipoProducto: datos?.tipoProducto,
       nombreProducto: datos?.nombreProducto,
-      formularioId: datos?.formularioId,
-      fechaActuacion: datos?.fechaActuacion
+      formularioId: datos?.formularioId ?? datos?.formId,
+      fechaActuacion: datos?.fechaActuacion ?? datos?.fechaEvento
     }));
 
     // 🧍 Datos del comprador
@@ -55,18 +66,20 @@ router.post('/crear-sesion-entrada', async (req, res) => {
     // 🎟️ Datos del evento
     const tipoProducto = (datos.tipoProducto || '').trim();
     const nombreProducto = (datos.nombreProducto || '').trim();
-    // Si no viene descripcionProducto, usamos un fallback legible (antes funcionaba así)
+    // Si no viene descripcionProducto, usamos un fallback legible (compat histórico)
     const descripcionProducto = String(
-      datos.descripcionProducto || `Entrada "${nombreProducto}"`
+      datos.descripcionProducto || datos.descripcion || `Entrada "${nombreProducto}"`
     ).trim();
     const direccionEvento = (datos.direccionEvento || '').trim();
-    const imagenPDF = (datos.imagenEvento || '').trim();
-    const fechaActuacion = (datos.fechaActuacion || '').trim();
-    const formularioId = (datos.formularioId || '').toString().trim();
+    const imagenPDF = (datos.imagenEvento || datos.imagenPDF || '').trim();
+    const fechaActuacion = (datos.fechaActuacion || datos.fechaEvento || '').trim();
+    const formularioId = (datos.formularioId || datos.formId || '').toString().trim();
     const imagenStripe = URL_IMAGEN_DEFAULT;
 
     // 🧮 Cálculo del precio
-    const totalAsistentes = parseInt(String(datos.totalAsistentes || '').trim(), 10);
+    const totalAsistentes = parseInt(String(
+      (datos.totalAsistentes ?? datos.total_asistentes ?? datos.totalasistentes ?? datos.asistentes ?? datos.cantidad ?? '')
+    ).trim(), 10);
     if (isNaN(totalAsistentes) || totalAsistentes < 1) {
       console.warn('⚠️ totalAsistentes inválido:', datos.totalAsistentes);
       try {
@@ -122,20 +135,19 @@ router.post('/crear-sesion-entrada', async (req, res) => {
       console.log('ℹ️ Verificación WP omitida (LAB_WP_CHECK_STRICT=0):', { email: maskEmail(email) });
     }
 
-    // 👥 Recoger asistentes
+    // Recoger asistentes (compat: no bloquea si faltan nombres)
     const metadataAsistentes = {};
     for (let i = 1; i <= totalAsistentes; i++) {
       const nom = String(datos[`asistente_${i}_nombre`] || '').trim();
       const ape = String(datos[`asistente_${i}_apellidos`] || '').trim();
-      if (!nom || !ape) {
-        return res.status(400).json({ error: `Faltan datos del asistente ${i}.` });
-      }
-      metadataAsistentes[`asistente_${i}_nombre`] = nom;
-      metadataAsistentes[`asistente_${i}_apellidos`] = ape;
+      metadataAsistentes[`asistente_${i}_nombre`] = nom || '';
+      metadataAsistentes[`asistente_${i}_apellidos`] = ape || '';
     }
 
     // 💳 Crear sesión de Stripe
-    const session = await stripe.checkout.sessions.create({
+    let session;
+    try {
+      session = await stripe.checkout.sessions.create({
       mode: 'payment',
       payment_method_types: ['card'],
       customer_email: email,
@@ -151,8 +163,12 @@ router.post('/crear-sesion-entrada', async (req, res) => {
           }
         }
       }],
-      // URL de éxito compatible con el frontend antiguo (si aún lee query params)
-      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(nombreProducto)}&tipoProducto=${encodeURIComponent(tipoProducto)}`,
+      // URL de éxito: compat legacy + {CHECKOUT_SESSION_ID}
+      success_url:
+        `https://laboroteca.es/gracias?ok=1&sid={CHECKOUT_SESSION_ID}` +
+        `&nombre=${encodeURIComponent(nombre)}` +
+        `&producto=${encodeURIComponent(nombreProducto)}` +
+        `&tipoProducto=${encodeURIComponent(tipoProducto)}`,
       cancel_url: 'https://laboroteca.es/error',
       metadata: {
         nombre,
@@ -173,7 +189,21 @@ router.post('/crear-sesion-entrada', async (req, res) => {
         totalAsistentes: String(totalAsistentes),
         ...metadataAsistentes
       }
-    });
+      });
+    } catch (e) {
+      console.error('❌ Stripe error creando sesión:', {
+        type: e?.type, code: e?.code, param: e?.param, message: e?.message, requestId: e?.requestId
+      });
+      try {
+        await alertAdmin({
+          area: 'entradas.checkout.stripe.create_error',
+          email,
+          err: e,
+          meta: { formularioId, totalAsistentes, nombreProducto, tipoProducto }
+        });
+      } catch {}
+      return res.status(502).json({ error: 'stripe_error' });
+    }
 
     // ✅ Validación final
     if (!session?.url) {

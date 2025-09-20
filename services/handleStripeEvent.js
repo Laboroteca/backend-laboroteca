@@ -53,13 +53,35 @@ setInterval(() => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Re-ALTA guard: deja SOLO UNA suscripción activa por email
-// 1) Quita cancel_at_period_end a la suscripción “keepId” (si venía programada).
-// 2) Cancela inmediatamente las demás suscripciones activas de ese email.
+// 1) Determina (si hace falta) cuál es la “buena” (más reciente por current_period_end).
+// 2) Quita cancel_at_period_end a la “buena”.
+// 3) Cancela inmediatamente las demás suscripciones activas de ese email.
 async function ensureSingleActiveClubSubscription(email, keepId = null) {
   if (!email || !email.includes('@')) return { changed: false };
   let changed = false;
   try {
     const clientes = await stripe.customers.list({ email, limit: 100 });
+    // 0) Si no nos pasan keepId, elegimos la "mejor" activa por current_period_end
+    if (!keepId) {
+      let candidate = null;
+      for (const c of clientes.data) {
+        const subs = await stripe.subscriptions.list({ customer: c.id, status: 'all', limit: 100 });
+        for (const s of subs.data) {
+          if (!ACTIVE_STATUSES.includes(s.status)) continue;
+          if (!candidate) { candidate = s; continue; }
+          const a = Number(candidate.current_period_end || 0);
+          const b = Number(s.current_period_end || 0);
+          if (b > a) candidate = s;
+        }
+      }
+      keepId = candidate?.id || null;
+      if (keepId) {
+        console.log('🔎 [re-alta] keepId elegido por heurística:', keepId);
+      } else {
+        console.log('🔎 [re-alta] no hay suscripciones activas para preservar.');
+      }
+    }
+
     for (const c of clientes.data) {
       const subs = await stripe.subscriptions.list({ customer: c.id, status: 'all', limit: 100 });
       for (const sub of subs.data) {
@@ -77,7 +99,7 @@ async function ensureSingleActiveClubSubscription(email, keepId = null) {
         if (isActive) {
           try {
             await stripe.subscriptions.cancel(sub.id, { invoice_now: false, prorate: false });
-            console.log('🛑 Subs antigua cancelada por re-alta:', sub.id);
+            console.log('🛑 [re-alta] Subs duplicada cancelada:', sub.id);
             changed = true;
           } catch (e) {
             console.warn('⚠️ No se pudo cancelar subs antigua:', sub.id, e?.message || e);
@@ -402,17 +424,37 @@ if (event.type === 'invoice.paid') {
     }
   } catch (_) {}
 
-  // ↪️ Re-alta: si la suscripción tenía baja programada en Stripe, anúlala
+  // ↪️ Re-alta: si la suscripción tenía baja programada en Stripe, anúlala (si tenemos id)
+  let currentSubId =
+    invoice.subscription ||
+    invoice.subscription_details?.subscription ||
+    invoice.lines?.data?.[0]?.subscription ||
+    invoice.lines?.data?.[0]?.parent?.invoice_item_details?.subscription ||
+    null;
   try {
-    if (invoice.subscription) {
-      const sub = await stripe.subscriptions.retrieve(invoice.subscription);
-      if (sub.cancel_at_period_end) {
-        await stripe.subscriptions.update(invoice.subscription, { cancel_at_period_end: false });
-        console.log('↪️ cancel_at_period_end=false por re-alta (invoice.paid)', invoice.subscription);
+    if (currentSubId) {
+      const sub = await stripe.subscriptions.retrieve(currentSubId);
+      if (sub?.cancel_at_period_end) {
+        await stripe.subscriptions.update(currentSubId, { cancel_at_period_end: false });
+        console.log('↪️ cancel_at_period_end=false por re-alta (invoice.paid):', currentSubId);
       }
     }
   } catch (e) {
     console.warn('⚠️ No se pudo desprogramar la baja en Stripe:', e?.message || e);
+    // 🔔 Avisa al admin con todo el contexto para solución manual
+    try {
+      await alertAdmin({
+        area: 're_alta_desprogramacion_fail',
+        email: (email || '').toLowerCase().trim() || '(desconocido)',
+        err: e,
+        meta: {
+          subscriptionId: currentSubId || '(desconocido)',
+          invoiceId: invoiceId || '(desconocido)',
+          customerId: customerId || '(desconocido)',
+          billingReason: billingReason || '(desconocido)'
+        }
+      });
+    } catch (_) {}
   }
     if (!invoiceId || !customerId) {
       console.warn('⚠️ Falta invoiceId o customerId en invoice.paid');
@@ -825,13 +867,25 @@ if (emailSeguro && emailSeguro.indexOf('@') !== -1) {
     // 🧠 POLÍTICA “una sola suscripción viva por email”
     // Mantén la de ESTA invoice y elimina duplicadas; además, desprograma su cancelación si venía marcada.
     try {
-      await ensureSingleActiveClubSubscription(emailSeguro, invoice.subscription || null);
+      // Resolver el keepId con múltiples fuentes; si no existe, el guard preservará la mejor activa.
+      const keepId =
+        invoice.subscription ||
+        invoice.subscription_details?.subscription ||
+        invoice.lines?.data?.[0]?.subscription ||
+        invoice.lines?.data?.[0]?.parent?.invoice_item_details?.subscription ||
+        null;
+      await ensureSingleActiveClubSubscription(emailSeguro, keepId);
     } catch (_) {}
 
     // 🛟 SAFETY NET: asegura que, tras la limpieza, SIGUE habiendo una suscripción viva
     // (si por carrera/orden de webhooks la "buena" quedase cancelada, se crea una de sustitución sin reprocesar cobro ahora).
     try {
-      const keepSubId = invoice.subscription || null;
+      const keepSubId =
+        invoice.subscription ||
+        invoice.subscription_details?.subscription ||
+        invoice.lines?.data?.[0]?.subscription ||
+        invoice.lines?.data?.[0]?.parent?.invoice_item_details?.subscription ||
+        null;
       if (keepSubId) {
         let keepSub = await stripe.subscriptions.retrieve(keepSubId);
         const keepOk = keepSub && ACTIVE_STATUSES.includes(keepSub.status);

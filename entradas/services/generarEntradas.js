@@ -1,4 +1,4 @@
-// /entradas/services/generarEntradas.js
+//entradas/services/generarEntradas.js
 
 const fs = require('fs/promises');
 const path = require('path');
@@ -135,31 +135,47 @@ async function generarEntradas({
     const buffers = [];
     pdf.on('data', buffers.push.bind(buffers));
 
+    // ── Fondo a toda página y cálculo de altura dibujada real ──
+    let fondoDrawnH = 0;
     if (imagenFondo && imagenFondo.startsWith('http')) {
       try {
-        const fondoData = await fetch(imagenFondo).then((r) => r.arrayBuffer());
-    // Cargar imagen en memoria y embutir directamente (sin JPG temporal ni recomprimir)
-    const fondoBuf = Buffer.from(fondoData);
-    try {
-      // Ajustar a página completa manteniendo la calidad
-      const pageW = pdf.page.width;
-      const pageH = pdf.page.height;
-      pdf.image(fondoBuf, 0, 0, { fit: [pageW, pageH] });
-    } catch (e) {
-      console.warn(`⚠️ Imagen de fondo no soportada para ${codigo}:`, e?.message || e);
-    }
+        const res = await fetch(imagenFondo);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const fondoBuf = Buffer.from(await res.arrayBuffer());
+        // Intenta leer metadatos para calcular escala real
+        try {
+          const sharp = require('sharp');
+          const meta = await sharp(fondoBuf).metadata();
+          const maxW = pdf.page.width;
+          const maxH = pdf.page.height;
+          const scale = Math.min(maxW / (meta.width || maxW), maxH / (meta.height || maxH));
+          fondoDrawnH = Math.min(maxH, (meta.height || maxH) * scale);
+        } catch {
+          // Si no podemos leer metadatos, asumimos alto de página
+          fondoDrawnH = pdf.page.height;
+        }
+        pdf.image(fondoBuf, 0, 0, { fit: [pdf.page.width, pdf.page.height] });
       } catch (err) {
         console.warn(`⚠️ No se pudo cargar imagen de fondo para ${codigo}:`, err.message);
       }
     }
 
-    pdf.fontSize(18).text(`Entrada para: ${nombreCompleto}`, 50, 100);
-    pdf.fontSize(14).text(`Evento: ${descripcionProducto}`, 50, 140);
-    pdf.text(`Fecha: ${fechaEvento}`, 50, 160);
-    pdf.text(`Dirección: ${direccionEvento}`, 50, 180);
-    pdf.text(`Código: ${codigo}`, 50, 220);
+    // ── Zona superior segura para no forzar salto de página ──
+    const baseY = (function () {
+      // Coloca el texto bajo el fondo, pero nunca más allá de un margen que rompa layout
+      const y = (fondoDrawnH ? fondoDrawnH + 40 : 100);
+      // cap inferior para fondos muy altos, y mínimo para fondos bajos
+      return Math.max(100, Math.min(y, pdf.page.height - 360));
+    })();
+
+    pdf.fontSize(18).text(`Entrada para: ${nombreCompleto}`, 50, baseY);
+    pdf.fontSize(14).text(`Evento: ${descripcionProducto}`, 50, baseY + 40);
+    pdf.text(`Fecha: ${fechaEvento}`, 50, baseY + 60);
+    pdf.text(`Dirección: ${direccionEvento}`, 50, baseY + 80);
+    pdf.text(`Código: ${codigo}`, 50, baseY + 120);
     // Insertar QR reescalando hacia abajo (queda muy nítido)
-    pdf.image(qrImage, 50, 260, { width: 120 });
+    pdf.image(qrImage, 50, baseY + 160, { width: 120 });
+
     pdf.end();
 
     const pdfBuffer = await new Promise((resolve) =>

@@ -1,3 +1,5 @@
+//entradas/utils/generarEntradaPDF.js
+
 const PDFDocument = require('pdfkit');
 const QRCode = require('qrcode');
 const fetch = require('node-fetch');
@@ -33,7 +35,7 @@ async function generarEntradaPDF({
     : 'https://www.laboroteca.es/wp-content/uploads/2025/08/logo-entradas-laboroteca-qr-scaled.jpg';
 
   let imagenHeight = 0;
-   try {
+  try {
     const controller = new AbortController();
     const to = setTimeout(() => controller.abort(), 10000);
     const response = await fetch(urlFondo, { signal: controller.signal });
@@ -44,19 +46,28 @@ async function generarEntradaPDF({
     // Intentamos embeber el buffer original (sin recomprimir).
     // Si es un formato no soportado por PDFKit (p.ej. WebP), convertimos a PNG **sin** redimensionar.
     let embedBuffer = inputBuffer;
+    // Necesitamos las dimensiones originales para calcular la altura REAL dibujada
+    let meta = { width: doc.page.width, height: doc.page.height, format: '' };
     try {
-      const meta = await sharp(inputBuffer).metadata();
+      meta = await sharp(inputBuffer).metadata();
       const fmt = (meta.format || '').toLowerCase();
       if (fmt === 'webp' || fmt === 'gif' || fmt === 'tiff') {
         embedBuffer = await sharp(inputBuffer).png().toBuffer(); // conversión sin resize (sin pérdida adicional respecto a PNG)
       }
-      // Altura proporcional a página al usar fit
-      imagenHeight = doc.page.height;
-      doc.image(embedBuffer, 0, 0, { fit: [doc.page.width, doc.page.height] });
+      // Altura proporcional en función del ajuste real al "fit"
+      const maxW = doc.page.width;
+      const maxH = doc.page.height;
+      const scale = Math.min(maxW / meta.width, maxH / meta.height);
+      const drawnW = meta.width * scale;
+      const drawnH = meta.height * scale;
+      imagenHeight = drawnH;
+      doc.image(embedBuffer, 0, 0, { fit: [maxW, maxH] });
     } catch (e) {
       // Fallback directo (si falla sharp, intentamos igualmente embeber tal cual)
-      imagenHeight = doc.page.height;
-      doc.image(embedBuffer, 0, 0, { fit: [doc.page.width, doc.page.height] });
+      const maxW = doc.page.width;
+      const maxH = doc.page.height;
+      imagenHeight = Math.min(maxH, maxW); // estimación prudente
+      doc.image(embedBuffer, 0, 0, { fit: [maxW, maxH] });
     }
   } catch (err) {
     console.warn(`⚠️ No se pudo cargar imagen de fondo para ${codigo}:`, err.message);
@@ -108,9 +119,9 @@ async function generarEntradaPDF({
   doc.fillColor('black').text(codigoTexto, qrX, codigoY);
 
   // ✅ Datos de entrada
-  // Al ocupar el fondo toda la página con fit, colocamos el texto con margen superior estable
-  let textY = Math.min(imagenHeight, doc.page.height) + 40;
-  if (textY < 200) textY = 200; // salvaguarda para layouts con fondos pequeños
+  // Coloca el texto inmediatamente bajo la imagen de fondo real (sin forzar salto de página)
+  let textY = Math.min(imagenHeight, doc.page.height - 60) + 40;
+  if (textY < 200) textY = 200; // salvaguarda en fondos bajos
   const textX = 50;
   const lineSpacing = 28;
 

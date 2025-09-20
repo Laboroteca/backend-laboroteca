@@ -10,15 +10,23 @@ const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 const router = express.Router();
 const URL_IMAGEN_DEFAULT = 'https://www.laboroteca.es/wp-content/uploads/2025/08/logo-entradas-laboroteca-scaled.webp';
 
-// ——— utilidades locales (para logs, no para alertas) ———
-const maskEmail = (e) => {
-  if (!e || typeof e !== 'string') return '';
-  const [u, d] = e.split('@');
-  const uh = (u || '').slice(0, 2);
-  return `${uh}***@***.${(d || '').split('.').pop() || ''}`;
-};
+// Helpers de saneado para LOGS (no afectan a alertas)
+function maskEmail(e) {
+  const s = String(e || '').toLowerCase();
+  const m = s.match(/^([^@]+)@(.+)$/);
+  if (!m) return s.replace(/.(?=.{2})/g, '•');
+  const [_, local, domain] = m;
+  const localMasked  = local.length <= 2 ? '••' : local[0] + '•'.repeat(Math.max(1, local.length - 2)) + local.slice(-1);
+  const domainMasked = domain.replace(/[^.]/g, '•');
+  return `${localMasked}@${domainMasked}`;
+}
+function maskDni(v) {
+  const s = String(v || '');
+  return s.length <= 4 ? '••••' : '••••' + s.slice(-4);
+}
+
+// ——— utilidades locales (solo para logs; sin PII) ———
 const safeLogMeta = ({ totalAsistentes, tipoProducto, nombreProducto, formularioId, fechaActuacion }) => ({
-  totalAsistentes, tipoProducto, nombreProducto, formularioId, fechaActuacion
 });
 
 
@@ -47,7 +55,10 @@ router.post('/crear-sesion-entrada', async (req, res) => {
     // 🎟️ Datos del evento
     const tipoProducto = (datos.tipoProducto || '').trim();
     const nombreProducto = (datos.nombreProducto || '').trim();
-    const descripcionProducto = String(datos.descripcionProducto || '').trim();
+    // Si no viene descripcionProducto, usamos un fallback legible (antes funcionaba así)
+    const descripcionProducto = String(
+      datos.descripcionProducto || `Entrada "${nombreProducto}"`
+    ).trim();
     const direccionEvento = (datos.direccionEvento || '').trim();
     const imagenPDF = (datos.imagenEvento || '').trim();
     const fechaActuacion = (datos.fechaActuacion || '').trim();
@@ -88,10 +99,8 @@ router.post('/crear-sesion-entrada', async (req, res) => {
       return res.status(400).json({ error: 'Faltan datos obligatorios para crear la sesión.' });
     }
 
-    // 🔎 Validación estricta de descripción (factura no ambigua)
-    if (!descripcionProducto || /^entrada\s*$/i.test(descripcionProducto)) {
-      return res.status(400).json({ error: 'Descripción de producto inválida. Debe ser concreta para la factura.' });
-    }
+    // 🔎 No bloqueamos por descripción: el frontend histórico no la envía.
+    // (Se deja el fallback arriba para factura/etiquetas)
 
     // 🔐 (Opcional) Verificación en WordPress
     if (WP_CHECK_STRICT) {
@@ -110,7 +119,7 @@ router.post('/crear-sesion-entrada', async (req, res) => {
       }
     } else {
       // En modo no estricto NO bloqueamos (email viene del usuario logueado/autorrelleno)
-      console.log('ℹ️ Verificación WP omitida (LAB_WP_CHECK_STRICT=0):', email);
+      console.log('ℹ️ Verificación WP omitida (LAB_WP_CHECK_STRICT=0):', { email: maskEmail(email) });
     }
 
     // 👥 Recoger asistentes
@@ -142,8 +151,8 @@ router.post('/crear-sesion-entrada', async (req, res) => {
           }
         }
       }],
-      // Evitar PII en URL; el frontend puede leer la sesión por {CHECKOUT_SESSION_ID}
-      success_url: 'https://laboroteca.es/gracias?ok=1&sid={CHECKOUT_SESSION_ID}',
+      // URL de éxito compatible con el frontend antiguo (si aún lee query params)
+      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(nombreProducto)}&tipoProducto=${encodeURIComponent(tipoProducto)}`,
       cancel_url: 'https://laboroteca.es/error',
       metadata: {
         nombre,

@@ -386,7 +386,8 @@ async function resolveSheetTabName(sheets){
 async function upsertConsentRow({ nombre, email, comercialYES, materiasStr, fechaAltaISO }) {
   const sheets = await getSheetsClient();
   const tab = await resolveSheetTabName(sheets);
-  const readRange = _a1(tab, 'A:E');
+  // Leemos también F para saber si la última fila del email ya está “cerrada” (tiene baja)
+  const readRange = _a1(tab, 'A:F');
   const fechaAltaFmt = formatFechaLocal(fechaAltaISO);
 
   const res = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: readRange });
@@ -400,25 +401,42 @@ async function upsertConsentRow({ nombre, email, comercialYES, materiasStr, fech
 
   if (targetIdx >= 0) {
     const rowNum = targetIdx + 1;
-    const currentE = rows[targetIdx][4] || '';
-    const values = [
-      [ nombre || (rows[targetIdx][0] || ''), email, comercialYES, materiasStr, currentE || fechaAltaFmt ]
-    ];
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: SHEET_ID,
-      range: _a1(tab, `A${rowNum}:E${rowNum}`),
-      valueInputOption: 'RAW',
-      requestBody: { values }
-    });
-    return { updatedRow: rowNum };
+    
+    const currentE = rows[targetIdx][4] || ''; // Fecha ALTA
+    const currentF = rows[targetIdx][5] || ''; // Fecha BAJA
+
+    if (currentF && String(currentF).trim() !== '') {
+      // 🔁 RE-ALTA: si la última fila YA tiene BAJA, creamos una NUEVA FILA
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: SHEET_ID,
+        range: _a1(tab, 'A:F'),
+        valueInputOption: 'USER_ENTERED',
+        insertDataOption: 'INSERT_ROWS',
+        requestBody: { values: [[ nombre || '', email, comercialYES, materiasStr, fechaAltaFmt, '' ]] }
+      });
+      return { appended: true, reason: 're-alta' };
+    } else {
+      // Alta/actualización normal en la misma fila (si E vacío se rellena)
+      const values = [
+        [ nombre || (rows[targetIdx][0] || ''), email, comercialYES, materiasStr, currentE || fechaAltaFmt ]
+      ];
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SHEET_ID,
+        range: _a1(tab, `A${rowNum}:E${rowNum}`),
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values }
+      });
+      return { updatedRow: rowNum };
+    }
+
   } else {
     await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID,
-      range: _a1(tab, 'A:E'),
-      valueInputOption: 'RAW',
+      range: _a1(tab, 'A:F'),
+      valueInputOption: 'USER_ENTERED',
       insertDataOption: 'INSERT_ROWS',
       requestBody: {
-        values: [[ nombre || '', email, comercialYES, materiasStr, fechaAltaFmt ]]
+        values: [[ nombre || '', email, comercialYES, materiasStr, fechaAltaFmt, '' ]]
       }
     });
     return { appended: true };

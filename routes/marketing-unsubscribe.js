@@ -75,6 +75,21 @@ async function getSheetsClient(){
   const auth = await google.auth.getClient({ scopes: ['https://www.googleapis.com/auth/spreadsheets'] });
   return google.sheets({ version: 'v4', auth });
 }
+
+// ── Resolver el nombre exacto de la pestaña (por si hay mayúsculas/espacios)
+let _resolvedTabName = null;
+async function resolveSheetTabName(sheets){
+  if (_resolvedTabName) return _resolvedTabName;
+  const meta = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID });
+  const tabs = (meta.data.sheets || []).map(s => String(s.properties?.title || '').trim());
+  const wanted = String(SHEET_TAB || '').trim();
+  const found  = tabs.find(t => t === wanted)
+               || tabs.find(t => t.toLowerCase() === wanted.toLowerCase())
+               || tabs[0];
+  if (!found) throw new Error('NO_SHEETS_IN_SPREADSHEET');
+  _resolvedTabName = found;
+  return _resolvedTabName;
+}
 function _needsQuotes(tab){ return /[^A-Za-z0-9_]/.test(String(tab||'')); }
 function _a1(tab, range){
   const t = String(tab||'').trim();
@@ -83,7 +98,8 @@ function _a1(tab, range){
 }
 async function setUnsubscribeDateByEmail(email, fechaIso, nombreFallback=''){
   const sheets = await getSheetsClient();
-  const range  = _a1(SHEET_TAB, 'A:F');
+  const tab    = await resolveSheetTabName(sheets);
+  const range  = _a1(tab, 'A:F');
   const fecha  = formatFechaLocal(fechaIso);
 
   const res  = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range });
@@ -98,8 +114,8 @@ async function setUnsubscribeDateByEmail(email, fechaIso, nombreFallback=''){
     const rowNum = idx + 1;
     await sheets.spreadsheets.values.update({
       spreadsheetId: SHEET_ID,
-      range: _a1(SHEET_TAB, `F${rowNum}`),
-      valueInputOption: 'RAW',
+      range: _a1(tab, `F${rowNum}`),
+      valueInputOption: 'USER_ENTERED',
       requestBody: { values: [[ fecha ]] }
     });
     return { updatedRow: rowNum };
@@ -107,7 +123,7 @@ async function setUnsubscribeDateByEmail(email, fechaIso, nombreFallback=''){
     await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID,
       range,
-      valueInputOption: 'RAW',
+      valueInputOption: 'USER_ENTERED',
       insertDataOption: 'INSERT_ROWS',
       requestBody: { values: [[ nombreFallback || '', email, 'NO', '—', '', fecha ]] }
     });
@@ -251,7 +267,7 @@ async function handleUnsubscribe(req, res){
     const code = String(e?.message || 'UNSUB_ERROR');
     const msgHuman = 'No hemos podido procesar la baja. El enlace puede haber caducado o ya fue usado.';
     console.error('unsubscribe error:', code);
-    try { await alertAdmin({ area:'unsubscribe_error', err:e, meta:{} }); } catch{}
+    try { await alertAdmin({ area:'unsubscribe_error', err:e, meta:{ email: (req.body?.email || '(from token)') } }); } catch{}
 
     if (wantsHtml(req)) return res.status(400).send(htmlError(msgHuman));
     return res.status(400).json({ ok:false, error: code, message: msgHuman });

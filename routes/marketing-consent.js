@@ -138,6 +138,14 @@ function clientIp(req){
     .toString().split(',')[0].trim();
 }
 
+/* Nombre corto: primeras dos palabras */
+function firstTwoWords(str){
+  if (!str) return '';
+  const words = String(str).trim().split(/\s+/);
+  return words.slice(0, 2).join(' ');
+}
+
+
 /* API key desde múltiples vías: header, bearer, query, body */
 function requireApiKey(req, res) {
   let provided = s(req.headers['x-api-key']);
@@ -812,8 +820,9 @@ router.post('/consent', async (req, res) => {
           { header: 'List-Unsubscribe-Post', value: 'List-Unsubscribe=One-Click' }
         ];
 
-        const nombreSafe = nombre || (email.split('@')[0] || '').replace(/[._-]+/g, ' ');
-        const tokens = { NOMBRE: nombreSafe };
+        const nombreSafe  = nombre || (email.split('@')[0] || '').replace(/[._-]+/g, ' ');
+        const nombreCorto = firstTwoWords(nombreSafe);
+        const tokens = { NOMBRE: nombreCorto };
 
         const subject = tpl('¡Bienvenido al Boletín de Laboroteca, {NOMBRE}!', tokens);
 

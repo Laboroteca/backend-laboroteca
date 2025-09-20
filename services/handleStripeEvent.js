@@ -76,7 +76,7 @@ async function ensureSingleActiveClubSubscription(email, keepId = null) {
       }
       keepId = candidate?.id || null;
       if (keepId) {
-        console.log('🔎 [re-alta] keepId elegido por heurística:', keepId);
+        console.log(`🔎 [re-alta] keepId elegido: ${keepId} (period_end=${new Date(candidate.current_period_end*1000).toISOString()})`);
       } else {
         console.log('🔎 [re-alta] no hay suscripciones activas para preservar.');
       }
@@ -102,7 +102,15 @@ async function ensureSingleActiveClubSubscription(email, keepId = null) {
             console.log('🛑 [re-alta] Subs duplicada cancelada:', sub.id);
             changed = true;
           } catch (e) {
-            console.warn('⚠️ No se pudo cancelar subs antigua:', sub.id, e?.message || e);
+        console.warn('⚠️ No se pudo cancelar subs antigua:', sub.id, e?.message || e);
+          try {
+            await alertAdmin({
+              area: 'realta_cancel_fail',
+              email: redactEmail(email),
+              err: e,
+              meta: { subId: sub.id }
+            });
+          } catch(_) {}
           }
         }
       }

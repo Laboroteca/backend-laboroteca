@@ -22,7 +22,12 @@ const _hash10 = (str) => {
   try { return crypto.createHash('sha256').update(String(str), 'utf8').digest('hex').slice(0, 10); }
   catch { return 'errhash'; }
 };
-
+// 🔒 helpers de redacción (no PII en logs/alertas)
+const _sha12 = (v) => crypto.createHash('sha256').update(String(v||'').toLowerCase()).digest('hex').slice(0,12);
+const redactEmail = (e) => {
+  const s = String(e||'').toLowerCase(); if(!s.includes('@')) return s ? _sha12(s) : '';
+  const [u,d]=s.split('@'); return `${(u||'').slice(0,2)}***@***${(d||'').slice(-3)}`;
+};
 router.post('/solicitar-eliminacion', async (req, res) => {
   // ✅ Obligatorio: HMAC desde el proxy WP
   if (!ELIM_HMAC_SECRET) {
@@ -34,6 +39,7 @@ router.post('/solicitar-eliminacion', async (req, res) => {
   const reqId = String(req.headers['x-request-id'] || '');
 
   if (LAB_DEBUG) {
+    // no volcamos PII, solo hashes y trazas
     const raw = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body || {});
     console.log('[ELIM HMAC IN]', {
       path: req.path,
@@ -44,7 +50,7 @@ router.post('/solicitar-eliminacion', async (req, res) => {
     });
   }
 
-  const v = verifyHmac({
+  let v = verifyHmac({
     method: 'POST',
     path: req.path,
     bodyRaw: req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body || {}),
@@ -52,6 +58,30 @@ router.post('/solicitar-eliminacion', async (req, res) => {
     secret: ELIM_HMAC_SECRET
   });
 
+  // 🛟 Fallback robusto: tolera desfase ts ms↔s y firma legacy (ts.sha256(body))
+  if (!v.ok && String(v.error||'').toLowerCase()==='skew') {
+    try {
+      const raw = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body||{});
+      const rawHash = crypto.createHash('sha256').update(Buffer.from(raw,'utf8')).digest('hex');
+      const tsHeader = String(req.headers['x-lab-ts'] || '');
+      const sigHeader = String(req.headers['x-lab-sig'] || '');
+      const tsNum = Number(tsHeader);
+      const tsSec = (tsNum > 1e11) ? Math.floor(tsNum/1000) : tsNum; // ms→s si venía en ms
+      const nowSec = Math.floor(Date.now()/1000);
+      const maxSkew = Number(process.env.LAB_HMAC_SKEW_SECS || 900); // 15 min
+      const within = Math.abs(nowSec - tsSec) <= maxSkew;
+      // a) legacy: ts.sha256(body)
+      const expectLegacy = crypto.createHmac('sha256', ELIM_HMAC_SECRET)
+        .update(`${tsSec}.${rawHash}`).digest('hex');
+      // b) v2: ts.POST.<path>.sha256(body)
+      const expectV2 = crypto.createHmac('sha256', ELIM_HMAC_SECRET)
+        .update(`${tsSec}.POST.${req.path}.${rawHash}`).digest('hex');
+      if (within && (sigHeader === expectLegacy || sigHeader === expectV2)) {
+        v = { ok: true };
+      }
+    } catch (_) { /* noop */ }
+  }
+ 
   if (!v.ok) {
     if (LAB_DEBUG) console.warn('[ELIM HMAC FAIL]', v.error, { reqId, ts, sig10: sig.slice(0,10) });
     return res.status(401).json({ ok: false, mensaje: 'Auth HMAC inválida', error: v.error });
@@ -63,7 +93,7 @@ router.post('/solicitar-eliminacion', async (req, res) => {
     return res.status(400).json({ ok: false, mensaje: 'Email inválido.' });
   }
 
-  if (LAB_DEBUG) console.log('[ELIM HMAC USED]', { reqId, email });
+  if (LAB_DEBUG) console.log('[ELIM HMAC USED]', { reqId, email: redactEmail(email) });
 
   try {
     // 1) Generar token y caducidad (2h)
@@ -99,7 +129,7 @@ router.post('/solicitar-eliminacion', async (req, res) => {
       try {
         await alertAdmin({
           area: 'elim_cuenta_email_validacion',
-          email,
+          email: redactEmail(email),
           err: e,
           meta: {}
         });
@@ -117,7 +147,7 @@ router.post('/solicitar-eliminacion', async (req, res) => {
     try {
       await alertAdmin({
         area: 'solicitar_eliminacion_error',
-        email,
+        email: redactEmail(email),
         err,
         meta: {}
       });

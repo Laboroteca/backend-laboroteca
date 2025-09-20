@@ -248,7 +248,7 @@ router.post('/confirmar-eliminacion', async (req, res) => {
   } catch (err) {
     console.error('❌ Error al confirmar eliminación:', err?.message || err);
     try {
-      await alertAdmin({ area: 'confirmar_eliminacion_error', email: '-', err, meta: {} });
+      await alertAdmin({ area: 'confirmar_eliminacion_error', email: (req.body?.email || '-'), err, meta: {} });
     } catch (_) {}
     return res.status(500).json({ ok: false, mensaje: 'Error interno del servidor.' });
   }

@@ -1,9 +1,9 @@
-// regalos/services/enviarEmailCanjeLibro.js
+// 📂 regalos/services/enviarEmailCanjeLibro.js
 /**
  * Envía email de confirmación del canje (PRE-/REG-) usando SMTP2GO API.
- * Sin dependencias externas. Node 18+ (fetch nativo).
+ * Node 18+ (fetch nativo). Sin dependencias externas.
  *
- * Variables de entorno admitidas (por orden):
+ * Variables de entorno (por orden):
  *   API KEY:   SMTP2GO_API_KEY | SMTP2GO_KEY | SMTP_API_KEY | SMTP2GO_TOKEN
  *   SENDER:    SMTP2GO_SENDER  | SMTP_SENDER | EMAIL_SENDER | SMTP_FROM | FROM_EMAIL
  */
@@ -13,10 +13,12 @@
 const SMTP2GO_ENDPOINT = 'https://api.smtp2go.com/v3/email/send';
 const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 
-// --- Pie RGPD unificado y actualizado ---
+/* ─────────────────────────────────────────
+ * Pie RGPD (14px, #606296) – actualizado
+ * ───────────────────────────────────────── */
 const PIE_HTML = `
-  <hr style="margin-top: 40px; margin-bottom: 10px;" />
-  <div style="font-size: 12px; color: #777; line-height: 1.5;">
+  <hr style="margin:16px 0;border:0;border-top:1px solid #bbb;" />
+  <div style="font-size:14px;color:#606296;line-height:1.5;">
     En cumplimiento del Reglamento (UE) 2016/679 (RGPD) y la LOPDGDD, le informamos de que su dirección de correo electrónico forma parte de la base de datos de Ignacio Solsona Fernández-Pedrera (DNI 20481042W), con domicilio en calle Enmedio nº 22, 3.º E, 12001 Castellón de la Plana (España).<br /><br />
     Finalidades: prestación de servicios jurídicos, venta de infoproductos, gestión de entradas a eventos, emisión y envío de facturas por email y, en su caso, envío de newsletter y comunicaciones comerciales si usted lo ha consentido. Base jurídica: ejecución de contrato y/o consentimiento. Puede retirar su consentimiento en cualquier momento.<br /><br />
     Puede ejercer sus derechos de acceso, rectificación, supresión, portabilidad, limitación y oposición escribiendo a <a href="mailto:laboroteca@gmail.com">laboroteca@gmail.com</a>. También puede presentar una reclamación ante la autoridad de control competente. Más información en nuestra política de privacidad: <a href="https://www.laboroteca.es/politica-de-privacidad/" target="_blank" rel="noopener">https://www.laboroteca.es/politica-de-privacidad/</a>.
@@ -34,71 +36,64 @@ También puede presentar una reclamación ante la autoridad de control competent
 Más información: https://www.laboroteca.es/politica-de-privacidad/
 `.trim();
 
-function construirHTML({ nombreMostrar, libroElegido }) {
+/* ─────────────────────────────────────────
+ * Construcción del cuerpo (SIN “Recuerda”)
+ * ───────────────────────────────────────── */
+function construirHTMLBase({ nombreMostrar, libroElegido }) {
   const miCuentaURL = 'https://www.laboroteca.es/mi-cuenta/';
-  const clubURL = 'https://www.laboroteca.es/club-laboroteca/';
+  // Solo los dos primeros renglones en negrita
   return `
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.5;color:#111;">
-      <p style="margin:0 0 12px;font-size:16px;font-weight:600;">
-        ¡Enhorabuena${nombreMostrar ? ', ' + nombreMostrar : ''}!
-      </p>
-      <p style="margin:0 0 12px;">
-        Tu código ha sido canjeado <strong>${libroElegido ? `(${libroElegido})` : ''}</strong>.
-      </p>
+      <p style="margin:0 0 12px;font-size:16px;"><strong>¡Enhorabuena${nombreMostrar ? ', ' + nombreMostrar : ''}!</strong></p>
+      <p style="margin:0 0 12px;"><strong>Tu código ha sido canjeado${libroElegido ? ` (${libroElegido})` : ''}.</strong></p>
+
       <p style="margin:0 0 16px;">
         Siempre tendrás acceso a la versión más actualizada desde
         <a href="${miCuentaURL}" target="_blank" rel="noopener" style="color:#0b5fff;text-decoration:none;">https://www.laboroteca.es/mi-cuenta/</a>.
       </p>
 
-      <div style="border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin:18px 0;background:#f9fafb;">
-        <p style="margin:0 0 10px;"><strong>Recuerda</strong></p>
-        <p style="margin:0 0 12px;">
-          Puedes suscribirte al <strong>Club Laboroteca</strong> para acceder a vídeos, podcast, artículos, novedades,
-          sentencias y modelos para reclamaciones.
-        </p>
-        <p style="margin:0;">
-          Más info: <a href="${clubURL}" target="_blank" rel="noopener" style="color:#0b5fff;text-decoration:none;">https://www.laboroteca.es/club-laboroteca/</a>.
-        </p>
-      </div>
-
       <p style="margin:16px 0 0;">Atte.,</p>
-      <p style="margin:4px 0 0;"><strong>Ignacio Solsona</strong><br/>Abogado</p>
+      <p style="margin:4px 0 0;">Ignacio Solsona<br/>Abogado</p>
     </div>
   `;
 }
 
-function construirTextoPlano({ nombreMostrar, libroElegido }) {
+function construirTextoPlanoBase({ nombreMostrar, libroElegido }) {
   const miCuentaURL = 'https://www.laboroteca.es/mi-cuenta/';
-  const clubURL = 'https://www.laboroteca.es/club-laboroteca/';
   return [
     `¡Enhorabuena${nombreMostrar ? ', ' + nombreMostrar : ''}!`,
     ``,
     `Tu código ha sido canjeado${libroElegido ? ` (${libroElegido})` : ''}.`,
-    `Acceso siempre actualizado: ${miCuentaURL}`,
+    `Siempre tendrás acceso a la versión más actualizada desde ${miCuentaURL}.`,
     ``,
-    `Recuerda: puedes suscribirte al Club Laboroteca (vídeos, podcast, artículos, novedades, sentencias y modelos).`,
-    `Más información: ${clubURL}`,
-    ``,
-    `Atte.`,
+    `Atte.,`,
     `Ignacio Solsona`,
     `Abogado`
   ].join('\n');
 }
 
-/**
- * Envía el email de canje.
- *
- * @param {Object} params
- * @param {string} params.toEmail           - Email del destinatario (obligatorio)
- * @param {string} [params.nombre]          - Nombre (factura, fallback)
- * @param {string} [params.apellidos]       - Apellidos (factura, fallback)
- * @param {string} [params.libroElegido]    - Nombre del libro (opcional: para mostrar entre paréntesis)
- * @param {string} [params.sessionId]       - ID de sesión/log
- * @param {string} [params.wpUsername]      - user_login de WP (preferente para saludo)
- * @param {string} [params.userAlias]       - alias de usuario (preferente para saludo)
- * @param {string} [params.displayName]     - display_name de WP (preferente para saludo)
- * @returns {Promise<{ok:boolean,id?:string,error?:string}>}
- */
+/* ─────────────────────────────────────────
+ * ADVERTENCIA + separadores (opcional)
+ * ───────────────────────────────────────── */
+const advertenciaHtml = `
+  <div style="font-size:14px;color:#606296;line-height:1.5;margin:8px 0;">
+    <strong>Importante:</strong> tu acceso es personal e intransferible. Queda prohibido compartir tus claves con terceros o distribuir el material sin autorización. Si se detecta actividad sospechosa o irregular se puede suspender o bloquear la cuenta.
+  </div>
+`.trim();
+
+// Separadores: superior con espacio extra (~2–3 líneas) y luego uno normal
+const sepHtml = `<hr style="margin:16px 0;border:0;border-top:1px solid #bbb;" />`;
+const sepSuperiorHtml = `
+  <div style="height:2.6em;line-height:1.6;"></div>
+  <hr style="margin:16px 0;border:0;border-top:1px solid #bbb;" />
+`.trim();
+
+const advertenciaText = `IMPORTANTE: tu acceso es personal e intransferible. Queda prohibido compartir tus claves con terceros o distribuir el material sin autorización. Si se detecta actividad sospechosa o irregular se puede suspender o bloquear la cuenta.`;
+const sepText = '------------------------------------------------------------';
+
+/* ─────────────────────────────────────────
+ * Envío
+ * ───────────────────────────────────────── */
 async function enviarEmailCanjeLibro({
   toEmail,
   nombre = '',
@@ -107,7 +102,8 @@ async function enviarEmailCanjeLibro({
   sessionId = '',
   wpUsername = '',
   userAlias = '',
-  displayName = ''
+  displayName = '',
+  incluirAdvertencia = true, // ← por defecto SÍ incluimos la advertencia
 }) {
   const apiKey = process.env.SMTP2GO_API_KEY
               || process.env.SMTP2GO_KEY
@@ -122,7 +118,7 @@ async function enviarEmailCanjeLibro({
               || 'Laboroteca <laboroteca@laboroteca.es>';
 
   if (!apiKey) {
-    console.error('❌ Falta API KEY de SMTP2GO (prueba SMTP2GO_API_KEY | SMTP2GO_KEY | SMTP_API_KEY | SMTP2GO_TOKEN)');
+    console.error('❌ Falta API KEY de SMTP2GO (SMTP2GO_API_KEY | SMTP2GO_KEY | SMTP_API_KEY | SMTP2GO_TOKEN)');
     try {
       await alertAdmin({
         area: 'regalos.email.smtp_config_missing',
@@ -136,7 +132,7 @@ async function enviarEmailCanjeLibro({
     return { ok: false, error: 'Parámetros insuficientes (toEmail)' };
   }
 
-  // Nombre a mostrar en el saludo (prioriza WP)
+  // Saludo preferente con alias/usuario/displayName
   const pick = v => (String(v || '').trim());
   const nombreMostrar =
     pick(userAlias) ||
@@ -147,9 +143,18 @@ async function enviarEmailCanjeLibro({
 
   const subject = `✅ Código canjeado${libroElegido ? `: ${libroElegido}` : ''}`;
 
-  // Cuerpos + pie RGPD (HTML y texto)
-  const html_body = construirHTML({ nombreMostrar, libroElegido }) + '\n' + PIE_HTML;
-  const text_body = construirTextoPlano({ nombreMostrar, libroElegido }) + '\n\n' + PIE_TEXT;
+  // Base sin “Recuerda”
+  const htmlBase = construirHTMLBase({ nombreMostrar, libroElegido });
+  const textBase = construirTextoPlanoBase({ nombreMostrar, libroElegido });
+
+  // Ensamblado final con ADVERTENCIA y PIE RGPD
+  const html_body = incluirAdvertencia
+    ? (htmlBase + '\n' + sepSuperiorHtml + '\n' + advertenciaHtml + '\n' + sepHtml + '\n' + PIE_HTML)
+    : (htmlBase + '\n' + sepHtml + '\n' + PIE_HTML);
+
+  const text_body = incluirAdvertencia
+    ? [textBase, '', '', '', sepText, advertenciaText, sepText, '', PIE_TEXT].join('\n')
+    : [textBase, '', sepText, '', PIE_TEXT].join('\n');
 
   const payload = {
     api_key: apiKey,
@@ -172,7 +177,7 @@ async function enviarEmailCanjeLibro({
     });
     const data = await res.json().catch(() => ({}));
 
-    // éxito típico: data.data.succeeded === 1
+    // Éxito típico: data.data.succeeded === 1
     if (!res.ok || (data && data.data && data.data.succeeded !== 1)) {
       console.error('❌ Error SMTP2GO:', res.status, data);
       try {

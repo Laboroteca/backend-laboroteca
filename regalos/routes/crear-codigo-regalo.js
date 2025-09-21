@@ -300,8 +300,8 @@ ${saludo}
 
       const html =
         `<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.5;color:#111;">
-           <p>Estimado/a <strong>${nombre}</strong>,</p>
-           <p>Has recibido un <strong>código de regalo</strong>: <strong>${codigo}</strong>.</p>
++           <p>Estimado/a ${nombre},</p>
++           <p><strong>Has recibido un código de regalo: ${codigo}.</strong></p>
            <p>Puedes canjearlo por cualquiera de mis libros publicados. Para el canje, introduce el código en el formulario de esta página:</p>
            <p><a href="${pageUrl}" target="_blank" rel="noopener">${pageUrl}</a></p>
            <p style="margin-top:16px;">

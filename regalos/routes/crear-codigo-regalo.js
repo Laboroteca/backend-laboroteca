@@ -89,8 +89,15 @@ async function verifyRegalosHmac(req, res, next) {
     });
   }
 
+  // Firma debe ser SHA-256 en hex (64 chars)
+  if (!/^[a-f0-9]{64}$/i.test(sig)) {
+    try {
+      await alertAdmin({ area: 'regalos.crear.hmac_deny', err: new Error('Unauthorized (bad-sig-format)'), meta: { path: pathname } });
+    } catch(_) {}
+    return res.status(401).json({ error: 'Unauthorized (sig-format)' });
+  }
   try {
-    if (!crypto.timingSafeEqual(Buffer.from(expected, 'utf8'), Buffer.from(sig, 'utf8'))) {
+    if (!crypto.timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(sig, 'hex'))) {
       try {
         await alertAdmin({
           area: 'regalos.crear.hmac_deny',
@@ -272,6 +279,7 @@ router.post('/crear-codigo-regalo', verifyRegalosHmac, async (req, res) => {
     }
 
     // ✉️ Email al beneficiario (con RGPD)
+    let emailedOk = true;
     try {
       const subject = `Tu código de regalo: ${codigo}`;
       const pageUrl = 'https://www.laboroteca.es/canjear-codigo-regalo/';
@@ -307,6 +315,7 @@ ${saludo}
       await enviarEmailPersonalizado({ to: email, subject, text: textoPlano, html });
       console.log(`📧 Email de regalo enviado a ${email} (codigo ${codigo})`);
     } catch (mailErr) {
+      emailedOk = false;
       console.warn('⚠️ No se pudo enviar el email al beneficiario:', mailErr?.message || mailErr);
       // No bloqueamos la creación por fallo de email
       try {
@@ -319,7 +328,7 @@ ${saludo}
     }
 
     console.log(`🎁 Código REGALO creado → ${codigo} para ${email} | Otorgante: ${otorganteEmail || 'desconocido'}`);
-    return res.status(201).json({ ok: true, codigo, otorgante_email: otorganteEmail || null, emailed: true });
+    return res.status(201).json({ ok: true, codigo, otorgante_email: otorganteEmail || null, emailed: emailedOk });
   } catch (err) {
     console.error('❌ Error en /crear-codigo-regalo:', err?.message || err);
     try {

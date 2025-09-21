@@ -9,24 +9,23 @@ const canjearCodigoRegalo = require('../services/canjear-codigo-regalo');
 const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 
 /* ═════════════════════════════════════════
- *            CONFIG HMAC
+ *                CONFIG / CONSTANTES
  * ═════════════════════════════════════════ */
 const HMAC_REQUIRED = String(process.env.CANJE_HMAC_REQUIRED || 'true').toLowerCase() === 'true';
 const API_KEYS = [process.env.ENTRADAS_API_KEY, process.env.REGALOS_API_KEY].filter(Boolean);
 const SECRETS  = [process.env.ENTRADAS_HMAC_SECRET, process.env.REGALOS_HMAC_SECRET].filter(Boolean);
 const MAX_SKEW_MS = 5 * 60 * 1000; // ±5 min
 
-// Paths que firma WP
+// OJO: este router se monta con app.use('/regalos', router)
 const BASE        = '/regalos';
 const PATH_CANON  = '/canjear-codigo';
 const PATH_ALIAS  = '/canjear-codigo-regalo';
 const PATH_LEGACY = '/canjear';
 
-// Rutas relativas para el router (se monta con app.use('/regalos', router))
-const ROUTE_CANON = PATH_CANON;
-const ROUTE_ALIAS = PATH_ALIAS;
+const ROUTE_CANON = PATH_CANON;       // '/canjear-codigo'
+const ROUTE_ALIAS = PATH_ALIAS;       // '/canjear-codigo-regalo'
 
-// Boot log mínimo
+// Boot log mínimo (no expone secretos)
 console.log('[CANJ ROUTER] HMAC_REQUIRED=%s keys=%d secrets=%d', HMAC_REQUIRED, API_KEYS.length, SECRETS.length);
 
 /* ═════════════════════════════════════════
@@ -42,89 +41,95 @@ function safeEqHex(aHex, bHex) {
 
 /** Verifica HMAC: ts.POST.<path>.sha256(body) */
 async function verifyHmac(req, res, next) {
+  const reqId  = req.header('x-req-id') || '';
   const apiKey = req.header('x-api-key')  || '';
   const ts     = req.header('x-entr-ts')  || req.header('x-e-ts')  || '';
   const sig    = req.header('x-entr-sig') || req.header('x-e-sig') || '';
   const headerVariant = req.header('x-entr-sig') ? 'x-entr-*' : (req.header('x-e-sig') ? 'x-e-*' : 'none');
 
+  // Permite desactivar HMAC (solo entornos controlados) si faltan cabeceras
   if (!HMAC_REQUIRED && (!apiKey || !ts || !sig)) return next();
-  if (!apiKey || !ts || !sig) return res.status(401).json({ ok:false, error:'unauthorized' });
+
+  if (!apiKey || !ts || !sig) {
+    return res.status(401).json({ ok:false, error:'unauthorized' });
+  }
   if (!API_KEYS.length || !SECRETS.length) {
     try {
       await alertAdmin({
         area: 'regalos.canjear.hmac_config_missing',
         err: new Error('HMAC config missing'),
-        meta: { apiKeys: API_KEYS.length, secrets: SECRETS.length }
+        meta: { apiKeys: API_KEYS.length, secrets: SECRETS.length, reqId }
       });
     } catch (_) {}
     return res.status(500).json({ ok:false, error:'HMAC config missing' });
   }
-  if (!API_KEYS.includes(apiKey)) return res.status(401).json({ ok:false, error:'unauthorized' });
+  if (!API_KEYS.includes(apiKey)) {
+    return res.status(401).json({ ok:false, error:'unauthorized' });
+  }
 
   const tsNum = parseInt(ts, 10);
   if (!Number.isFinite(tsNum)) return res.status(400).json({ ok:false, error:'bad timestamp' });
   if (Math.abs(Date.now() - tsNum) > MAX_SKEW_MS) return res.status(401).json({ ok:false, error:'expired' });
 
-  const rawBody   = req.rawBody?.toString('utf8') || JSON.stringify(req.body || {});
-  const bodyHash  = crypto.createHash('sha256').update(rawBody, 'utf8').digest('hex');
-  const bodyHash10= bodyHash.slice(0,10);
+  // Cuerpo EXACTO (requiere app.use(express.json({ verify: (req, _res, buf) => { req.rawBody = buf } })))
+  const rawBody  = req.rawBody?.toString('utf8') || JSON.stringify(req.body || {});
+  const bodyHash = crypto.createHash('sha256').update(rawBody, 'utf8').digest('hex');
 
-  const candidates = [
-    BASE + PATH_CANON,
-    BASE + PATH_ALIAS,
-    BASE + PATH_LEGACY
-  ];
+  // Paths que podría haber firmado el emisor (WP MU)
+  const candidates = [BASE + PATH_CANON, BASE + PATH_ALIAS, BASE + PATH_LEGACY];
 
-  // Log base (auditable)
+  // Log base (auditable, sin exponer secretos)
+  const demoBase   = `${ts}.POST.${candidates[0]}.${bodyHash}`;
+  const base10Demo = demoBase.slice(0, 10);
   console.log('[CANJ HMAC BASE]', {
     ts: String(ts),
     path: req.path || '',
-    bodyHash10_raw: bodyHash10,
-    base10_raw: String(ts).slice(0,10),
-    sig10: String(sig).slice(0,10)
+    bodyHash10: bodyHash.slice(0, 10),
+    sig10: String(sig).slice(0, 10),
+    base10: base10Demo,
+    reqId
   });
 
   let ok = false;
-  let matched = '';
   let matchedPath = '';
   for (const p of candidates) {
     const base = `${ts}.POST.${p}.${bodyHash}`;
     for (const secret of SECRETS) {
       const exp = crypto.createHmac('sha256', secret).update(base, 'utf8').digest('hex');
-      if (safeEqHex(exp, sig)) {
-        ok = true;
-        matched = 'raw';
-        matchedPath = p;
-        break;
-      }
+      if (safeEqHex(exp, sig)) { ok = true; matchedPath = p; break; }
     }
     if (ok) break;
   }
-if (!ok) {
-    const meta = { ts: String(ts), headerVariant, pathTried: candidates, email: req.body?.email || null, codigo: req.body?.codigo || req.body?.codigo_regalo || null };
+
+  if (!ok) {
+    const meta = {
+      ts: String(ts),
+      headerVariant,
+      pathTried: candidates,
+      email: req.body?.email || null,
+      codigo: req.body?.codigo || req.body?.codigo_regalo || null,
+      reqId
+    };
     console.warn('[CANJ HMAC DENY]', meta);
     try {
-      await alertAdmin({
-        area: 'regalos.canjear.hmac_deny',
-        err: new Error('HMAC verification failed'),
-        meta
-      });
+      await alertAdmin({ area: 'regalos.canjear.hmac_deny', err: new Error('HMAC verification failed'), meta });
     } catch (_) {}
     return res.status(401).json({ ok:false, error:'unauthorized' });
   }
+
   // Log éxito (compacto)
   console.log('[CANJ HMAC OK]', {
     ts: String(ts),
-    sig10: String(sig).slice(0,10),
-    matched,
+    sig10: String(sig).slice(0, 10),
     headerVariant,
-    path: matchedPath
+    path: matchedPath,
+    reqId
   });
   return next();
 }
 
 /* ═════════════════════════════════════════
- *           MAPEO DE ERRORES → UX
+ *         MAPEO DE ERRORES → RESPUESTAS UX
  * ═════════════════════════════════════════ */
 function mapError(errMsg = '') {
   const msg = String(errMsg || '').toLowerCase();
@@ -145,6 +150,10 @@ function mapError(errMsg = '') {
     return { status: 422, error: 'Faltan datos: nombre, email, libro y código.' };
   }
 
+  if (msg.includes('too many requests') || msg.includes('rate')) {
+    return { status: 429, error: 'Demasiadas solicitudes. Inténtalo en un minuto.' };
+  }
+
   return { status: 500, error: 'Error interno. Inténtalo de nuevo.' };
 }
 
@@ -153,6 +162,7 @@ function mapError(errMsg = '') {
  * ═════════════════════════════════════════ */
 async function handleCanje(req, res) {
   try {
+    const reqId = req.header('x-req-id') || '';
     const b = req.body || {};
 
     // Normalización de entrada
@@ -160,40 +170,51 @@ async function handleCanje(req, res) {
     const apellidos     = String(b.apellidos || '').trim();
     const email         = String(b.email || '').trim().toLowerCase();
     const libroElegido  = String(b.libro_elegido || b.libro || b.elige_un_libro || '').trim();
-    const codigo        = String(b.codigo_regalo || b.codigo || b.codigoRegalo || '').trim().toUpperCase();
+    let   codigo        = String(b.codigo_regalo || b.codigo || b.codigoRegalo || '').trim().toUpperCase();
     const membershipId  = b.membershipId ? String(b.membershipId).trim() : '';
+
+    // Normalización defensiva del código:
+    // - quitar espacios
+    // - si viene como REGxxxxx/PRExxxxx, insertamos el guion
+    codigo = codigo.replace(/\s+/g, '');
+    if (/^(REG|PRE)[A-Z0-9]{5}$/.test(codigo)) {
+      codigo = codigo.slice(0, 3) + '-' + codigo.slice(3);
+    }
 
     if (!nombre || !email || !libroElegido || !codigo) {
       return res.status(422).json({ ok:false, error:'Faltan datos: nombre, email, libro y código.' });
     }
-    if (!/^(REG-|PRE-)/.test(codigo) || codigo.length < 7 || codigo.length > 64) {
+    // Regla estricta y alineada con el front: prefijo y 5 caracteres alfanuméricos
+    if (!/^(REG|PRE)-[A-Z0-9]{5}$/.test(codigo)) {
       return res.status(400).json({ ok:false, error:'Código inválido.' });
     }
 
-    // Llamada al servicio (el propio servicio refuerza idempotencia)
+    // Llamada al servicio (idempotencia y validaciones internas)
     const resp = await canjearCodigoRegalo({
       nombre,
       apellidos,
       email,
       libro_elegido: libroElegido,
       codigo_regalo: codigo,
+      reqId,
       ...(membershipId ? { membershipId } : {})
     });
 
-    // Si el servicio devuelve estructura de error
+    // Servicio devolvió error semántico
     if (!resp || resp.ok === false) {
       const errMsg = (resp && (resp.error || resp.motivo || resp.message)) || 'no es válido';
       const { status, error } = mapError(errMsg);
       return res.status(status).json({ ok:false, error });
     }
 
-    // Éxito → enviar message + mensaje para máxima compatibilidad
+    // Éxito
     return res.status(200).json({
       ok: true,
       message: 'Libro activado correctamente',
       mensaje: 'Libro activado correctamente',
       resultado: resp
     });
+
   } catch (err) {
     const { status, error } = mapError(err?.message || err);
     try {
@@ -203,7 +224,8 @@ async function handleCanje(req, res) {
         meta: {
           email: req.body?.email || null,
           codigo: req.body?.codigo || req.body?.codigo_regalo || null,
-          libro: req.body?.libro_elegido || req.body?.libro || null
+          libro: req.body?.libro_elegido || req.body?.libro || null,
+          reqId: req.header('x-req-id') || ''
         }
       });
     } catch (_) {}
@@ -214,7 +236,7 @@ async function handleCanje(req, res) {
 /* ═════════════════════════════════════════
  *                RUTAS (relativas)
  * ═════════════════════════════════════════ */
-// Estas rutas se montan con app.use('/regalos', router)
+// Se montan con app.use('/regalos', router)
 router.post(ROUTE_CANON, verifyHmac, handleCanje);   // POST /regalos/canjear-codigo
 router.post(ROUTE_ALIAS, verifyHmac, handleCanje);   // POST /regalos/canjear-codigo-regalo
 router.post(PATH_LEGACY, verifyHmac, handleCanje);   // POST /regalos/canjear (compat)

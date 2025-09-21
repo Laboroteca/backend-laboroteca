@@ -2,6 +2,10 @@
 
 const { google } = require('googleapis');
 const dayjs = require('dayjs');
+const utc = require('dayjs/plugin/utc');
+const tz = require('dayjs/plugin/timezone');
+dayjs.extend(utc);
+dayjs.extend(tz);
 const { auth } = require('../../entradas/google/sheetsAuth'); // ✅ Auth centralizado
 
 // 📊 ID y nombre de hoja según captura
@@ -26,7 +30,7 @@ module.exports = async function registrarCanjeEnSheet({
   codigo,
   libro
 }) {
-  const ts     = dayjs().format('YYYY-MM-DD HH:mm:ss');
+  const ts     = dayjs().tz('Europe/Madrid').format('DD/MM/YYYY HH:mm[h]');
   const cod    = String(codigo || '').trim().toUpperCase();
   const mail   = String(email || '').trim().toLowerCase();
   const nom    = String(nombre || '').trim();

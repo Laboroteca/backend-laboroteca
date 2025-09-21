@@ -41,10 +41,10 @@ Más información: https://www.laboroteca.es/politica-de-privacidad/
  * ───────────────────────────────────────── */
 function construirHTMLBase({ nombreMostrar, libroElegido }) {
   const miCuentaURL = 'https://www.laboroteca.es/mi-cuenta/';
-  // Solo los dos primeros renglones en negrita
+  // Solo la segunda línea en negrita
   return `
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.5;color:#111;">
-      <p style="margin:0 0 12px;font-size:16px;"><strong>¡Enhorabuena${nombreMostrar ? ', ' + nombreMostrar : ''}!</strong></p>
+      <p style="margin:0 0 12px;font-size:16px;">¡Enhorabuena${nombreMostrar ? ', ' + nombreMostrar : ''}!</p>
       <p style="margin:0 0 12px;"><strong>Tu código ha sido canjeado${libroElegido ? ` (${libroElegido})` : ''}.</strong></p>
 
       <p style="margin:0 0 16px;">
@@ -76,7 +76,8 @@ function construirTextoPlanoBase({ nombreMostrar, libroElegido }) {
  * ADVERTENCIA + separadores (opcional)
  * ───────────────────────────────────────── */
 const advertenciaHtml = `
-  <div style="font-size:14px;color:#606296;line-height:1.5;margin:8px 0;">
+  <!-- Color gris SOLO para la advertencia -->
+  <div style="font-size:14px; line-height:1.5; margin:8px 0; color:#606296;">
     <strong>Importante:</strong> tu acceso es personal e intransferible. Queda prohibido compartir tus claves con terceros o distribuir el material sin autorización. Si se detecta actividad sospechosa o irregular se puede suspender o bloquear la cuenta.
   </div>
 `.trim();

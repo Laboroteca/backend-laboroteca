@@ -20,10 +20,7 @@ function maskEmail(e) {
   const domainMasked = domain.replace(/[^.]/g, '•');
   return `${localMasked}@${domainMasked}`;
 }
-function maskDni(v) {
-  const s = String(v || '');
-  return s.length <= 4 ? '••••' : '••••' + s.slice(-4);
-}
+
 
 // ——— utilidades locales (solo para logs; sin PII) ———
 const safeLogMeta = ({ totalAsistentes, tipoProducto, nombreProducto, formularioId, fechaActuacion }) => ({
@@ -39,7 +36,11 @@ router.post('/crear-sesion-entrada', async (req, res) => {
   try {
     const datos = req.body;
     // Log crudo (debug puntual). NO incluye PII en alertas.
-    try { console.log('📥 Datos crudos recibidos:\n', JSON.stringify(datos, null, 2)); } catch {}
+    try {
+      if (String(process.env.DEBUG || '0') === '1') {
+        console.log('📥 Datos crudos recibidos:\n', JSON.stringify(datos, null, 2));
+      }
+    } catch {}
     // Si algún middleware anterior marcó rate-limit, corta limpio
     if (res.locals && res.locals.rateLimited) {
       return res.status(429).json({ error: 'Demasiadas solicitudes. Espera unos segundos e inténtalo de nuevo.' });
@@ -192,7 +193,7 @@ router.post('/crear-sesion-entrada', async (req, res) => {
       });
     } catch (e) {
       console.error('❌ Stripe error creando sesión:', {
-        type: e?.type, code: e?.code, param: e?.param, message: e?.message, requestId: e?.requestId
+        type: e?.type, code: e?.code, param: e?.param, message: e?.message, requestId: e?.requestId || undefined
       });
       try {
         await alertAdmin({

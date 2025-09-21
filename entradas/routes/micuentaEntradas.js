@@ -292,16 +292,27 @@ async function obtenerBuffersPdfsPorCodigos(descripcion, codigos) {
   const carpeta = `entradas/${slugify(descripcion)}/`;
   for (const codigo of unique) {
     const file = bucket.file(`${carpeta}${codigo}.pdf`);
-    const [exists] = await file.exists();
-    if (exists) {
-      const [buf] = await file.download();
-      entradasBuffers.push({ buffer: buf });
+    try {
+      const [exists] = await file.exists();
+      if (exists) {
+        const [buf] = await file.download();
+        entradasBuffers.push({ buffer: buf });
+      }
+    } catch (e) {
+      console.warn('⚠️ GCS download falló:', (e && e.message) || e);
     }
   }
   if (entradasBuffers.length > 0) return entradasBuffers;
 
   // 2) fallback: buscar {codigo}.pdf en cualquier subcarpeta de /entradas
-  const [allFiles] = await bucket.getFiles({ prefix: 'entradas/' });
+  let allFilesResp = [[]];
+  try {
+    allFilesResp = await bucket.getFiles({ prefix: 'entradas/' });
+  } catch (e) {
+    console.warn('⚠️ GCS list falló en fallback:', e?.message || e);
+    return entradasBuffers; // devolvemos lo que tengamos (posible 0)
+  }
+  const [allFiles] = allFilesResp;
   const need = new Set(unique.map(c => `${c}.pdf`));
 
   for (const f of allFiles) {

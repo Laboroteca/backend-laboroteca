@@ -14,11 +14,11 @@ const SMTP2GO_ENDPOINT = 'https://api.smtp2go.com/v3/email/send';
 const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 
 /* ─────────────────────────────────────────
- * Pie RGPD (14px, #606296) – actualizado
+ * Pie RGPD (14px, #777777) – actualizado
  * ───────────────────────────────────────── */
 const PIE_HTML = `
   <hr style="margin:16px 0;border:0;border-top:1px solid #bbb;" />
-  <div style="font-size:14px;color:#606296;line-height:1.5;">
+  <div style="font-size:14px;color:#777777;line-height:1.5;">
     En cumplimiento del Reglamento (UE) 2016/679 (RGPD) y la LOPDGDD, le informamos de que su dirección de correo electrónico forma parte de la base de datos de Ignacio Solsona Fernández-Pedrera (DNI 20481042W), con domicilio en calle Enmedio nº 22, 3.º E, 12001 Castellón de la Plana (España).<br /><br />
     Finalidades: prestación de servicios jurídicos, venta de infoproductos, gestión de entradas a eventos, emisión y envío de facturas por email y, en su caso, envío de newsletter y comunicaciones comerciales si usted lo ha consentido. Base jurídica: ejecución de contrato y/o consentimiento. Puede retirar su consentimiento en cualquier momento.<br /><br />
     Puede ejercer sus derechos de acceso, rectificación, supresión, portabilidad, limitación y oposición escribiendo a <a href="mailto:laboroteca@gmail.com">laboroteca@gmail.com</a>. También puede presentar una reclamación ante la autoridad de control competente. Más información en nuestra política de privacidad: <a href="https://www.laboroteca.es/politica-de-privacidad/" target="_blank" rel="noopener">https://www.laboroteca.es/politica-de-privacidad/</a>.

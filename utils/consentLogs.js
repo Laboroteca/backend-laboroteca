@@ -20,7 +20,7 @@ const BUCKET_NAME =
    '').trim();
 
 const PROJECT_TIMEZONE = process.env.PROJECT_TZ || 'Europe/Madrid'; // reservado (formateos futuros)
-
+const REG_FORMS = new Set(['5','14']); // forms considerados "registro"
 // ───────────────────────────── Firebase Admin ─────────────────────────────
 if (!admin.apps.length) {
   try { admin.initializeApp(); } catch (_) { /* noop */ }
@@ -196,9 +196,10 @@ function normalizeInput(payload = {}) {
     ip: safe(ip),
     source: safe(source),
 
+    // Normaliza checkboxes a booleanos "reales"
     checkboxes: {
-      privacy: !!(checkboxes && (checkboxes.privacy !== false)),
-      terms:   !!(checkboxes && (checkboxes.terms   !== false)),
+      privacy: !!(checkboxes && (checkboxes.privacy !== false && checkboxes.privacy !== 'false' && checkboxes.privacy !== 0)),
+      terms:   !!(checkboxes && (checkboxes.terms   !== false && checkboxes.terms   !== 'false' && checkboxes.terms   !== 0)),
     },
 
     acceptedAt: admin.firestore.Timestamp.fromDate(new Date(acceptedAtISO)),
@@ -235,8 +236,8 @@ function isRegistrationFlow(data) {
   const fid = String(data.formularioId || '');
   const src = (data.source || '').toLowerCase();
 
-  if (tp.includes('registro')) return true;
-  if (['5','14'].includes(fid)) return true;
+  if (tp.includes('registro') || tp.includes('alta')) return true;
+  if (REG_FORMS.has(fid)) return true;
   if (/form[_-]?0*(5|14)\b/.test(src)) return true;
   return false;
 }
@@ -265,6 +266,8 @@ async function registrarConsentimiento(payload) {
     data.termsUrl = '';
     data.termsVersion = '';
     data.termsHash = '';
+    // Y marcamos explícitamente que no se aceptaron términos en este flujo
+    if (data.checkboxes) data.checkboxes.terms = false;
   }
 
   // 1) Crear doc inicial
@@ -374,8 +377,8 @@ async function registrarConsentimiento(payload) {
       }
     }
 
-    // TERMS (solo si NO es registro y existe url+versión)
-    if (!registro && data.termsUrl && data.termsVersion) {
+    // TERMS (solo si NO es registro y existe url+versión y el checkbox "terms" está afirmativo)
+    if (!registro && data.checkboxes.terms && data.termsUrl && data.termsVersion) {
       try {
         const rawHtml = await fetchHtml(data.termsUrl);
         const htmlBufIndividual = buildSnapshotHtml({
@@ -483,7 +486,8 @@ async function registrarConsentimiento(payload) {
 
   // 6) Señal si faltó algún snapshot esperado
   const expectedPrivacy = !!data.privacyUrl && !!data.privacyVersion;
-  const expectedTerms   = !registro && !!data.termsUrl && !!data.termsVersion;
+  // Para T&C exigimos: NO registro, checkbox de términos afirmativo y URL+versión válidas
+  const expectedTerms   = (!registro && !!data.checkboxes.terms && !!data.termsUrl && !!data.termsVersion);
 
   if ((expectedPrivacy && !privacySnapshotOk) || (expectedTerms && !termsSnapshotOk)) {
     await alertAdmin({

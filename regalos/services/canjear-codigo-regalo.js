@@ -51,11 +51,20 @@ function rid() {
 function L(id, msg, meta) { console.log(`[CANJEAR ${id}] ${msg}${meta ? ' :: ' + JSON.stringify(meta) : ''}`); }
 function W(id, msg, meta) { console.warn(`[CANJEAR ${id}] ${msg}${meta ? ' :: ' + JSON.stringify(meta) : ''}`); }
 function E(id, msg, err) {
-  console.error(`[CANJEAR ${id}] ERROR ${msg} :: ${JSON.stringify({
-    message: err?.message || String(err),
-    stack: err?.stack
-  })}`);
+  // Log sin PII/stack verboso
+  console.error(`[CANJEAR ${id}] ERROR ${msg} :: ${String(err?.message || err)}`);
 }
+
+// RGPD helpers
+const isEmail = (e) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(e||''));
+const maskEmail = (e='') => {
+  const s = String(e||''); const i = s.indexOf('@'); if (i<1) return s ? '***' : '';
+  const u=s.slice(0,i), d=s.slice(i+1);
+  const um = u.length<=2 ? (u[0]||'*') : (u.slice(0,2)+'***'+u.slice(-1));
+  const dm = d.length<=3 ? '***' : ('***'+d.slice(-3));
+  return `${um}@${dm}`;
+};
+const maskCode = (c='') => String(c||'').replace(/.(?=.{3}$)/g,'•'); // deja 3 últimos
 
 // Backoff simple con reintentos
 async function withRetries(reqId, label, fn, { tries = 5, baseMs = 120 } = {}) {
@@ -113,9 +122,9 @@ module.exports = async function canjearCodigoRegalo({
   const libroNorm  = String(libro_elegido || libro || '').trim();
   const tsHuman    = dayjs().format('YYYY-MM-DD HH:mm:ss');
 
-  L(reqId, 'START', { email: emailNorm, libro: libroNorm, codigo: codigoNorm });
+  L(reqId, 'START', { email: maskEmail(emailNorm), libro: libroNorm, codigo: maskCode(codigoNorm) });
 
-  if (!nombre || !emailNorm || !libroNorm || !codigoNorm) {
+  if (!nombre || !emailNorm || !libroNorm || !codigoNorm || !isEmail(emailNorm)) {
     throw new Error('Faltan datos obligatorios.');
   }
 
@@ -155,6 +164,7 @@ module.exports = async function canjearCodigoRegalo({
       try {
         await alertAdmin({
           area: 'regalos.canje.validacion_reg_error',
+          email: emailNorm,
           err: e,
           meta: { reqId, email: emailNorm, codigo: codigoNorm }
         });
@@ -207,6 +217,7 @@ module.exports = async function canjearCodigoRegalo({
       try {
         await alertAdmin({
           area: 'regalos.canje.validacion_pre_error',
+          email: emailNorm,
           err: e,
           meta: { reqId, email: emailNorm, codigo: codigoNorm }
         });
@@ -246,6 +257,7 @@ module.exports = async function canjearCodigoRegalo({
       try {
         await alertAdmin({
           area: 'regalos.canje.firestore_create_error',
+          email: emailNorm,
           err: e,
           meta: { reqId, email: emailNorm, codigo: codigoNorm }
         });
@@ -270,6 +282,7 @@ module.exports = async function canjearCodigoRegalo({
       try {
         await alertAdmin({
           area: 'regalos.canje.sheets_append_error',
+          email: emailNorm,
           err: e,
           meta: { reqId, email: emailNorm, codigo: codigoNorm, libro: libroNorm, sheetId: SHEET_ID_REGALOS, sheetName: SHEET_NAME_REGALOS }
         });
@@ -324,6 +337,7 @@ module.exports = async function canjearCodigoRegalo({
     try {
       await alertAdmin({
         area: 'regalos.canje.memberpress_error',
+        email: emailNorm,
         err,
         meta: { reqId, email: emailNorm, codigo: codigoNorm, libro: libroNorm }
       });
@@ -337,6 +351,7 @@ module.exports = async function canjearCodigoRegalo({
       try {
         await alertAdmin({
           area: 'regalos.canje.sheets_aux_error',
+          email: emailNorm,
           err: e,
           meta: { reqId, email: emailNorm, codigo: codigoNorm, libro: libroDisplay }
         });
@@ -351,6 +366,7 @@ module.exports = async function canjearCodigoRegalo({
         try {
           await alertAdmin({
             area: 'regalos.canje.marcar_reg_error',
+            email: emailNorm,
             err: e,
             meta: { reqId, codigo: codigoNorm, email: emailNorm }
           });
@@ -367,6 +383,6 @@ module.exports = async function canjearCodigoRegalo({
     } catch (e) { W(reqId, 'Excepción enviando email', { msg: e?.message }); }
   })();
 
-  L(reqId, 'FIN', { ms: Date.now() - t0, codigo: codigoNorm, email: emailNorm });
+  L(reqId, 'FIN', { ms: Date.now() - t0, codigo: maskCode(codigoNorm), email: maskEmail(emailNorm) });
   return { ok: true, reqId };
 };

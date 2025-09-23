@@ -9,9 +9,23 @@ const SITE_URL = (process.env.MP_SITE_URL || process.env.WP_BASE_URL || 'https:/
   .replace(/\/+$/, '');
 const MP_KEY = process.env.MEMBERPRESS_KEY || '';
 
-console.log("🛠 MemberPress config:");
-console.log("   📍 SITE_URL =", SITE_URL);
-console.log("   🔑 MEMBERPRESS_KEY =", MP_KEY ? `${MP_KEY} (OK)` : "(VACÍO)");
+console.log('🛠 MemberPress config:');
+console.log('   📍 SITE_URL =', SITE_URL);
+// 🔒 No exponemos la API key completa en logs
+function maskSecret(s) {
+  if (!s) return '(VACÍO)';
+  if (s.length <= 8) return '****';
+  return `${s.slice(0, 2)}…${s.slice(-2)}`;
+}
+console.log('   🔑 MEMBERPRESS_KEY =', maskSecret(MP_KEY));
+
+// 🔒 Redactar emails en trazas (RGPD): logs ≠ PII. En alertas mantenemos el email completo.
+function redactEmail(e) {
+  const s = String(e || '').toLowerCase();
+  if (!s.includes('@')) return s ? '***' : '';
+  const [u, d] = s.split('@');
+  return `${u.slice(0, 2)}***@***${d.slice(-3)}`;
+}
 
 // ============================
 // 🔗 CLIENTE AXIOS
@@ -45,12 +59,13 @@ function pickFirstMember(respData) {
 // 🔍 BUSCAR MIEMBRO POR EMAIL
 // ============================
 async function getMemberByEmail(email) {
-  console.log(`🔎 Buscando miembro por email en MemberPress: ${email}`);
+  console.log(`🔎 Buscando miembro por email en MemberPress: ${redactEmail(email)}`);
   let headers;
   try {
     headers = buildHeaders();
   } catch (e) {
     try {
+      // En alertas sí enviamos el email completo (canal controlado)
       await alertAdmin({
         area: 'memberpress.build_headers_missing_key',
         err: e,
@@ -65,16 +80,17 @@ async function getMemberByEmail(email) {
     const { data } = await mp.get('/members', { headers, params });
     const member = pickFirstMember(data);
     if (member) {
-      console.log(`✅ Usuario encontrado: ID=${member.id}, Email=${member.email || 'N/A'}`);
+      console.log(`✅ Usuario encontrado: ID=${member.id}, Email=${redactEmail(member.email || '')}`);
     } else {
-      console.warn(`⚠️ Usuario no encontrado para email: ${email}`);
+      console.warn(`⚠️ Usuario no encontrado para email: ${redactEmail(email)}`);
     }
     return member;
   } catch (err) {
-    console.error(`❌ Error buscando miembro (${email}):`, err.message);
+    console.error(`❌ Error buscando miembro (${redactEmail(email)}):`, err.message);
     if (err.response) {
+      // 🔒 No volcar cuerpos de respuesta (pueden contener PII)
       console.error('🔍 Status:', err.response.status);
-      console.error('🔍 Body:', err.response.data);
+      console.error('🔍 Body: [REDACTED]');
     }
     try {
       await alertAdmin({
@@ -106,7 +122,8 @@ async function activarMembresiaEnMemberPress(email, membershipId) {
         meta: { email, membershipId }
       });
     } catch (_) {}
-    throw new Error(`Usuario no encontrado en MemberPress por email: ${email}`);
+    // 🔒 Mensaje genérico hacia fuera (no PII)
+    throw new Error('Usuario no encontrado en MemberPress por email indicado');
   }
 
   let headers;
@@ -135,18 +152,18 @@ async function activarMembresiaEnMemberPress(email, membershipId) {
     gateway: 'manual',
   });
 
-  console.log(`📡 Creando transacción manual: memberId=${member.id}, membershipId=${membershipId}`);
+  console.log(`📡 Creando transacción manual: memberId=${member.id}, membershipId=${membershipId} para ${redactEmail(email)}`);
 
   try {
     const { data } = await mp.post('/transactions', body, { headers });
-    console.log(`✅ MP: membresía ${membershipId} activada para ${email} (memberId=${member.id})`);
+    console.log(`✅ MP: membresía ${membershipId} activada para ${redactEmail(email)} (memberId=${member.id})`);
     return data;
   } catch (err) {
     console.error('❌ Error activando membresía (transactions):', err.message);
     if (err.response) {
+      // 🔒 No loguear headers/body completos (podrían incluir datos personales)
       console.error('🔍 Status:', err.response.status);
-      console.error('🔍 Headers:', err.response.headers);
-      console.error('🔍 Body:', err.response.data);
+      console.error('🔍 Body: [REDACTED]');
     }
     try {
       await alertAdmin({
@@ -160,9 +177,8 @@ async function activarMembresiaEnMemberPress(email, membershipId) {
         }
       });
     } catch (_) {}
-    throw new Error(typeof err.response?.data === 'string'
-      ? err.response.data
-      : JSON.stringify(err.response?.data || err.message));
+    // 🔒 Mensaje genérico hacia fuera (evita propagar PII del backend)
+    throw new Error(`Fallo al activar la membresía (status ${err?.response?.status || 'ERR'})`);
   }
 }
 

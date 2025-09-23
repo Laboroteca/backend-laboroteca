@@ -4,6 +4,17 @@
 const { activarMembresia } = require('./memberpress');
 const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 
+// RGPD: util para enmascarar email en logs
+function maskEmail(e='') {
+  const s = String(e||''); const i = s.indexOf('@');
+  if (i<=0) return s ? '***' : '';
+  const u=s.slice(0,i), d=s.slice(i+1);
+  const um = u.length<=2 ? (u[0]||'*') : (u.slice(0,2)+'***'+u.slice(-1));
+  const dm = d.length<=3 ? '***' : ('***'+d.slice(-3));
+  return `${um}@${dm}`;
+}
+const isEmail = (e) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(e||''));
+
 /**
  * Normaliza a "slug" simple: minúsculas, sin acentos, separadores a '-'.
  */
@@ -44,7 +55,7 @@ module.exports = async function activarMembresiaPorRegalo(email, libro) {
   const emailNormalizado = String(email || '').trim().toLowerCase();
   const slugEntrada      = toSlug(libro);
 
-  if (!emailNormalizado || !slugEntrada) {
+  if (!emailNormalizado || !slugEntrada || !isEmail(emailNormalizado)) {
     throw new Error('Faltan datos para activar la membresía.');
   }
 
@@ -56,6 +67,7 @@ module.exports = async function activarMembresiaPorRegalo(email, libro) {
     try {
       await alertAdmin({
         area: 'regalos.activarMembresiaPorRegalo.libro_desconocido',
+        email: emailNormalizado,
         err: new Error('No se reconoce el libro seleccionado.'),
         meta: { email: emailNormalizado, libroOriginal: String(libro || ''), slugCalculado: slugEntrada }
       });
@@ -78,11 +90,12 @@ module.exports = async function activarMembresiaPorRegalo(email, libro) {
 
   try {
     await activarMembresia(emailNormalizado, productId);
-    console.log(`🎁 Membresía ${productId} activada por regalo para ${emailNormalizado} (libro=${slugEntrada})`);
+    console.log(`🎁 Membresía ${productId} activada por regalo para ${maskEmail(emailNormalizado)} (libro=${slugEntrada})`);
   } catch (err) {
     try {
       await alertAdmin({
         area: 'regalos.activarMembresiaPorRegalo.error_memberpress',
+        email: emailNormalizado,
         err,
         meta: {
           email: emailNormalizado,
@@ -93,6 +106,7 @@ module.exports = async function activarMembresiaPorRegalo(email, libro) {
         }
       });
     } catch (_) {}
-    throw err;
+    // Mensaje neutro hacia capas superiores
+    throw new Error('No se pudo activar la membresía.');
   }
 };

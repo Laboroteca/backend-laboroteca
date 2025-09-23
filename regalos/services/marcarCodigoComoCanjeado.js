@@ -31,6 +31,21 @@ module.exports = async function marcarCodigoComoCanjeado(codigo) {
   const authClient = await auth();
   const sheets = google.sheets({ version: 'v4', auth: authClient });
 
+  // Reintentos suaves para 429/5xx
+  const withRetries = async (fn, { tries = 4, baseMs = 150 } = {}) => {
+    let last;
+    for (let i = 1; i <= tries; i++) {
+      try { return await fn(); }
+      catch (e) {
+        const status = Number(e?.code || e?.response?.status || 0);
+        if (i === tries || !(status === 429 || (status >= 500 && status < 600))) throw e;
+        await new Promise(r => setTimeout(r, baseMs * (2 ** (i - 1))));
+        last = e;
+      }
+    }
+    throw last;
+  };
+
   async function getSheetMeta(spreadsheetId, title) {
     const meta = await sheets.spreadsheets.get({ spreadsheetId });
     const sh = (meta.data.sheets || []).find(s => s.properties.title === title);
@@ -62,7 +77,9 @@ module.exports = async function marcarCodigoComoCanjeado(codigo) {
     });
   }
 
+  const ENSURE_CF_EACH_TIME = String(process.env.SHEET_ENSURE_CF_EACH_TIME || '0') === '1';
   async function ensureCondFormats(spreadsheetId, sheetId) {
+    if (!ENSURE_CF_EACH_TIME) return; // evita rehacer CF en cada canje
     try {
       await sheets.spreadsheets.batchUpdate({
         spreadsheetId,
@@ -93,10 +110,10 @@ module.exports = async function marcarCodigoComoCanjeado(codigo) {
   }
 
   try {
-    const read = await sheets.spreadsheets.values.get({
+    const read = await withRetries(() => sheets.spreadsheets.values.get({
       spreadsheetId: SHEET_ID_CONTROL,
       range: `'${SHEET_NAME_CONTROL}'!C:E`,
-    });
+    }));
     const rows = read.data.values || [];
     const idx = rows.findIndex(r => (r[0] || '').toString().trim().toUpperCase() === cod);
     if (idx < 0) {
@@ -112,16 +129,17 @@ module.exports = async function marcarCodigoComoCanjeado(codigo) {
     }
     const rowNumber = idx + 1;
 
-    await sheets.spreadsheets.values.update({
+    await withRetries(() => sheets.spreadsheets.values.update({
       spreadsheetId: SHEET_ID_CONTROL,
       range: `'${SHEET_NAME_CONTROL}'!E${rowNumber}`,
       valueInputOption: 'USER_ENTERED',
       requestBody: { values: [['SÍ']] },
-    });
+    }));
 
     const meta = await getSheetMeta(SHEET_ID_CONTROL, SHEET_NAME_CONTROL);
     if (meta?.sheetId != null) {
-      await sheets.spreadsheets.batchUpdate({
+      // Sólo coloreo directo a la fila tocada; el “reset” masivo es opcional y costoso
+      await withRetries(() => sheets.spreadsheets.batchUpdate({
         spreadsheetId: SHEET_ID_CONTROL,
         requestBody: {
           requests: [{
@@ -143,9 +161,9 @@ module.exports = async function marcarCodigoComoCanjeado(codigo) {
             }
           }]
         }
-      });
+      }));
 
-      await resetColumnEBaseFormat(SHEET_ID_CONTROL, meta.sheetId, meta.rowCount);
+      // Mantén reglas condicionales sólo si lo pides explícitamente por env
       await ensureCondFormats(SHEET_ID_CONTROL, meta.sheetId);
     }
 

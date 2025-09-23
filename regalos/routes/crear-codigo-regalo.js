@@ -26,12 +26,27 @@ const REGALOS_DEBUG = String(process.env.REGALOS_SYNC_DEBUG || '').trim() === '1
 const LEGACY_TOKEN  = (process.env.FLUENTFORM_TOKEN || '').trim();
 
 function maskTail(s) { return s ? `••••${String(s).slice(-4)}` : null; }
+function maskEmail(e='') {
+  const s = String(e||''); const i = s.indexOf('@');
+  if (i<=0) return s ? '***' : '';
+  const u=s.slice(0,i), d=s.slice(i+1);
+  const um = u.length<=2 ? (u[0]||'*') : (u.slice(0,2)+'***'+u.slice(-1));
+  const dm = d.length<=3 ? '***' : ('***'+d.slice(-3));
+  return `${um}@${dm}`;
+}
+function maskCode(c='') {
+  const m = String(c||'').trim().match(/^([A-Z]{3})-([A-Z0-9]{5})$/);
+  return m ? `${m[1]}-*****` : '*****';
+}
 
 async function verifyRegalosHmac(req, res, next) {
   // 0) Compat legacy: Authorization Bearer
   const bearer = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim();
-  if (bearer && bearer === LEGACY_TOKEN) {
-    console.log('[REGALOS AUTH] LEGACY Bearer OK');
+  const ALLOW_LEGACY = String(process.env.ALLOW_LEGACY_BEARER || '0') === '1';
+  const ALLOW_IPS = String(process.env.LEGACY_ALLOW_IPS || '').split(',').map(s=>s.trim()).filter(Boolean);
+  const reqIp = (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim();
+  if (ALLOW_LEGACY && bearer && bearer === LEGACY_TOKEN && (!ALLOW_IPS.length || ALLOW_IPS.includes(reqIp))) {
+    console.log('[REGALOS AUTH] LEGACY Bearer OK (ip=%s)', reqIp);
     return next();
   }
 
@@ -60,8 +75,14 @@ async function verifyRegalosHmac(req, res, next) {
   }
 
   // 2) Cuerpo exacto y firma
-  const rawStr  = req.rawBody ? req.rawBody.toString('utf8') : '';
-  const jsonStr = rawStr || JSON.stringify(req.body || {});
+  const ct = String(req.headers['content-type'] || '').toLowerCase();
+  if (!ct.startsWith('application/json')) {
+    return res.status(415).json({ error: 'Unsupported Media Type' });
+  }
+  if (!req.rawBody || !Buffer.isBuffer(req.rawBody)) {
+    return res.status(400).json({ error: 'NO_RAW_BODY' });
+  }
+  const jsonStr = req.rawBody.toString('utf8');
   const bodyHash = crypto.createHash('sha256').update(jsonStr, 'utf8').digest('hex');
 
   // Path solo pathname (sin query)
@@ -313,7 +334,7 @@ ${saludo}
 
 
       await enviarEmailPersonalizado({ to: email, subject, text: textoPlano, html });
-      console.log(`📧 Email de regalo enviado a ${email} (codigo ${codigo})`);
+      console.log(`📧 Email de regalo enviado a ${maskEmail(email)} (codigo ${maskCode(codigo)})`);
     } catch (mailErr) {
       emailedOk = false;
       console.warn('⚠️ No se pudo enviar el email al beneficiario:', mailErr?.message || mailErr);
@@ -327,7 +348,7 @@ ${saludo}
       } catch (_) {}
     }
 
-    console.log(`🎁 Código REGALO creado → ${codigo} para ${email} | Otorgante: ${otorganteEmail || 'desconocido'}`);
+    console.log(`🎁 Código REGALO creado → ${maskCode(codigo)} para ${maskEmail(email)} | Otorgante: ${maskEmail(otorganteEmail || '') || 'desconocido'}`);
     return res.status(201).json({ ok: true, codigo, otorgante_email: otorganteEmail || null, emailed: emailedOk });
   } catch (err) {
     console.error('❌ Error en /crear-codigo-regalo:', err?.message || err);

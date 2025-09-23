@@ -13,6 +13,18 @@
 const SMTP2GO_ENDPOINT = 'https://api.smtp2go.com/v3/email/send';
 const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 
+// ── helpers RGPD/seguridad
+const isEmail = (e) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(e||''));
+const maskEmail = (e='') => {
+  const s = String(e||''); const i = s.indexOf('@'); if (i<1) return s ? '***' : '';
+  const u=s.slice(0,i), d=s.slice(i+1);
+  return `${(u.slice(0,2)||'*')}***@***${d.slice(-3)}`;
+};
+const esc = (t='') => String(t)
+  .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+  .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+
+
 /* ─────────────────────────────────────────
  * Pie RGPD (14px, #777777) – actualizado
  * ───────────────────────────────────────── */
@@ -129,7 +141,7 @@ async function enviarEmailCanjeLibro({
     } catch (_) {}
     return { ok: false, error: 'SMTP2GO_API_KEY missing' };
   }
-  if (!toEmail) {
+  if (!toEmail || !isEmail(toEmail)) {
     return { ok: false, error: 'Parámetros insuficientes (toEmail)' };
   }
 
@@ -142,10 +154,13 @@ async function enviarEmailCanjeLibro({
     pick([nombre, apellidos].filter(Boolean).join(' ')) ||
     (toEmail ? String(toEmail).split('@')[0] : '');
 
-  const subject = `✅ Código canjeado${libroElegido ? `: ${libroElegido}` : ''}`;
+  const subject = `✅ Código canjeado${libroElegido ? `: ${String(libroElegido).trim()}` : ''}`;
 
   // Base sin “Recuerda”
-  const htmlBase = construirHTMLBase({ nombreMostrar, libroElegido });
+  const htmlBase = construirHTMLBase({
+    nombreMostrar: esc(nombreMostrar),
+    libroElegido : libroElegido ? esc(String(libroElegido).trim()) : ''
+  });
   const textBase = construirTextoPlanoBase({ nombreMostrar, libroElegido });
 
   // Ensamblado final con ADVERTENCIA y PIE RGPD
@@ -170,7 +185,8 @@ async function enviarEmailCanjeLibro({
     ],
   };
 
-  try {
+  // Reintentos suaves para fallos de red/5xx
+  const sendOnce = async () => {
     const res = await fetch(SMTP2GO_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -178,12 +194,12 @@ async function enviarEmailCanjeLibro({
     });
     const data = await res.json().catch(() => ({}));
 
-    // Éxito típico: data.data.succeeded === 1
     if (!res.ok || (data && data.data && data.data.succeeded !== 1)) {
       console.error('❌ Error SMTP2GO:', res.status, data);
       try {
         await alertAdmin({
           area: 'regalos.email.smtp_send_error',
+          email: toEmail,
           err: new Error(`SMTP2GO status ${res.status}`),
           meta: {
             toEmail,
@@ -194,17 +210,29 @@ async function enviarEmailCanjeLibro({
           }
         });
       } catch (_) {}
-      return { ok: false, error: `SMTP2GO status ${res.status}` };
+      throw new Error(`SMTP2GO status ${res.status}`);
     }
 
     const messageId = data?.data?.messages?.[0]?.message_id || '';
-    console.log(`📧 Email canje libro enviado a ${toEmail} (${messageId || 'sin id'})`);
-    return { ok: true, id: messageId };
+    console.log(`📧 Email canje libro enviado a ${maskEmail(toEmail)} (${messageId || 'sin id'})`);
+    return { ok:true, id: messageId };
+  };
+
+  try {
+    // 3 intentos: 0ms, 400ms, 1600ms si 5xx/red
+    const tries = [0, 400, 1600];
+    let lastErr;
+    for (const wait of tries) {
+      try { if (wait) await new Promise(r=>setTimeout(r, wait)); return await sendOnce(); }
+      catch (e) { lastErr = e; if (!(String(e.message||'').includes('5') || String(e.message||'').includes('status'))) break; }
+    }
+    throw lastErr;
   } catch (err) {
     console.error('❌ Excepción SMTP2GO:', err?.message || err);
     try {
       await alertAdmin({
         area: 'regalos.email.smtp_exception',
+        email: toEmail,
         err,
         meta: { toEmail, libro: libroElegido || null, subject }
       });

@@ -27,6 +27,22 @@ const ROUTE_ALIAS = PATH_ALIAS;       // '/canjear-codigo-regalo'
 
 // Boot log mínimo (no expone secretos)
 console.log('[CANJ ROUTER] HMAC_REQUIRED=%s keys=%d secrets=%d', HMAC_REQUIRED, API_KEYS.length, SECRETS.length);
+// RGPD: utilidades de enmascarado para logs
+function maskEmail(e='') {
+  const s = String(e||''); const i = s.indexOf('@');
+  if (i<=0) return s ? '***' : '';
+  const u = s.slice(0,i), d = s.slice(i+1);
+  const um = u.length<=2 ? (u[0]||'*') : (u.slice(0,2)+'***'+u.slice(-1));
+  const dm = d.length<=3 ? '***' : ('***'+d.slice(-3));
+  return `${um}@${dm}`;
+}
+function maskCode(c='') {
+  const s = String(c||'').trim();
+  if (!s) return '';
+  // Mantén el prefijo y oculta la parte sensible
+  const m = s.match(/^([A-Z]{3})-([A-Z0-9]{5})$/);
+  return m ? `${m[1]}-*****` : '*****';
+}
 
 /* ═════════════════════════════════════════
  *                HELPERS
@@ -72,7 +88,10 @@ async function verifyHmac(req, res, next) {
   if (Math.abs(Date.now() - tsNum) > MAX_SKEW_MS) return res.status(401).json({ ok:false, error:'expired' });
 
   // Cuerpo EXACTO (requiere app.use(express.json({ verify: (req, _res, buf) => { req.rawBody = buf } })))
-  const rawBody  = req.rawBody?.toString('utf8') || JSON.stringify(req.body || {});
+  if (!req.rawBody || !Buffer.isBuffer(req.rawBody)) {
+    return res.status(400).json({ ok:false, error:'no_raw_body' });
+  }
+  const rawBody  = req.rawBody.toString('utf8');
   const bodyHash = crypto.createHash('sha256').update(rawBody, 'utf8').digest('hex');
 
   // Paths que podría haber firmado el emisor (WP MU)
@@ -106,13 +125,25 @@ async function verifyHmac(req, res, next) {
       ts: String(ts),
       headerVariant,
       pathTried: candidates,
-      email: req.body?.email || null,
-      codigo: req.body?.codigo || req.body?.codigo_regalo || null,
+      // LOGS: PII enmascarada
+      emailMasked: maskEmail(req.body?.email || ''),
+      codigoMasked: maskCode(req.body?.codigo || req.body?.codigo_regalo || ''),
       reqId
     };
     console.warn('[CANJ HMAC DENY]', meta);
     try {
-      await alertAdmin({ area: 'regalos.canjear.hmac_deny', err: new Error('HMAC verification failed'), meta });
+      // ALERTA: email/código completos para soporte
+      await alertAdmin({
+        area: 'regalos.canjear.hmac_deny',
+        email: req.body?.email || '-',
+        err: new Error('HMAC verification failed'),
+        meta: {
+          codigo: req.body?.codigo || req.body?.codigo_regalo || null,
+          headerVariant,
+          pathTried: candidates,
+          reqId
+        }
+      });
     } catch (_) {}
     return res.status(401).json({ ok:false, error:'unauthorized' });
   }
@@ -222,8 +253,8 @@ async function handleCanje(req, res) {
         area: 'regalos.canjear.exception',
         err,
         meta: {
-          email: req.body?.email || null,
-          codigo: req.body?.codigo || req.body?.codigo_regalo || null,
+          email: req.body?.email || null,      // OK: admin recibe completo
+          codigo: req.body?.codigo || req.body?.codigo_regalo || null, // OK en admin
           libro: req.body?.libro_elegido || req.body?.libro || null,
           reqId: req.header('x-req-id') || ''
         }

@@ -7,10 +7,24 @@ const tz = require('dayjs/plugin/timezone');
 dayjs.extend(utc);
 dayjs.extend(tz);
 const { auth } = require('../../entradas/google/sheetsAuth'); // ✅ Auth centralizado
+const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 
-// 📊 ID y nombre de hoja según captura
-const SHEET_ID_CANJES = '1MjxXebR3oQIyu0bYeRWo83Xzj1sBFnDcx53HvRRBiGE';
-const SHEET_NAME_CANJES = 'Hoja 1';
+// 📊 ID y nombre de hoja (env override) — corrige ID y permite configurar por entorno
+const SHEET_ID_CANJES   = process.env.SHEET_ID_CANJES
+  || '1MjxXebR3oQIyu0bYeRWo83xj1sBFnDcx53HvRRBiGE'; // ← corregido: "...83xj1..." (antes "83Xzj1")
+const SHEET_NAME_CANJES = process.env.SHEET_NAME_CANJES || 'Hoja 1';
+
+// 🛡️ Utilidades RGPD
+const redactEmail = (e) => {
+  const s = String(e || '').toLowerCase();
+  if (!s.includes('@')) return s ? '***' : '';
+  const [u, d] = s.split('@');
+  return `${u.slice(0, 2)}***@***${d.slice(-3)}`;
+};
+const a1 = (tab, range) => {
+  const t = String(tab || '').trim().replace(/'/g, "''");
+  return /[^A-Za-z0-9_]/.test(t) ? `'${t}'!${range}` : `${t}!${range}`;
+};
 
 /**
  * Registra cualquier canje (entrada o regalo) en la hoja de control de canjes.
@@ -49,19 +63,41 @@ module.exports = async function registrarCanjeEnSheet({
     const authClient = await auth();
     const sheets = google.sheets({ version: 'v4', auth: authClient });
 
-    console.log(`📤 Registrando en Google Sheet: ID=${SHEET_ID_CANJES}, Hoja="${SHEET_NAME_CANJES}"`);
+    // Reintentos suaves para 429/5xx
+    const withRetries = async (fn, { tries = 4, baseMs = 150 } = {}) => {
+      let last;
+      for (let i = 1; i <= tries; i++) {
+        try { return await fn(); }
+        catch (e) {
+          const status = Number(e?.code || e?.response?.status || 0);
+          if (i === tries || !(status === 429 || (status >= 500 && status < 600))) throw e;
+          await new Promise(r => setTimeout(r, baseMs * (2 ** (i - 1))));
+          last = e;
+        }
+      }
+      throw last;
+    };
 
-    await sheets.spreadsheets.values.append({
+    console.log(`📤 Registrando canje en Sheet "${SHEET_NAME_CANJES}" → ${redactEmail(mail)} (${origen})`);
+
+    await withRetries(() => sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID_CANJES,
-      range: `${SHEET_NAME_CANJES}!A2:G`,
+      range: a1(SHEET_NAME_CANJES, 'A2:G'),
       valueInputOption: 'USER_ENTERED',
       requestBody: {
         values: [[ ts, nom, ape, mail, libroN, cod, origen ]]
       }
-    });
+    }));
 
-    console.log(`📄 Canje registrado en hoja: ${cod} (${origen}) → ${mail}`);
+    console.log(`📄 Canje registrado: ${cod} (${origen}) → ${redactEmail(mail)}`);
   } catch (err) {
-    console.error(`❌ Error registrando canje en Sheet "${SHEET_NAME_CANJES}" (ID ${SHEET_ID_CANJES}):`, err?.message || err);
+    console.error(`❌ Error registrando canje en Sheet "${SHEET_NAME_CANJES}":`, err?.message || err);
+    try {
+      await alertAdmin({
+        area: 'regalos.registrarCanjeEnSheet.error',
+        err,
+        meta: { codigo: cod, email: mail, origen, sheetName: SHEET_NAME_CANJES }
+      });
+    } catch (_) {}
   }
 };

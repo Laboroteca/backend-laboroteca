@@ -25,23 +25,28 @@ async function eliminarUsuarioWordPress(email) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': process.env.LABOROTECA_API_KEY
+        'x-api-key': process.env.LABOROTECA_API_KEY || ''
       },
       body: JSON.stringify({ email: lower(email) })
     });
 
-    const data = await res.json();
+    let data = {};
+    try {
+      data = await res.json();
+    } catch (_) {
+      // si WP devuelve HTML (403 Forbidden), evitamos crash
+      data = {};
+    }
 
     if (!res.ok || !data?.ok) {
-      const msg = data?.mensaje || data?.error || 'Error al eliminar usuario en WordPress';
+      const msg = data?.mensaje || data?.error || `HTTP ${res.status} al eliminar usuario en WP`;
       console.warn(`⚠️ Fallo al eliminar usuario (${maskEmail(email)}):`, msg);
-      // Aviso opcional al admin con email completo
       try {
         await alertAdmin({
           area: 'wp_eliminar_usuario_fail',
-          email: lower(email),                 // admin recibe email completo
+          email: lower(email),
           err: { message: msg },
-          meta: { status: res.status }
+          meta: { status: res.status, body: data }
         });
       } catch (_) {}
       return { ok: false, mensaje: msg };

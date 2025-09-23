@@ -68,15 +68,23 @@ async function ensureSingleActiveClubSubscription(email, keepId = null) {
         const subs = await stripe.subscriptions.list({ customer: c.id, status: 'all', limit: 100 });
         for (const s of subs.data) {
           if (!ACTIVE_STATUSES.includes(s.status)) continue;
-          if (!candidate) { candidate = s; continue; }
-          const a = Number(candidate.current_period_end || 0);
-          const b = Number(s.current_period_end || 0);
-          if (b > a) candidate = s;
+          // solo consideramos subs con period_end válido
+          if (!Number.isFinite(Number(s.current_period_end))) continue;
+          if (!candidate || Number(s.current_period_end) > Number(candidate.current_period_end)) {
+            candidate = s;
+          }
         }
       }
       keepId = candidate?.id || null;
       if (keepId) {
-        console.log(`🔎 [re-alta] keepId elegido: ${keepId} (period_end=${new Date(candidate.current_period_end*1000).toISOString()})`);
+        // log seguro (no lanza)
+        let periodISO = '(desconocido)';
+        try {
+          if (Number.isFinite(Number(candidate.current_period_end))) {
+            periodISO = new Date(Number(candidate.current_period_end) * 1000).toISOString();
+          }
+        } catch {}
+        console.log(`🔎 [re-alta] keepId elegido: ${keepId} (period_end=${periodISO})`);
       } else {
         console.log('🔎 [re-alta] no hay suscripciones activas para preservar.');
       }
@@ -102,15 +110,16 @@ async function ensureSingleActiveClubSubscription(email, keepId = null) {
             console.log('🛑 [re-alta] Subs duplicada cancelada:', sub.id);
             changed = true;
           } catch (e) {
-        console.warn('⚠️ No se pudo cancelar subs antigua:', sub.id, e?.message || e);
-          try {
-            await alertAdmin({
-              area: 'realta_cancel_fail',
-              email: (email || ''), // 👉 en alertas al admin, email completo
-              err: e,
-              meta: { subId: sub.id }
-            });
-          } catch(_) {}
+            console.warn('⚠️ No se pudo cancelar subs antigua:', sub.id, e?.message || e);
+            // avisamos pero NO abortamos el bucle
+            try {
+              await alertAdmin({
+                area: 'realta_cancel_fail',
+                email: (email || ''),
+                err: e,
+                meta: { subId: sub.id }
+              });
+            } catch (_) {}
           }
         }
       }
@@ -126,7 +135,7 @@ async function ensureSingleActiveClubSubscription(email, keepId = null) {
       } catch (_) {}
     }
   } catch (e) {
-    console.warn('⚠️ ensureSingleActiveClubSubscription:', e?.message || e);
+    console.warn('⚠️ ensureSingleActiveClubSubscription (continuation catch):', e?.message || e);
   }
   return { changed };
 }

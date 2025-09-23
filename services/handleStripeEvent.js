@@ -76,8 +76,11 @@ async function ensureSingleActiveClubSubscription(email, keepId = null) {
       }
       keepId = candidate?.id || null;
       if (keepId) {
-        console.log(`🔎 [re-alta] keepId elegido: ${keepId} (period_end=${new Date(candidate.current_period_end*1000).toISOString()})`);
-      } else {
+        let safePeriodEnd = 'n/a';
+        if (candidate && Number.isFinite(Number(candidate.current_period_end))) {
+          safePeriodEnd = new Date(candidate.current_period_end * 1000).toISOString();
+        }
+        console.log(`🔎 [re-alta] keepId elegido: ${keepId} (period_end=${safePeriodEnd})`);      } else {
         console.log('🔎 [re-alta] no hay suscripciones activas para preservar.');
       }
     }

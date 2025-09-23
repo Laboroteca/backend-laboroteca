@@ -1,6 +1,5 @@
 // 📁 services/eliminarUsuarioWordPress.js
 const fetch = require('node-fetch');
-const crypto = require('crypto');
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
 // PII helpers
@@ -22,36 +21,26 @@ async function eliminarUsuarioWordPress(email) {
   }
 
   try {
-    // --- Auth headers (API key + HMAC opcional) ---
-    const apiKey =
-      process.env.LABOROTECA_API_KEY ||
-      process.env.MP_SYNC_API_KEY ||                // fallback por si el endpoint usa la misma clave
-      '';
+    // --- Auth headers: este endpoint espera SOLO LABOROTECA_API_KEY ---
+    const apiKey = process.env.LABOROTECA_API_KEY || '';
+    if (!apiKey) {
+      // fallar rápido y avisar: evita 401 silencioso
+      await alertAdmin({
+        area: 'wp_eliminar_usuario_cfg',
+        email: lower(email),
+        err: { message: 'LABOROTECA_API_KEY no configurada en backend' },
+        meta: {}
+      }).catch(() => {});
+      return { ok: false, mensaje: 'Config API key ausente' };
+    }
 
-    // HMAC como en mu-plugin: ts.POST.<path>.sha256(body)
     const path = '/wp-json/laboroteca/v1/eliminar-usuario';
-    const ts   = String(Date.now());
     const bodyObj = { email: lower(email) };
     const bodyRaw = JSON.stringify(bodyObj);
-    const bodyHash = crypto.createHash('sha256').update(bodyRaw, 'utf8').digest('hex');
-    const secret =
-      process.env.MP_SYNC_HMAC_SECRET ||
-      process.env.LAB_ELIM_HMAC_SECRET ||           // si usas secreto específico para eliminación
-      '';
-    const sig = secret
-      ? crypto.createHmac('sha256', secret).update(`${ts}.POST.${path}.${bodyHash}`).digest('hex')
-      : '';
 
     const headers = {
       'Content-Type': 'application/json',
-      'x-api-key'   : apiKey,
-      // aliases que tu WP acepta en otros endpoints (no molestan si no se usan)
-      'x-lab-ts'    : ts,
-      'x-lab-sig'   : sig,
-      'x-mp-ts'     : ts,
-      'x-mp-sig'    : sig,
-      // compat legacy si el endpoint lo permite
-      ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
+      'x-api-key'   : apiKey
     };
 
     const res = await fetch(`https://www.laboroteca.es${path}`, {
@@ -81,12 +70,7 @@ async function eliminarUsuarioWordPress(email) {
           meta: {
             status: res.status,
             body: data,
-            sentHeaders: {
-              // debug seguro: no exponer secretos
-              hasApiKey: !!apiKey,
-              hasHmac : !!secret,
-              path, ts
-            }
+            sentHeaders: { hasApiKey: !!apiKey, path }
           }
         });
       } catch (_) {}

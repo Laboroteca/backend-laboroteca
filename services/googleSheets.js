@@ -4,6 +4,12 @@ const crypto = require('crypto');
 const { ensureOnce } = require('../utils/dedupe');
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
+// PII-safe helper para logs
+const maskEmail = (e = '') => {
+  const [u, d] = String(e).split('@');
+  if (!u || !d) return '***';
+  return `${u.slice(0, 2)}***@***${d.slice(Math.max(0, d.length - 3))}`;
+};
 
 
 const credentialsBase64 = process.env.GCP_CREDENTIALS_BASE64;
@@ -265,7 +271,7 @@ async function escribirSiNoDuplicado(sheets, sheetId, fila, ctx) {
       );
     });
     if (yaExiste) {
-      console.log(`🔁 Duplicado evitado por contenido en ${sheetId} para ${email}`);
+      console.log(`🔁 Duplicado evitado por contenido en ${sheetId} para ${maskEmail(email)}`);
       return;
     }
     // Cerrojo atómico por contenido
@@ -316,7 +322,7 @@ async function escribirSiNoDuplicado(sheets, sheetId, fila, ctx) {
 
 
 
-  console.log(`✅ Compra registrada en ${sheetId} para ${email}${uid ? ` (uid=${uid})` : ''}`);
+  console.log(`✅ Compra registrada en ${sheetId} para ${maskEmail(email)}${uid ? ` (uid=${uid})` : ''}`);
 }
 
 async function guardarEnGoogleSheets(datos) {

@@ -101,8 +101,8 @@ async function registrarBajaClub({
     // Silenciar alertas si es una baja diferida aún "pendiente"
     const esDiferida = ['voluntaria', 'manual_fin_ciclo'].includes(String(motivo || '').toLowerCase());
     if (!(esDiferida && VERIF(verificacion) === 'PENDIENTE')) {
-      const mask = (e='') => { const [u,d]=String(e).split('@'); return (u&&d)?`${u.slice(0,2)}***@***${d.slice(-3)}`:'***'; };
-      try { await alertAdmin({ area: 'bajas_sheet_append', email: mask(A), err: { message: err?.message, code: err?.code, type: err?.type }, meta: { spreadsheetId } }); } catch {}
+      // 👉 En alertas admin enviamos el email REAL
+      try { await alertAdmin({ area: 'bajas_sheet_append', email: A, err: { message: err?.message, code: err?.code, type: err?.type }, meta: { spreadsheetId } }); } catch {}
     }
   }
 }
@@ -173,7 +173,8 @@ async function actualizarVerificacionBaja({
     if (candidateIndex === -1) {
       const reason = 'not_found';
       if (expectExisting) {
-        try { await alertAdmin({ area: 'bajas_sheet_update_missing_row', email: maskEmail(emailKey), err: { message: 'Fila no encontrada para actualizar F' }, meta: { efectosKey, motivo: motivo || 'auto' } }); } catch {}
+        // 👉 En alertas admin enviamos el email REAL
+        try { await alertAdmin({ area: 'bajas_sheet_update_missing_row', email: emailKey, err: { message: 'Fila no encontrada para actualizar F' }, meta: { efectosKey, motivo: motivo || 'auto' } }); } catch {}
       }
       return { updated: false, reason };
     }
@@ -190,7 +191,8 @@ async function actualizarVerificacionBaja({
     return { updated: true };
   } catch (err) {
     console.error('❌ actualizarVerificacionBaja:', err?.message || err);
-    try { await alertAdmin({ area: 'bajas_sheet_update', email: maskEmail(emailKey), err: { message: err?.message, code: err?.code, type: err?.type }, meta: { efectosKey, motivo: motivo || 'auto' } }); } catch {}
+    // 👉 En alertas admin enviamos el email REAL
+    try { await alertAdmin({ area: 'bajas_sheet_update', email: emailKey, err: { message: err?.message, code: err?.code, type: err?.type }, meta: { efectosKey, motivo: motivo || 'auto' } }); } catch {}
     return { updated: false, reason: 'exception' };
   }
 }

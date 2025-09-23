@@ -186,7 +186,8 @@ async function syncMemberpressClub({
     try {
       await alertAdmin({
         area: 'memberpress_sync',
-        email: maskEmail(emailNorm),
+        // 👉 En alertas admin, email REAL (no enmascarado)
+        email: emailNorm,
         err: { message: err?.message, code: err?.code, type: err?.type },
         meta: {
           accion: accionOut,

@@ -106,7 +106,7 @@ async function ensureSingleActiveClubSubscription(email, keepId = null) {
           try {
             await alertAdmin({
               area: 'realta_cancel_fail',
-              email: redactEmail(email),
+              email: (email || ''), // 👉 en alertas al admin, email completo
               err: e,
               meta: { subId: sub.id }
             });
@@ -492,10 +492,10 @@ if (!email) {
   const cust = await stripe.customers.retrieve(customerId);
   email = (cust.email || '').toLowerCase().trim();
 }
-if (!email || !email.includes('@')) {
-  console.warn(`❌ Email no válido en invoice.paid: ${email || '[vacío]'}`);
-  return;
-}
+  if (!email || !email.includes('@')) {
+    console.warn(`❌ Email no válido en invoice.paid: ${redactEmail(email) || '[vacío]'}`); // 👉 logs enmascarado
+    return;
+  }
 
 
 // 1) ALTA: PRIMERA fuente = FluentForms desde el Checkout Session que creó la suscripción
@@ -1400,7 +1400,7 @@ try {
       console.warn('⚠️ No se pudo actualizar el Customer con dirección FF:', e?.message || e);
     }
 
-      console.log(`✅ Datos fiscales (FF) guardados para suscripción: ${emailFF}`);
+      console.log(`✅ Datos fiscales (FF) guardados para suscripción: ${redactEmail(emailFF)}`); // 👉 logs enmascarado
     } else {
       console.warn('⚠️ Suscripción: no se pudo determinar email para guardar datos FF.');
     }

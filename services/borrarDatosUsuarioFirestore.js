@@ -2,6 +2,14 @@
 const admin = require('../firebase');
 const firestore = admin.firestore();
 
+// Helper PII-safe para logs
+const maskEmail = (e='') => {
+  const [u,d] = String(e).split('@');
+  if (!u || !d) return '***';
+  return `${u.slice(0,2)}***@***${d.slice(Math.max(0,d.length-3))}`;
+};
+
+
 /**
  * Elimina datos personales del usuario en Firestore y asegura
  * que no volverá a recibir emails (suppressionList).
@@ -30,10 +38,13 @@ async function borrarDatosUsuarioFirestore(email) {
         const doc = await ref.get();
         if (doc.exists) {
           await ref.delete();
-          console.log(`🗑️ Firestore: eliminado ${ruta}`);
+          // No exponer el email en claro en logs
+          const rutaMasked = ruta.replace(e, maskEmail(e));
+          console.log(`🗑️ Firestore: eliminado ${rutaMasked}`);
         }
       } catch (err) {
-        console.warn(`⚠️ No se pudo eliminar ${ruta}:`, err?.message || err);
+        const rutaMasked = ruta.replace(e, maskEmail(e));
+        console.warn(`⚠️ No se pudo eliminar ${rutaMasked}:`, err?.message || err);
       }
     }
 
@@ -46,13 +57,13 @@ async function borrarDatosUsuarioFirestore(email) {
         createdAt: admin.firestore.Timestamp.fromDate(new Date()),
         createdAtISO: new Date().toISOString()
       }, { merge: true });
-      console.log(`✅ suppressionList asegurada para ${e}`);
+      console.log(`✅ suppressionList asegurada para ${maskEmail(e)}`);
     } catch (err) {
-      console.error(`❌ Error al asegurar suppressionList/${e}:`, err?.message || err);
+      console.error(`❌ Error al asegurar suppressionList/${maskEmail(e)}:`, err?.message || err);
     }
 
   } catch (err) {
-    console.error(`❌ Error al borrar datos de ${e} en Firestore:`, err?.message || err);
+    console.error(`❌ Error al borrar datos de ${maskEmail(e)} en Firestore:`, err?.message || err);
   }
 }
 

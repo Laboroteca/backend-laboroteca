@@ -20,6 +20,7 @@ const maskEmail = (e='') => {
   const [u,d] = String(e).split('@'); if(!u||!d) return '***';
   return `${u.slice(0,2)}***@***${d.slice(-3)}`;
 };
+const lower = (s) => (typeof s === 'string' ? s.trim().toLowerCase() : '');
 
 /** Resolución robusta del NOMBRE y APELLIDOS para la fila de baja y el email */
 async function getNombreCompleto(email, subContext) {
@@ -144,9 +145,9 @@ async function desactivarMembresiaClub(email, password, enviarEmailConfirmacion 
     } catch (err) {
       try { await alertAdmin({
         area: 'desactivarMembresiaClub_login',
-        email: maskEmail(email),
+        email: lower(email),                           // 👉 admin: email completo
         err: { message: err?.message, code: err?.code, type: err?.type },
-        meta: { email: maskEmail(email) }
+        meta: { email_masked: maskEmail(email) }       // opcional: versión enmascarada
       }); } catch(_) {}
       return { ok: false, mensaje: 'Contraseña incorrecta' };
     }
@@ -167,9 +168,9 @@ async function desactivarMembresiaClub(email, password, enviarEmailConfirmacion 
       // sin cliente en Stripe → no hay nada que programar (pero no rompemos)
       try { await alertAdmin({
         area: 'baja_voluntaria_sin_cliente_stripe',
-        email: maskEmail(email),
+        email: lower(email),
         err: { message: 'Cliente no encontrado en Stripe' },
-        meta: {}
+        meta: { email_masked: maskEmail(email) }
       }); } catch(_) {}
     } else {
       for (const c of clientes.data) {
@@ -199,7 +200,7 @@ async function desactivarMembresiaClub(email, password, enviarEmailConfirmacion 
           if (!fechaEfectosISO) {
             try { await alertAdmin({
               area: 'baja_voluntaria_sin_cpe',
-              email: maskEmail(email),
+              email: lower(email),
               err: { message: 'Sin fecha de efectos fiable' },
               meta: { subscriptionId: sub.id, status: (refreshed || updated || sub)?.status, cancel_at: (refreshed || updated || sub)?.cancel_at }
             }); } catch(_) {}
@@ -233,7 +234,7 @@ async function desactivarMembresiaClub(email, password, enviarEmailConfirmacion 
         } catch (e) {
           try { await alertAdmin({
             area: 'desactivarMembresiaClub_firestore_baja',
-            email: maskEmail(email),
+            email: lower(email),
             err: { message: e?.message, code: e?.code, type: e?.type },
             meta: { subscriptionIds, fechaEfectosFinal },
           }); } catch(_) {}
@@ -254,9 +255,9 @@ async function desactivarMembresiaClub(email, password, enviarEmailConfirmacion 
         } catch (e) {
           try { await alertAdmin({
             area: 'desactivarMembresiaClub_registro_o_email',
-            email: maskEmail(email),
+            email: lower(email),
             err: { message: e?.message, code: e?.code, type: e?.type },
-            meta: { subscriptionIds, fechaEfectos: fechasEfectos }
+            meta: { subscriptionIds, fechaEfectos: fechasEfectos, email_masked: maskEmail(email) }
           }); } catch(_) {}
         }
       }
@@ -264,9 +265,9 @@ async function desactivarMembresiaClub(email, password, enviarEmailConfirmacion 
   } catch (err) {
     try { await alertAdmin({
       area: 'desactivarMembresiaClub_stripe_update',
-      email: maskEmail(email),
+      email: lower(email),
       err: { message: err?.message, code: err?.code, type: err?.type },
-      meta: { email: maskEmail(email) },
+      meta: { email_masked: maskEmail(email) },
     }); } catch(_) {}
     // No devolvemos error duro por si no hubiera suscripciones activas
   }

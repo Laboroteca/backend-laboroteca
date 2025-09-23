@@ -105,6 +105,31 @@ const marketingSend = require('./routes/marketing-send');
 const marketingCron = require('./routes/marketing-cron');
 const { jobBajasScheduler: cronBajasClub } = require('./jobs/stripe_bajasClub_planB');
 
+// ── helpers PII-safe (solo para LOGS)
+const _maskEmail = (e='') => {
+  if (!e || typeof e !== 'string' || !e.includes('@')) return '***';
+  const [u,d]=e.split('@'); const us=u.length<=2?(u[0]||'*'):u.slice(0,2);
+  return `${us}***@***${d.slice(Math.max(0,d.length-3))}`;
+};
+const _redactEmailsIn = (obj) => {
+  try {
+    const seen = new WeakSet();
+    const walk = (v) => {
+      if (v && typeof v==='object') {
+        if (seen.has(v)) return v;
+        seen.add(v);
+        const out = Array.isArray(v) ? [] : {};
+        for (const k of Object.keys(v)) out[k]=walk(v[k]);
+        return out;
+      }
+      if (typeof v==='string' && /@/.test(v)) return _maskEmail(v.toLowerCase());
+      return v;
+    };
+    return walk(obj);
+  } catch { return obj; }
+};
+
+
 const app = express();
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
@@ -631,7 +656,7 @@ const pagoLimiter = rateLimit({
 // (nota) ya importamos desde arriba resolverProducto/PRODUCTOS
 
 async function verificarEmailEnWordPress(email) {
-  console.log('🔓 Verificación desactivada. Email:', email);
+  console.log('🔓 Verificación desactivada. Email:', _maskEmail(email));
   return true;
 }
 
@@ -654,7 +679,11 @@ app.post(
   requireApiKeyPago,
   async (req, res) => {
   const datos = req.body;
-  console.log('📥 Datos recibidos en /crear-sesion-pago:\n', JSON.stringify(datos, null, 2));
+  // Log seguro (sin PII): redacta posibles emails/PII en el body
+  try {
+    const safe = _redactEmailsIn(datos);
+    console.log('📥 Datos recibidos en /crear-sesion-pago:', JSON.stringify(safe, null, 2));
+  } catch { console.log('📥 Datos recibidos en /crear-sesion-pago: (no serializable)'); }
 
   const email = (typeof datos.email_autorelleno === 'string' && datos.email_autorelleno.includes('@'))
     ? datos.email_autorelleno.trim().toLowerCase()
@@ -681,7 +710,7 @@ app.post(
   }
 
   if (!/^[^@]+@[^@]+\.[^@]+$/.test(email)) {
-    console.warn('❌ Email inválido antes de Stripe:', (email||'').replace(/^(.{0,2}).*(@.*\.)(.{0,3})$/, '$1***@***$2***'));
+    console.warn('❌ Email inválido antes de Stripe:', _maskEmail(email||''));
     return res.status(400).json({ error: 'Email inválido' });
   }
 
@@ -782,7 +811,7 @@ app.post(
       try {
         await alertAdmin({
           area: 'stripe_crear_sesion_pago_error',
-          email: (req.body?.email_autorelleno || req.body?.email || '-').toLowerCase(),
+          email: (req.body?.email_autorelleno || req.body?.email || '-').toLowerCase(), // admin recibe email completo
           err: error,
           meta: {
             tipoProducto: req.body?.tipoProducto || '',
@@ -833,7 +862,7 @@ app.post(
   }
 
   if (!/^[^@]+@[^@]+\.[^@]+$/.test(email)) {
-    console.warn('❌ Email inválido antes de Stripe:', (email||'').replace(/^(.{0,2}).*(@.*\.)(.{0,3})$/, '$1***@***$2***'));
+    console.warn('❌ Email inválido antes de Stripe:', _maskEmail(email||''));
     return res.status(400).json({ error: 'Email inválido' });
   }
 
@@ -998,8 +1027,8 @@ app.post('/cancelar-suscripcion-club', cors(corsOptions), requireJson, accountLi
         return res.status(400).json({ cancelada:false, mensaje:'Email inválido' });
       }
       // Log inequívoco (aunque LAB_DEBUG=0) de que se usó HMAC
-      console.log('[BAJA HMAC USED]', { reqId, email });
-      if (LAB_DEBUG) console.log('[BAJA HMAC OK]', { reqId, email });
+      console.log('[BAJA HMAC USED]', { reqId, email: _maskEmail(email) });
+      if (LAB_DEBUG) console.log('[BAJA HMAC OK]', { reqId, email: _maskEmail(email) });
       via = 'hmac';
       // Llamada al servicio con SENTINEL (saltamos verificación de contraseña)
       resultado = await desactivarMembresiaClub(email, WP_ASSERTED_SENTINEL);
@@ -1101,7 +1130,7 @@ app.post('/eliminar-cuenta', requireJson, accountLimiter, async (req, res) => {
       return res.status(401).json({ eliminada: false, mensaje: resultado.mensaje });
     }
 
-    console.log(`🧨 Cuenta eliminada correctamente en WordPress para: ${email}`);
+    console.log(`🧨 Cuenta eliminada correctamente en WordPress para: ${_maskEmail(email)}`);
     return res.json({ eliminada: true });
   } catch (error) {
     console.error('❌ Error al procesar eliminación:', error.message);

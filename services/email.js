@@ -3,6 +3,22 @@ const fetch = require('node-fetch');
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 // ^ sin cambios de import
 
+// PII-safe helpers
+const maskEmail = (e='') => {
+  const [u,d] = String(e).split('@');
+  if (!u || !d) return '***';
+  return `${u.slice(0,2)}***@***${d.slice(Math.max(0,d.length-3))}`;
+};
+const maskEmails = (arr=[]) => arr.map(maskEmail).join(', ');
+// Escapar HTML básico para variables que vienen del usuario/formularios
+const escapeHtml = (s='') => String(s)
+  .replace(/&/g,'&amp;')
+  .replace(/</g,'&lt;')
+  .replace(/>/g,'&gt;')
+  .replace(/"/g,'&quot;')
+  .replace(/'/g,'&#39;');
+
+
 /**
  * Envía un email con o sin factura adjunta (PDF).
  * @param {Object} opciones - { to, subject, html, text, pdfBuffer, enviarACopy, attachments, incluirAdvertencia }
@@ -25,9 +41,8 @@ async function enviarEmailPersonalizado({
 
   // Copia al admin opcional controlada por env
   const SEND_ADMIN_COPY = String(process.env.SEND_ADMIN_COPY || 'false').toLowerCase() === 'true';
-  if (enviarACopy && SEND_ADMIN_COPY && !destinatarios.includes('laboroteca@gmail.com')) {
-    destinatarios.push('laboroteca@gmail.com');
-  }
+  // 👉 usa BCC (no mezclar con TO para no exponer destinatarios)
+  const bcc = (enviarACopy && SEND_ADMIN_COPY) ? ['laboroteca@gmail.com'] : [];
 
   const pieHtml = `
     <div style="font-size:14px;color:#777;line-height:1.5;">
@@ -70,11 +85,14 @@ Más información: https://www.laboroteca.es/politica-de-privacidad/
     ? [text, '', '', '', sepText, advertenciaText, sepText, '', pieText].join('\n')
     : [text, '', sepText, '', pieText].join('\n');
 
+  // Escape defensivo del subject si llega de usuario/metadata
+  const safeSubject = String(subject || '').replace(/\r?\n/g,' ').slice(0,250);
   const body = {
     api_key: process.env.SMTP2GO_API_KEY,
     to: destinatarios,
+    bcc,
     sender: `"Laboroteca" <${process.env.SMTP2GO_FROM_EMAIL}>`,
-    subject,
+    subject: safeSubject,
     html_body,
     text_body
   };
@@ -99,7 +117,10 @@ Más información: https://www.laboroteca.es/politica-de-privacidad/
   try {
     response = await fetch('https://api.smtp2go.com/v3/email/send', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
       body: JSON.stringify(body)
     });
 
@@ -123,14 +144,15 @@ Más información: https://www.laboroteca.es/politica-de-privacidad/
       try {
         await alertAdmin({
           area: 'smtp2go_send',
-          email: Array.isArray(to) ? to.join(', ') : to,
+          email: Array.isArray(to) ? maskEmails(to) : maskEmail(to),
           err: new Error('Fallo SMTP2GO al enviar email'),
-          meta: {
-            subject,
-            provider: 'smtp2go',
-            httpStatus: response?.status ?? null,
-            responseSnippet: (resultado?.raw || raw || '').slice(0, 500)
-          }
+        meta: {
+          subject: safeSubject,
+          provider: 'smtp2go',
+          httpStatus: response?.status ?? null,
+          responseSnippet: (resultado?.raw || raw || '').slice(0, 500)
+        }
+
         });
       } catch (_) {}
 
@@ -140,24 +162,27 @@ Más información: https://www.laboroteca.es/politica-de-privacidad/
     try {
       await alertAdmin({
         area: 'smtp2go_network',
-        email: Array.isArray(to) ? to.join(', ') : to,
+        email: Array.isArray(to) ? maskEmails(to) : maskEmail(to),
         err: e,
-        meta: { subject, provider: 'smtp2go' }
+        meta: { subject: safeSubject, provider: 'smtp2go' }
       });
     } catch (_) {}
     throw e;
   }
 
   if (successReal) {
-    console.log(`Email "${subject}" enviado correctamente a ${destinatarios.join(', ')}`);
+    console.log(`Email "${safeSubject}" enviado correctamente a ${maskEmails(destinatarios)}`);
   } else {
-    console.warn(`Advertencia: Email "${subject}" enviado pero con posibles incidencias:`, resultado);
+    console.warn(`Advertencia: Email "${safeSubject}" enviado pero con posibles incidencias:`, {
+      succeeded: Number(resultado?.data?.succeeded ?? 0),
+      failed: Number(resultado?.data?.failed ?? 0)
+    });
     try {
       await alertAdmin({
         area: 'smtp2go_warning',
-        email: Array.isArray(to) ? to.join(', ') : to,
+        email: Array.isArray(to) ? maskEmails(to) : maskEmail(to),
         err: new Error('SMTP2GO warning'),
-        meta: { subject, provider: 'smtp2go', resultado }
+        meta: { subject: safeSubject, provider: 'smtp2go' }
       });
     } catch (_) {}
   }
@@ -176,7 +201,7 @@ function euros(v) {
 async function enviarFacturaPorEmail(datos, pdfBuffer) {
   const email = datos.email;
   const importeTexto = euros(datos.importe);
-  const nombre = datos.nombre || '';
+  const nombre = escapeHtml(datos.nombre || '');
 
   const esClub =
     (datos.tipoProducto && String(datos.tipoProducto).toLowerCase() === 'club') ||
@@ -189,7 +214,7 @@ async function enviarFacturaPorEmail(datos, pdfBuffer) {
   const esAltaClub = esClub && /(alta y primera cuota|alta)/i.test(etiqueta);
   const esRenovClub = esClub && /(renovación mensual|renovacion mensual|subscription_cycle|renovación)/i.test(etiqueta);
 
-  const nombreProductoMostrar = datos.nombreProducto || datos.descripcionProducto || 'Producto Laboroteca';
+  const nombreProductoMostrar = escapeHtml(datos.nombreProducto || datos.descripcionProducto || 'Producto Laboroteca');
   const debeIncluirAdvertencia = (!esClub) || esAltaClub; // ✅ SOLO productos y alta de Club (NO renovaciones)
   let subject = '';
   let html = '';
@@ -282,6 +307,7 @@ async function enviarAvisoImpago(
   intento,
   enlacePago = 'https://www.laboroteca.es/membresia-club-laboroteca/'
 ) {
+  nombre = escapeHtml(nombre || '');
   const subject = 'Tu suscripción al Club Laboroteca ha sido cancelada por impago';
   const html = `
     <p>Hola ${nombre || ''},</p>
@@ -311,6 +337,7 @@ async function enviarAvisoCancelacion(email, nombre, enlacePago) {
 
 // 📧 ACUSE DE SOLICITUD DE BAJA VOLUNTARIA (en el momento de solicitarla)
 async function enviarEmailSolicitudBajaVoluntaria(nombre = '', email, fechaSolicitudISO, fechaEfectosISO) {
+  nombre = escapeHtml(nombre || '');
   const fmt = iso => {
     try {
       return new Date(iso).toLocaleString('es-ES', { timeZone: 'Europe/Madrid', day:'2-digit', month:'2-digit', year:'numeric' });
@@ -342,6 +369,7 @@ Gracias por haber formado parte del Club Laboroteca.`;
 
 // CONFIRMACIÓN DE BAJA VOLUNTARIA
 async function enviarConfirmacionBajaClub(email, nombre = '') {
+  nombre = escapeHtml(nombre || '');
   const subject = 'Confirmación de baja del Club Laboroteca';
   const html = `
     <p>Hola ${nombre},</p>
@@ -364,6 +392,7 @@ Laboroteca`;
 
 // AVISO DE CANCELACIÓN MANUAL (por admin/dashboard)
 async function enviarAvisoCancelacionManual(email, nombre = '') {
+  nombre = escapeHtml(nombre || '');
   const subject = 'Tu suscripción al Club Laboroteca ha sido cancelada';
   const html = `
     <p>Hola ${nombre},</p>

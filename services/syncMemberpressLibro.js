@@ -25,6 +25,9 @@ const maskEmail = (e='') => {
 };
 const nowIso   = () => new Date().toISOString();
 const shortId  = () => crypto.randomBytes(6).toString('hex');
+// Sanitiza PII en snippets de logs (emails)
+const sanitizeSnippet = (s='') =>
+  String(s).replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig,'***@***');
 
 // Firma: HMAC-SHA256(ts.POST.<pathname>.sha256(body))
 function signRequest(apiUrl, bodyStr) {
@@ -173,13 +176,17 @@ async function syncMemberpressLibro({
 
   } catch (err) {
     // —— Log de error y alerta
-    console.error(`❌ [syncMemberpressLibro#${reqId}]`, err?.message || err, text ? `| resp: ${text.substring(0, 200)}` : '');
+    console.error(
+      `❌ [syncMemberpressLibro#${reqId}]`,
+      err?.message || err,
+      text ? `| resp: ${sanitizeSnippet(text).substring(0, 200)}` : ''
+    );
 
     try {
       await alertAdmin({
         area: 'memberpress_libro_sync',
-        email,
-        err,
+        email, // ← email REAL para soporte
+        err: { message: err?.message, code: err?.code, type: err?.type },
         meta: {
           accion,
           membership_id: membershipIdNum,
@@ -190,6 +197,7 @@ async function syncMemberpressLibro({
           producto: producto || null,
           nombre_producto: nombre_producto || null,
           status: response?.status || null,
+          // En alerta mandamos el snippet COMPLETO (sin sanitizar) para diagnóstico
           responseTextSnippet: typeof text === 'string' ? text.slice(0, 500) : null,
           at: nowIso()
         }

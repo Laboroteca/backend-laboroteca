@@ -36,8 +36,9 @@ async function activarMembresiaClub(email, opts = {}) {
       try {
         await alertAdmin({
           area: 'activarMembresiaClub_email_invalido',
+          email: lower(email || '-'),              // 👉 admin recibe el email completo (si venía)
           err: { message: 'Email inválido' },
-          meta: { email: maskEmail(email || '(no definido)') }
+          meta: { email_masked: maskEmail(email || '(no definido)') }
         });
       } catch (_) {}
       return false; // no romper flujo
@@ -79,14 +80,16 @@ async function activarMembresiaClub(email, opts = {}) {
     console.log(`✅ Membresía del Club activada para ${maskEmail(emailNorm)}`);
     return true;
   } catch (err) {
-    const emailSafe = maskEmail(lower(email || '(no definido)'));
+    const emailNorm = lower(email || '(no definido)');
+    const emailSafe = maskEmail(emailNorm);
     console.error(`❌ activarMembresiaClub error para ${emailSafe}: ${err?.message || err}`);
     try {
       await alertAdmin({
         area: 'activarMembresiaClub_firestore_error',
+        email: emailNorm,                         // 👉 email completo al admin
         err: { message: err?.message, code: err?.code, type: err?.type },
         meta: {
-          email: emailSafe,
+          email_masked: emailSafe,                // opcional: versión enmascarada para auditoría
           // Si venían metadatos, los adjuntamos para depurar
           ...(opts && typeof opts === 'object'
             ? {

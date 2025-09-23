@@ -26,6 +26,17 @@ const redact = (v) => (process.env.NODE_ENV === 'production'
   : String(v || ''));
 const redactEmail = (e) => redact((e || '').toLowerCase().trim());
 
+// Oculta el email dentro de claves de deduplicación cuando se loguean
+const maskDedupeKey = (key, email) => {
+  if (!key) return key;
+  const e = (email || '').toLowerCase().trim();
+  if (e && key.includes(e)) {
+    const esc = e.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return key.replace(new RegExp(esc, 'g'), hash12(e));
+  }
+  return key;
+};
+
 // === WP HMAC config ===
 const WP_BASE = process.env.WP_BASE_URL || 'https://www.laboroteca.es';
 const MP_API_KEY = process.env.MP_SYNC_API_KEY || process.env.MEMBERPRESS_KEY; // fallback si aún no tienes MP_SYNC_API_KEY
@@ -160,7 +171,7 @@ module.exports = async function procesarCompra(datos) {
     if (dedupeKey) {
       const first = await ensureOnce('comprasOnce', dedupeKey);
       if (!first) {
-        console.warn(`🟡 Duplicado ignorado key=${dedupeKey}`);
+        console.warn(`🟡 Duplicado ignorado key=${maskDedupeKey(dedupeKey, email)}`);
         return { success: false, mensaje: 'Compra ya procesada (duplicado)' };
       }
 
@@ -170,7 +181,7 @@ module.exports = async function procesarCompra(datos) {
         await lockRef.create({ createdAt: admin.firestore.FieldValue.serverTimestamp() });
     } catch (e) {
       if (e.code === 6 || /already exists/i.test(String(e.message || ''))) {
-        console.warn(`🟡 Duplicado ignorado (lock existe) key=${dedupeKey}`);
+        console.warn(`🟡 Duplicado ignorado (lock existe) key=${maskDedupeKey(dedupeKey, email)}`);
         return { success: false, mensaje: 'Compra ya procesada (duplicado)' };
       }
     console.error('❌ Error creando lock (continuo sin lock, riesgo mínimo de duplicado):', e);

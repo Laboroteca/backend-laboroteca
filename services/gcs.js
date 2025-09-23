@@ -3,6 +3,7 @@
 
 const { Storage } = require('@google-cloud/storage');
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
+const crypto = require('crypto');
 
 // ───────────────── Config ─────────────────
 const BUCKET_NAME = process.env.GCS_BUCKET_FACTURAS || 'laboroteca-facturas';
@@ -32,6 +33,9 @@ function isReasonablePdf(buf) {
   return Buffer.isBuffer(buf) && buf.length >= 1000; // ~mínimo razonable
 }
 
+// Hash corto para PII-safe en metadatos (no logs)
+const hash12 = (e='') =>
+  crypto.createHash('sha256').update(String(e).toLowerCase()).digest('hex').slice(0,12);
 /**
  * Sube un PDF a Google Cloud Storage (awaitable).
  * Lanza si falla y avisa al admin (con el email afectado si se aporta).
@@ -51,7 +55,8 @@ async function subirFactura(nombreArchivo, pdfBuffer, meta = {}) {
       // Aviso inmediato con contexto
       await alertAdmin({
         area: 'gcs_subida_factura_validacion',
-        email: emailAfectado,
+          // ⚠️ Evitar PII en metadatos de GCS
+          email_hash: hash12(emailAfectado),
         err,
         meta: {
           bucket: BUCKET_NAME,

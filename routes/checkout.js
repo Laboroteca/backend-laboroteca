@@ -15,7 +15,8 @@ const {
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
 // ── logging sobrio (sin PII en prod)
-const LAB_DEBUG = (process.env.LAB_DEBUG === '1' || process.env.DEBUG === '1');
+const isProd = String(process.env.NODE_ENV).toLowerCase() === 'production';
+const LAB_DEBUG = !isProd && (process.env.LAB_DEBUG === '1' || process.env.DEBUG === '1');
 const maskEmail = (e='') => {
   if (!e || typeof e !== 'string' || !e.includes('@')) return '***';
   const [u,d]=e.split('@'); const us = u.length<=2 ? (u[0]||'*') : u.slice(0,2);
@@ -239,9 +240,7 @@ router.post('/create-session', async (req, res) => {
       payment_method_types: ['card'],
       customer_email: email,
       line_items,
-      success_url: `https://laboroteca.es/gracias?nombre=${encodeURIComponent(
-        nombre
-      )}&producto=${encodeURIComponent(producto?.nombre || nombreProducto)}`,
+      success_url: `https://laboroteca.es/gracias?producto=${encodeURIComponent(producto?.nombre || nombreProducto)}`,
       cancel_url: 'https://laboroteca.es/error',
       metadata: {
         nombre,

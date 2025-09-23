@@ -81,6 +81,18 @@ const sleep = (ms)=> new Promise(r=>setTimeout(r, ms));
 const sha256 = (str) => crypto.createHash('sha256').update(String(str||''), 'utf8').digest('hex');
 const sha256Buf = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 
+// RGPD: enmascara emails en logs
+function maskEmail(e='') {
+  const s = String(e || '');
+  const i = s.indexOf('@');
+  if (i <= 0) return '***';
+  const u = s.slice(0, i);
+  const d = s.slice(i + 1);
+  const up = u.length <= 2 ? (u[0] || '*') : (u.slice(0,2) + '***' + u.slice(-1));
+  const dp = d.length <= 3 ? '***' : ('***' + d.slice(-3));
+  return `${up}@${dp}`;
+}
+
 function timingEq(a, b) {
   try { return a.length === b.length && crypto.timingSafeEqual(a, b); }
   catch { return false; }
@@ -581,8 +593,15 @@ router.post(['/send', '/send-newsletter'], sendLimiter, async (req, res) => {
         failed++;
         // liberar la reserva para permitir reintento futuro
         try { await dedupRef.delete(); } catch (_) {}
-        console.error(`${LOG_PREFIX} ❌ SMTP2GO (${rcpt}):`, e?.message || e);
-        try { await alertAdmin({ area:'newsletter_send_fail', err: e, meta:{ subject, testOnly, rcpt } }); } catch {}
+        console.error(`${LOG_PREFIX} ❌ SMTP2GO (${maskEmail(rcpt)}):`, e?.message || e);
+        try {
+          await alertAdmin({
+            area: 'newsletter_send_fail',
+            email: rcpt, // email COMPLETO para soporte admin
+            err: e,
+            meta: { subject, testOnly, rcpt } // OK que meta incluya el real
+          });
+        } catch {}
       }
     }
 

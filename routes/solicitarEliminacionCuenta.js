@@ -22,7 +22,7 @@ const _hash10 = (str) => {
   try { return crypto.createHash('sha256').update(String(str), 'utf8').digest('hex').slice(0, 10); }
   catch { return 'errhash'; }
 };
-// 🔒 helpers de redacción (no PII en logs/alertas)
+// 🔒 helpers de redacción (no PII en logs)
 const _sha12 = (v) => crypto.createHash('sha256').update(String(v||'').toLowerCase()).digest('hex').slice(0,12);
 const redactEmail = (e) => {
   const s = String(e||'').toLowerCase(); if(!s.includes('@')) return s ? _sha12(s) : '';
@@ -129,7 +129,7 @@ router.post('/solicitar-eliminacion', async (req, res) => {
       try {
         await alertAdmin({
           area: 'elim_cuenta_email_validacion',
-          email: redactEmail(email),
+          email, // ← email COMPLETO para que el admin pueda ayudar
           err: e,
           meta: {}
         });
@@ -137,7 +137,7 @@ router.post('/solicitar-eliminacion', async (req, res) => {
       return res.status(500).json({ ok: false, mensaje: 'No se pudo enviar el email de validación.' });
     }
 
-    if (LAB_DEBUG) console.log('[ELIM HMAC OK]', { reqId, email });
+    if (LAB_DEBUG) console.log('[ELIM HMAC OK]', { reqId, email: redactEmail(email) });
 
     // 5) OK
     return res.json({ ok: true });
@@ -147,7 +147,7 @@ router.post('/solicitar-eliminacion', async (req, res) => {
     try {
       await alertAdmin({
         area: 'solicitar_eliminacion_error',
-        email: redactEmail(email),
+        email, // ← email COMPLETO en alertas
         err,
         meta: {}
       });

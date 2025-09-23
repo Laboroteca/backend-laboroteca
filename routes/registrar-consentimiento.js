@@ -119,7 +119,14 @@ router.post('/registrar-consentimiento', async (req, res) => {
 
     if (!email) {
       console.warn(`[CONSENT] ⚠️ sin email. source=${source || '-'} form=${formularioId || '-'} keys=${Object.keys(body||{}).join(',')}`);
-      try { await alertAdmin(`⚠️ Consentimiento sin email (source=${source||'-'})`); } catch {}
+      try {
+        await alertAdmin({
+          area: 'consent_missing_email',
+          email: '-', // no disponible
+          err: new Error('missing_email'),
+          meta: { source: source || '-', formularioId: formularioId || '-' }
+        });
+      } catch {}
       return res.json({ ok: true, warn: 'missing_email' });
     }
 
@@ -158,14 +165,28 @@ router.post('/registrar-consentimiento', async (req, res) => {
       })
       .catch(async e => {
         console.warn('❗ [CONSENT WARN]', e?.message || e);
-        // 🔔 ALERTA: email COMPLETO para que puedas identificar al afectado
-        try { await alertAdmin(`❌ Error guardando consentimiento de ${email}: ${e.message}`); } catch {}
+        // 🔔 ALERTA: enviar email COMPLETO al admin
+        try {
+          await alertAdmin({
+            area: 'consent_save_error',
+            email, // completo, sin enmascarar
+            err: e,
+            meta: { formularioId, source, hasTerms: !!payload.termsUrl, hasPrivacy: !!payload.privacyUrl }
+          });
+        } catch {}
       });
 
     return res.json({ ok: true, route: 'registrar-consentimiento' });
   } catch (err) {
     console.error('🔥 registrar-consentimiento error:', err);
-    try { await alertAdmin(`❌ Error en /registrar-consentimiento: ${err.message}`); } catch {}
+    try {
+      await alertAdmin({
+        area: 'consent_route_unexpected',
+        email: String(req.body?.email || req.body?.user_email || '').toLowerCase() || '-',
+        err,
+        meta: { keys: Object.keys(req.body || {}) }
+      });
+    } catch {}
     return res.json({ ok: true, warn: 'consent_route_failed' });
   }
 });

@@ -29,6 +29,10 @@ const firestore = admin.firestore();
 
 // ───────────────────────────── Helpers ─────────────────────────────
 const safe = v => (v === undefined || v === null) ? '' : String(v);
+const maskEmail = (e='') => {
+  const [u,d] = String(e).split('@'); if(!u||!d) return '***';
+  return `${u.slice(0,2)}***@***${d.slice(-3)}`;
+};
 
 const sha256Hex = (str) =>
   crypto.createHash('sha256').update(String(str || ''), 'utf8').digest('hex');
@@ -270,7 +274,12 @@ async function registrarConsentimiento(payload) {
 
   await initialDocRef.set({ ...data, insertadoEn: nowISO() })
     .catch(async (e) => {
-      await alertAdmin(`❌ Error al crear doc consentLogs (${data.email}): ${e.message}`);
+      await alertAdmin({
+        area: 'consentlogs_create_doc',
+        email: data.email,
+        err: { message: e?.message, code: e?.code },
+        meta: { consentDocId, formularioId: data.formularioId || null }
+      });
       throw e;
     });
 
@@ -289,11 +298,20 @@ async function registrarConsentimiento(payload) {
   const bucket = getBucket();
 
   if (!bucket) {
-    await alertAdmin(`ℹ️ Consentimiento sin snapshots (bucket no definido) · ${data.email} · docId=${consentDocId}`);
-  } else {
+    await alertAdmin({
+      area: 'consentlogs_no_bucket',
+      email: data.email,
+      err: { message: 'Bucket no definido' },
+      meta: { consentDocId, bucketEnv: process.env.GCS_CONSENTS_BUCKET || process.env.GCS_BUCKET || null }
+    });  } else {
     // Smoke test de permisos (log suave)
     try { await bucket.getMetadata(); } catch (e) {
-      await alertAdmin(`❌ No se puede leer metadatos del bucket ${BUCKET_NAME}: ${e.message}`);
+      await alertAdmin({
+        area: 'consentlogs_bucket_metadata',
+        email: data.email,
+        err: { message: e?.message, code: e?.code },
+        meta: { bucket: BUCKET_NAME }
+      });
     }
 
     // PRIVACY (siempre que venga url+versión)
@@ -323,7 +341,12 @@ async function registrarConsentimiento(payload) {
           privacyGeneralBlobPath = generalPath;
         } catch (e) {
           // aviso pero seguimos con el individual
-          await alertAdmin(`⚠️ Error subiendo PRIVACY general (${data.email}): ${e.message}`);
+          await alertAdmin({
+            area: 'consentlogs_privacy_general_upload',
+            email: data.email,
+            err: { message: e?.message, code: e?.code },
+            meta: { path: generalPath, consentDocId }
+          });
         }
 
         // 3.b Individual por aceptación
@@ -401,7 +424,12 @@ async function registrarConsentimiento(payload) {
         termsBlobPath = indivPath;
         termsSnapshotOk = true;
       } catch (e) {
-        await alertAdmin(`⚠️ Error TERMS snapshot (${data.email}): ${e.message}`);
+        await alertAdmin({
+          area: 'consentlogs_terms_snapshot',
+          email: data.email,
+          err: { message: e?.message, code: e?.code },
+          meta: { url: data.termsUrl, version: data.termsVersion, consentDocId }
+        });
       }
     }
   }
@@ -422,7 +450,12 @@ async function registrarConsentimiento(payload) {
 
   await initialDocRef.update(updatePayload)
     .catch(async (e) => {
-      await alertAdmin(`❌ Error actualizando consentLogs ${consentDocId}: ${e.message}`);
+      await alertAdmin({
+        area: 'consentlogs_update_doc',
+        email: data.email,
+        err: { message: e?.message, code: e?.code },
+        meta: { consentDocId, updateKeys: Object.keys(updatePayload) }
+      });
       throw e;
     });
 
@@ -440,7 +473,12 @@ async function registrarConsentimiento(payload) {
       createdAt: nowISO()
     }, { merge: false });
   } catch (e) {
-    await alertAdmin(`⚠️ Error creando índice consentLogs_idx ${consentDocId}: ${e.message}`);
+    await alertAdmin({
+      area: 'consentlogs_create_index',
+      email: data.email,
+      err: { message: e?.message, code: e?.code },
+      meta: { consentDocId }
+    });
   }
 
   // 6) Señal si faltó algún snapshot esperado
@@ -448,7 +486,18 @@ async function registrarConsentimiento(payload) {
   const expectedTerms   = !registro && !!data.termsUrl && !!data.termsVersion;
 
   if ((expectedPrivacy && !privacySnapshotOk) || (expectedTerms && !termsSnapshotOk)) {
-    await alertAdmin(`⚠️ Consent con snapshots incompletos: email=${data.email}, docId=${consentDocId}, privacyOk=${privacySnapshotOk}, termsOk=${termsSnapshotOk}`);
+    await alertAdmin({
+      area: 'consentlogs_incomplete_snapshots',
+      email: data.email,
+      err: { message: 'Snapshots incompletos' },
+      meta: {
+        consentDocId,
+        privacyExpected: expectedPrivacy,
+        privacyOk: privacySnapshotOk,
+        termsExpected: expectedTerms,
+        termsOk: termsSnapshotOk
+      }
+    });
   }
 
   return {

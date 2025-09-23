@@ -82,9 +82,9 @@ router.post('/', async (req, res) => {
       try {
         await alertAdmin({
           area: 'club.activate.email_mismatch',
+          email, // ← email completo en el aviso al admin
           err: new Error('stripe_email_mismatch'),
           meta: {
-            email: maskEmail(email),
             stripeEmail: maskEmail(stripeEmail),
             invoiceId: invoiceId ? `${invoiceId.slice(0, 4)}***` : null,
             paymentIntentId: paymentIntentId ? `${paymentIntentId.slice(0, 6)}***` : null,
@@ -117,7 +117,7 @@ router.post('/', async (req, res) => {
         area: 'club.activate.error',
         err: { message: error?.message, code: error?.code, type: error?.type },
         meta: {
-          email: maskEmail(lower((req.body?.email || '').toString())),
+          email: lower((req.body?.email || '').toString()), // ← email completo en el aviso al admin
           invoiceId: req.body?.invoiceId ? `${String(req.body.invoiceId).slice(0, 4)}***` : null,
           paymentIntentId: req.body?.paymentIntentId ? `${String(req.body.paymentIntentId).slice(0, 6)}***` : null,
           request_id

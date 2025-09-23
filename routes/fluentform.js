@@ -148,7 +148,10 @@ module.exports = async function (req, res) {
     console.log('✅ Procesada (importe=0) desde /fluentform para', maskEmail(email));
     return res.status(200).json({ ok: true, mensaje: 'Compra procesada correctamente' });
   } catch (error) {
-    console.error('❌ Error procesando compra (ff, importe=0):', error?.message || error);
+    console.error(
+      '❌ Error procesando compra (ff, importe=0):',
+      { err: error?.message || String(error), email: maskEmail(email) }
+    );
 
     // 🔔 Aviso admin (500)
     try {

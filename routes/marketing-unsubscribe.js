@@ -49,6 +49,17 @@ const nowISO = () => new Date().toISOString();
 const isEmail = (e) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(e||''));
 const clientIp = (req) => (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim();
 
+// Enmascarado de email para logs (RGPD)
+function maskEmail(e=''){
+  const s = String(e||''); const i = s.indexOf('@');
+  if (i<=0) return '***';
+  const u = s.slice(0,i), d = s.slice(i+1);
+  const um = u.length<=2 ? (u[0]||'*') : (u.slice(0,2)+'***'+u.slice(-1));
+  const dm = d.length<=3 ? '***' : ('***'+d.slice(-3));
+  return `${um}@${dm}`;
+}
+
+
 function b64urlEncode(buf){
   return Buffer.from(buf).toString('base64').replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
 }
@@ -222,7 +233,14 @@ async function handleUnsubscribe(req, res){
           }, { merge: true });
         }
       } catch (e) {
-        try { await alertAdmin({ area:'unsubscribe_consents_delete_error', err:e, meta:{ email } }); } catch{}
+        try {
+          await alertAdmin({
+            area:'unsubscribe_consents_delete_error',
+            email, // ← email COMPLETO para soporte
+            err:e,
+            meta:{}
+          });
+        } catch{}
         // como último recurso, marca OFF
         try {
           await consRef.set({
@@ -267,7 +285,23 @@ async function handleUnsubscribe(req, res){
     const code = String(e?.message || 'UNSUB_ERROR');
     const msgHuman = 'No hemos podido procesar la baja. El enlace puede haber caducado o ya fue usado.';
     console.error('unsubscribe error:', code);
-    try { await alertAdmin({ area:'unsubscribe_error', err:e, meta:{ email: (req.body?.email || '(from token)') } }); } catch{}
+    // Intentar extraer email del token para el aviso admin (sin romper si falla)
+    let emailForAdmin = String(req.body?.email || '').toLowerCase();
+    if (!isEmail(emailForAdmin)) {
+      try {
+        const t = String((req.body && req.body.token) || req.query?.token || '');
+        const v = verifyToken(t);
+        if (v && isEmail(v.email)) emailForAdmin = v.email;
+      } catch { /* noop */ }
+    }
+    try {
+      await alertAdmin({
+        area:'unsubscribe_error',
+        email: emailForAdmin || '-', // ← email COMPLETO si lo tenemos
+        err:e,
+        meta:{}
+      });
+    } catch{}
 
     if (wantsHtml(req)) return res.status(400).send(htmlError(msgHuman));
     return res.status(400).json({ ok:false, error: code, message: msgHuman });

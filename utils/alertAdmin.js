@@ -10,19 +10,31 @@ const escapeHtml = s => String(s ?? '')
   .replace(/'/g,'&#39;');
 const hash12 = e => crypto.createHash('sha256').update(String(e || '').toLowerCase()).digest('hex').slice(0,12);
 
-async function alertAdmin({ area, email, err, meta = {}, dedupeKey }) {
+// Acepta tanto objeto {area,email,err,meta} como formatos "legacy":
+//   alertAdmin('mensaje', { area, email, ... })  o  alertAdmin({ message: '...' })
+async function alertAdmin(arg, legacyMeta = {}) {
   try {
-    const key = dedupeKey || `alert:${(area||'-').toLowerCase()}:${(email||'-').toLowerCase()}:${hash12(String(err?.message || err || '-'))}`;
-    const first = await ensureOnce('adminAlerts', key);
+    const payload = (arg && typeof arg === 'object' && !Array.isArray(arg))
+      ? arg
+      : { message: String(arg || ''), ...legacyMeta };
+
+    const area = payload.area || 'general';
+    const email = payload.email || '-';
+    const err = payload.err ?? payload.error ?? payload.message ?? '-';
+    const meta = payload.meta || {};
+    const dedupeKey = payload.dedupeKey;
+    // No guardar PII en claro en la clave de dedupe: usar hash del email
+    const emailHash = hash12(String(email || '-'));
+    const key = dedupeKey || `alert:${String(area).toLowerCase()}:${emailHash}:${hash12(String(err?.message || err || '-'))}`;
     if (!first) return;
 
     const E = v => escapeHtml(String(v ?? '-'));
     const T = v => String(v ?? '-');
 
-    const subject = `🚨 FALLO ${T(area).toUpperCase()} — ${T(email || '-')}`;
+    const subject = `🚨 FALLO ${T(area).toUpperCase()} — ${T(email)}`;
     const text = [
       `Área: ${T(area)}`,
-      `Email: ${T(email || '-')}`,
+      `Email: ${T(email)}`,
       `Error: ${T(err?.message || err || '-')}`,
       `Meta: ${T(JSON.stringify(meta))}`,
       `Entorno: ${T(process.env.NODE_ENV || 'dev')}`,
@@ -33,7 +45,7 @@ async function alertAdmin({ area, email, err, meta = {}, dedupeKey }) {
     const html = `
       <h3>Fallo en ${E(area)}</h3>
       <ul>
-        <li><strong>Email:</strong> ${E(email || '-')}</li>
+        <li><strong>Email:</strong> ${E(email)}</li>
         <li><strong>Error:</strong> ${E(err?.message || err || '-')}</li>
         <li><strong>Entorno:</strong> ${E(process.env.NODE_ENV || 'dev')}</li>
       </ul>

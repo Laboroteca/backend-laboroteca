@@ -70,6 +70,18 @@ const s = (v, def='') => (v===undefined||v===null) ? def : String(v);
 const sha256 = (str) => crypto.createHash('sha256').update(String(str||''), 'utf8').digest('hex');
 const sleep  = (ms)  => ms > 0 ? new Promise(r => setTimeout(r, ms)) : Promise.resolve();
 
+// Enmascara emails en logs (RGPD)
+function maskEmail(e='') {
+  const str = String(e || '');
+  const at = str.indexOf('@');
+  if (at <= 0) return '***';
+  const user = str.slice(0, at);
+  const dom  = str.slice(at + 1);
+  const uMask = user.length <= 2 ? (user[0] || '*') : (user.slice(0,2) + '***' + user.slice(-1));
+  const dMask = dom.length <= 3 ? '***' : ('***' + dom.slice(-3));
+  return `${uMask}@${dMask}`;
+}
+
 function clientIp(req){
   return (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim();
 }
@@ -403,7 +415,7 @@ async function processChunk({ ref, job, recipients, startIndex, chunkSize }) {
       failed++;
       // liberar para futuros reintentos del mismo job
       try { await dedupRef.delete(); } catch {}
-      if (LAB_DEBUG) console.warn('%s fallo envío → %s : %s', LOG_PREFIX, to, e?.message||e);
+      if (LAB_DEBUG) console.warn('%s fallo envío → %s : %s', LOG_PREFIX, maskEmail(to), e?.message||e);
     }
 
     // checkpoint parcial cada ~25 envíos o al final del slice

@@ -85,6 +85,18 @@ const HMAC_WINDOW_MS = 5 * 60 * 1000; // ±5 minutos (acepta s o ms)
 // Quitar automáticamente de suppressionList cuando hay nuevo consentimiento válido
 const AUTO_UNSUPPRESS = String(process.env.CONSENT_AUTO_UNSUPPRESS || '1').trim() === '1';
 
+/* ───────── RGPD helpers (logs) ───────── */
+function maskEmail(e='') {
+  const s = String(e || '');
+  const i = s.indexOf('@');
+  if (i <= 0) return '***';
+  const u = s.slice(0, i);
+  const d = s.slice(i + 1);
+  const up = u.length <= 2 ? (u[0] || '*') : (u.slice(0,2) + '***' + u.slice(-1));
+  const dp = d.length <= 3 ? '***' : ('***' + d.slice(-3));
+  return `${up}@${dp}`;
+}
+
 /* ───────── Materias ───────── */
 
 const MATERIAS_ORDER = [
@@ -582,7 +594,7 @@ router.post('/consent', async (req, res) => {
     // Materias (OBLIGATORIO any=true)
     const { obj: materias, any } = normalizeMaterias(req.body?.materias, req.body || {});
     if (!any) {
-      if (DEBUG) console.warn('⛔ MATERIAS_REQUIRED para %s (body puede no traer materias)', email);
+      if (DEBUG) console.warn('⛔ MATERIAS_REQUIRED para %s (body puede no traer materias)', maskEmail(email));
       return res.status(400).json({ ok:false, error:'MATERIAS_REQUIRED' });
     }
     if (DEBUG) console.log('📚 Materias:', materiasToList(materias));
@@ -590,7 +602,7 @@ router.post('/consent', async (req, res) => {
     // Consentimiento marketing (OBLIGATORIO)
     const consent_marketing = toBool(req.body?.consent_marketing, false);
     if (!consent_marketing) {
-      if (DEBUG) console.warn('⛔ CONSENT_MARKETING_REQUIRED para %s', email);
+      if (DEBUG) console.warn('⛔ CONSENT_MARKETING_REQUIRED para %s', maskEmail(email));
       return res.status(400).json({ ok:false, error:'CONSENT_MARKETING_REQUIRED' });
     }
 
@@ -754,7 +766,7 @@ router.post('/consent', async (req, res) => {
     }
 
     // Firestore: marketingConsents (docId = email) – idempotente
-    if (DEBUG) console.log('📝 FS write → marketingConsents/%s materias=%j', email, materiasToList(materias));
+    if (DEBUG) console.log('📝 FS write → marketingConsents/%s materias=%j', maskEmail(email), materiasToList(materias));
 
     // Fallbacks finales de hash por si no hubo snapshot:
     if (!consentTextHash && consentVersion && consentUrl) {
@@ -794,7 +806,7 @@ router.post('/consent', async (req, res) => {
         }, { merge: true });
       });
       if (DEBUG) {
-        console.log('🔥 Firestore upsert OK → marketingConsents/%s', email);
+        console.log('🔥 Firestore upsert OK → marketingConsents/%s', maskEmail(email));
       } else {
         const emailH12 = sha256Hex(email).slice(0,12);
         console.info('🔥 Firestore upsert OK (email#%s)', emailH12);
@@ -818,7 +830,7 @@ router.post('/consent', async (req, res) => {
     }
 
     // Aviso de éxito desactivado: no enviamos "newsletter_alta_ok"
-    if (DEBUG) console.log('ℹ️ Alta newsletter OK (alert silenciado) → %s', email);    
+    if (DEBUG) console.log('ℹ️ Alta newsletter OK (alert silenciado) → %s', maskEmail(email));   
 
     // Sheets: upsert fila A–E (best-effort, no bloquea)
     const comercialYES = consent_comercial ? 'SÍ' : 'NO';
@@ -867,7 +879,7 @@ router.post('/consent', async (req, res) => {
         );
 
         await sendSMTP2GO({ to: email, subject, html: bodyTop + pieHtml, headers: listHeaders });
-        if (DEBUG) console.log('📧 Welcome email OK → %s', email);
+        if (DEBUG) console.log('📧 Welcome email OK → %s', maskEmail(email));
       } catch (e) {
         console.warn('Welcome email failed:', e?.message || e);
         try { await alertAdmin({ area:'newsletter_welcome_fail', email, err: e, meta:{} }); } catch {}

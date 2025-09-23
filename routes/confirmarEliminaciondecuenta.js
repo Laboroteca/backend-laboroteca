@@ -29,6 +29,15 @@ const _hash10 = (s) => {
   try { return crypto.createHash('sha256').update(String(s),'utf8').digest('hex').slice(0,10); }
   catch { return 'errhash'; }
 };
+// 🔒 Enmascara emails en logs (RGPD): deja 1ª y última letra del usuario y oculta dominio
+const maskEmail = (e) => {
+  if (!e || typeof e !== 'string') return '';
+  const [u, d = ''] = String(e).split('@');
+  const um = u.length <= 2 ? (u[0] || '*') : (u[0] + '…' + u.slice(-1));
+  // Mantén primer y último char del dominio y oculta resto, preservando puntos
+  const dm = d.replace(/([^.])([^.]*)(?=[^.]*\.)/g, (m, a, b) => a + (b ? '***' : ''));
+  return `${um}@${dm || '***'}`;
+};
 
 // ———————————————————————————————————————————————————————
 // Helper: cancelar suscripciones Stripe por email (INMEDIATA)
@@ -178,7 +187,7 @@ router.post('/confirmar-eliminacion', async (req, res) => {
       return res.status(410).json({ ok: false, mensaje: 'El enlace ha caducado.' });
     }
 
-    if (LAB_DEBUG) console.log('[ELIM CONF START]', { email });
+    if (LAB_DEBUG) console.log('[ELIM CONF START]', { email: maskEmail(email) });
 
     // 1) Cancelación inmediata en Stripe (SIEMPRE)
     const rStripe = await cancelarSuscripcionesStripePorEmail(email);
@@ -234,21 +243,26 @@ router.post('/confirmar-eliminacion', async (req, res) => {
       try {
         await alertAdmin({
           area: 'eliminacion_cuenta_desactivacion_fallida',
-          email,
+          email, // ⚠️ alertAdmin recibe email COMPLETO (no enmascarar)
           err: new Error('Una o más acciones no se completaron'),
           meta: { stripe: rStripe, memberpress: mpOk, firestore: fsOk, wp: rWP, fallback: rForzado }
         });
       } catch (_) {}
     }
 
-    if (LAB_DEBUG) console.log('[ELIM CONF END]', { email, verificacion });
+    if (LAB_DEBUG) console.log('[ELIM CONF END]', { email: maskEmail(email), verificacion });
 
     return res.json({ ok: true, verificacion });
 
   } catch (err) {
-    console.error('❌ Error al confirmar eliminación:', err?.message || err);
+    console.error('❌ Error al confirmar eliminación:', { err: err?.message || String(err), email: maskEmail(req?.body?.email || '') });
     try {
-      await alertAdmin({ area: 'confirmar_eliminacion_error', email: (req.body?.email || '-'), err, meta: {} });
+      await alertAdmin({
+        area: 'confirmar_eliminacion_error',
+        email: (req.body?.email || '-'), // ⚠️ enviar COMPLETO a admin si está disponible
+        err,
+        meta: {}
+      });
     } catch (_) {}
     return res.status(500).json({ ok: false, mensaje: 'Error interno del servidor.' });
   }

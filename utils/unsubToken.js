@@ -4,6 +4,15 @@
 const crypto = require('crypto');
 
 const SECRET = process.env.MKT_UNSUB_SECRET || 'change_me_secret';
+// Endurecimiento básico en prod: exige secreto real y razonable
+if (process.env.NODE_ENV === 'production') {
+  if (SECRET === 'change_me_secret' || !process.env.MKT_UNSUB_SECRET) {
+    throw new Error('MKT_UNSUB_SECRET no configurado en producción');
+  }
+  if (Buffer.byteLength(SECRET, 'utf8') < 32) {
+    console.warn('⚠️ MKT_UNSUB_SECRET es corto (<32 bytes). Recomendado ≥32 bytes.');
+  }
+}
 
 /**
  * Genera un token seguro de baja de newsletter.

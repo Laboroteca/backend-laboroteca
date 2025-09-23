@@ -14,6 +14,25 @@ const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
 console.log('📦 WEBHOOK CARGADO');
 
+// ——— Utilidad: intenta extraer email del evento Stripe (sin peticiones extra)
+function extractEmailFromEvent(evt) {
+  try {
+    const o = evt?.data?.object || {};
+    // Rutas habituales según tipo de evento/objeto
+    return (
+      o.customer_details?.email ||
+      o.receipt_email ||
+      o.billing_details?.email ||
+      o.customer_email ||
+      o.email ||                         // p.ej. "customer.created"
+      o.charges?.data?.[0]?.billing_details?.email ||
+      o.payment_intent?.charges?.data?.[0]?.billing_details?.email ||
+      o.invoice?.customer_email ||
+      null
+    );
+  } catch { return null; }
+}
+
 // ── LRU simple en memoria para dedupe cuando Firestore falle (no bloqueante)
 const RECENT_MAX = Number(process.env.WEBHOOK_RECENT_MAX || 3000); // tamaño máx del LRU
 const RECENT_TTL_MS = Number(process.env.WEBHOOK_RECENT_TTL_MS || 6 * 60 * 60 * 1000); // 6h
@@ -80,6 +99,8 @@ return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
     try {
+      // Posible email para alertas admin (si está en el payload del evento)
+      const emailForAdmin = extractEmailFromEvent(event) || '-';
       const eventId = event.id;
       const processedRef = firestore.collection('stripeWebhookProcesados').doc(eventId);
 
@@ -100,7 +121,7 @@ return res.status(400).send(`Webhook Error: ${err.message}`);
         try {
           await alertAdmin({
             area: 'webhook_dedupe_firestore_fail',
-            email: '-',
+            email: emailForAdmin,
             err: fsErr,
             meta: { eventId, eventType: event?.type || null }
           });
@@ -127,7 +148,7 @@ console.error('❌ Error al manejar evento Stripe:', err.stack || err);
 try {
   await alertAdmin({
     area: 'stripe_webhook_handle',
-    email: '-', // no conocemos email aquí
+    email: extractEmailFromEvent(event) || '-', // mejor esfuerzo desde el payload
     err,
     meta: {
       eventId: event?.id || null,

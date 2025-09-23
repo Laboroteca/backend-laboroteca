@@ -96,7 +96,7 @@ async function desactivarMembresiaClub(email, password) {
     console.error('❌ Stripe error (baja inmediata):', errStripe?.message || errStripe);
     try { await alertAdmin({
       area: 'stripe_baja_inmediata',
-      email: maskEmail(email),
+      email, // ← email COMPLETO para soporte al admin
       err: { message: errStripe?.message, code: errStripe?.code, type: errStripe?.type }
     }); } catch (_) {}
   }
@@ -112,7 +112,7 @@ async function desactivarMembresiaClub(email, password) {
     console.error('❌ Error Firestore (usuariosClub):', errFS?.message || errFS);
     try { await alertAdmin({
       area: 'firestore_baja_inmediata',
-      email: maskEmail(email),
+      email, // ← email COMPLETO para soporte al admin
       err: { message: errFS?.message, code: errFS?.code, type: errFS?.type }
     }); } catch (_) {}
   }
@@ -124,7 +124,8 @@ async function desactivarMembresiaClub(email, password) {
       accion: 'desactivar',
       membership_id: MEMBERPRESS_ID,
     });
-    console.log('🧩 MemberPress sync (inmediata):', resp);
+    // Log seguro: no volcar resp completo por si arrastra PII
+    console.log('🧩 MemberPress sync (inmediata):', { ok: !!resp?.ok, detalle: resp?.detalle || resp?.error || null, email: maskEmail(email) });
     if (!resp?.ok) {
       return { ok: false, mensaje: `Error desactivando en MemberPress: ${resp?.error || 'Sin mensaje'}` };
     }
@@ -132,7 +133,7 @@ async function desactivarMembresiaClub(email, password) {
     console.error('❌ Error MemberPress (inmediata):', errMP?.message || errMP);
     try { await alertAdmin({
       area: 'memberpress_baja_inmediata',
-      email: maskEmail(email),
+      email, // ← email COMPLETO para soporte al admin
       err: { message: errMP?.message, code: errMP?.code, type: errMP?.type }
     }); } catch (_) {}
     return { ok: false, mensaje: 'Error al desactivar en MemberPress.' };

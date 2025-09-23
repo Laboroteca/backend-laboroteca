@@ -56,7 +56,8 @@ function verifyHmac({
   headers = {},
   secret,
   skewMs = DEFAULT_SKEW_MS,
-  replayTtlMs = DEFAULT_REPLAY_TTL_MS
+  replayTtlMs = DEFAULT_REPLAY_TTL_MS,
+  allowedVariants = null           // opcional: ['v2_/ruta_s', 'v2_/ruta_ms', ...]
 }) {
   headers = headers || {};
   if (!Buffer.isBuffer(bodyRaw)) bodyRaw = Buffer.from(String(bodyRaw || ''), 'utf8');
@@ -137,7 +138,11 @@ function verifyHmac({
   }
 
   // Comparación en tiempo constante
+  const allowSet = Array.isArray(allowedVariants) && allowedVariants.length
+    ? new Set(allowedVariants)
+    : null;
   for (const c of candidates) {
+    if (allowSet && !allowSet.has(c.label)) continue;
     const expBuf = c.bin ? c.bin : Buffer.from(c.hex, 'hex');
     if (expBuf.length === sigBuf.length && crypto.timingSafeEqual(expBuf, sigBuf)) {
       if (reqId) seen.set(reqId, Date.now() + (Number.isFinite(replayTtlMs) ? replayTtlMs : DEFAULT_REPLAY_TTL_MS));

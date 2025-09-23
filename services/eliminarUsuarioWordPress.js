@@ -21,26 +21,27 @@ async function eliminarUsuarioWordPress(email) {
   }
 
   try {
-    // --- Auth headers: este endpoint espera SOLO LABOROTECA_API_KEY ---
-    const apiKey = process.env.LABOROTECA_API_KEY || '';
-    if (!apiKey) {
-      // fallar rápido y avisar: evita 401 silencioso
-      await alertAdmin({
-        area: 'wp_eliminar_usuario_cfg',
-        email: lower(email),
-        err: { message: 'LABOROTECA_API_KEY no configurada en backend' },
-        meta: {}
-      }).catch(() => {});
-      return { ok: false, mensaje: 'Config API key ausente' };
-    }
+    // --- Auth headers: este endpoint usa la misma pareja que MemberPress ---
+    const apiKey = process.env.MP_SYNC_API_KEY || '';
+    const secret = process.env.MP_SYNC_HMAC_SECRET || '';
+    const path   = '/wp-json/laboroteca/v1/eliminar-usuario';
 
-    const path = '/wp-json/laboroteca/v1/eliminar-usuario';
-    const bodyObj = { email: lower(email) };
-    const bodyRaw = JSON.stringify(bodyObj);
+    const bodyObj  = { email: lower(email) };
+    const bodyRaw  = JSON.stringify(bodyObj);
+    const bodyHash = require('crypto').createHash('sha256').update(bodyRaw,'utf8').digest('hex');
+    const ts       = String(Date.now());
+    const sig      = secret
+      ? require('crypto').createHmac('sha256', secret).update(`${ts}.POST.${path}.${bodyHash}`).digest('hex')
+      : '';
 
     const headers = {
       'Content-Type': 'application/json',
-      'x-api-key'   : apiKey
+      'x-api-key'   : apiKey,
+      'x-mp-ts'     : ts,
+      'x-mp-sig'    : sig,
+      'x-lab-ts'    : ts,
+      'x-lab-sig'   : sig,
+      ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
     };
 
     const res = await fetch(`https://www.laboroteca.es${path}`, {

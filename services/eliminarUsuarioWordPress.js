@@ -22,8 +22,8 @@ async function eliminarUsuarioWordPress(email) {
 
   try {
     // --- Auth headers: este endpoint usa la misma pareja que MemberPress ---
-    const apiKey = process.env.MP_SYNC_API_KEY || '';
-    const secret = process.env.MP_SYNC_HMAC_SECRET || '';
+    const apiKey = process.env.LABOROTECA_API_KEY || '';
+    const secret = ''; // no se usa
     const path   = '/wp-json/laboroteca/v1/eliminar-usuario';
 
     const bodyObj  = { email: lower(email) };

@@ -20,16 +20,6 @@ const HMAC_SHARED_SECRET =
 const DEBUG_REENVIOS = process.env.DEBUG_REENVIOS === '1';
 const REQUIRE_HMAC_ENTRADAS = process.env.LAB_REQUIRE_HMAC_ENTRADAS === '1';
 
-// ——— Utilidades de logging (evitar PII en consola) ———
-function maskEmail(e) {
-  if (!e) return '';
-  const s = String(e);
-  const [u, d] = s.split('@');
-  const uh = (u || '').slice(0, 2);
-  const tld = (d || '').split('.').pop() || '';
-  return `${uh}***@***.${tld}`;
-}
-
 
 // ───────────────────────── HMAC simple para GET (email|ts)
 function verifySimpleHmacFromHeaders(req) {
@@ -47,7 +37,7 @@ function verifySimpleHmacFromHeaders(req) {
     const ok = crypto.timingSafeEqual(Buffer.from(sig,'hex'), Buffer.from(expected,'hex'));
     if (!ok) return { ok:false, error:'invalid' };
   } catch { return { ok:false, error:'invalid' }; }
-  if (DEBUG_REENVIOS) console.log('[ENTRADAS GET HMAC OK]', { email, ts, sig10: sig.slice(0,10) });
+  if (DEBUG_REENVIOS) console.log('[ENTRADAS GET HMAC OK]', { ts, sig10: sig.slice(0,10) });
   return { ok:true, ts, sig10: sig.slice(0,10) };
 }
   
@@ -219,13 +209,13 @@ router.get('/cuenta/entradas', async (req, res) => {
     if (REQUIRE_HMAC_ENTRADAS) {
       const v = verifySimpleHmacFromHeaders(req);
       if (!v.ok) return res.status(401).json({ error: 'Firma requerida' });
-      if (DEBUG_REENVIOS) console.log('[ENTRADAS GET OK]', { email, ts: v.ts, sig10: v.sig10 });
+      if (DEBUG_REENVIOS) console.log('[ENTRADAS GET OK]', { ts: v.ts, sig10: v.sig10 });
     }
 
     const items = await cargarEventosFuturos(email);
     res.json({ ok: true, items });
   } catch (e) {
-    console.error('❌ GET /cuenta/entradas', e);
+    console.error('❌ GET /cuenta/entradas');
     try {
       await alertAdmin({
         area: 'micuenta.entradas.list',
@@ -246,7 +236,7 @@ router.get('/cuenta/entradas-lite', async (req, res) => {
     if (REQUIRE_HMAC_ENTRADAS) {
       const v = verifySimpleHmacFromHeaders(req);
       if (!v.ok) return res.status(401).json({ error: 'Firma requerida' });
-      if (DEBUG_REENVIOS) console.log('[ENTRADAS GET LITE OK]', { email, ts: v.ts, sig10: v.sig10 });
+      if (DEBUG_REENVIOS) console.log('[ENTRADAS GET LITE OK]', { ts: v.ts, sig10: v.sig10 });
     }
 
     const items = await cargarEventosFuturos(email);
@@ -264,7 +254,7 @@ router.get('/cuenta/entradas-lite', async (req, res) => {
 
     res.json({ ok: true, count, items, first: items[0] || null });
   } catch (e) {
-    console.error('❌ GET /cuenta/entradas-lite', e);
+    console.error('❌ GET /cuenta/entradas-lite');
     try {
       await alertAdmin({
         area: 'micuenta.entradas.lite',
@@ -408,16 +398,10 @@ router.post('/entradas/reenviar', async (req, res) => {
     if (!okSig) {
       if (DEBUG_REENVIOS) {
         console.warn('[REENVIO DEBUG] Firma inválida', {
-          base,
-          sig: sig.slice(0, 10) + '…',
-          expected: expected.slice(0, 10) + '…',
-          compradorNorm,
-          descNorm
+          sig10: sig.slice(0, 10) + '…',
+          exp10: expected.slice(0, 10) + '…'
         });
-        return res.status(401).json({
-          error: 'Firma inválida',
-          debug: { base, sig: sig.slice(0,10)+'…', compradorNorm, descNorm }
-        });
+        return res.status(401).json({ error: 'Firma inválida' });
       }
       try {
         await alertAdmin({
@@ -554,7 +538,7 @@ router.post('/entradas/reenviar', async (req, res) => {
 
     res.json({ ok: true, reenviadas: buffers.length });
   } catch (e) {
-    console.error('❌ POST /entradas/reenviar', e?.message || e);
+    console.error('❌ POST /entradas/reenviar');
     try {
       await alertAdmin({
         area: 'micuenta.reenvio.route',
@@ -661,7 +645,7 @@ router.get('/entradas/disponibilidad', async (req, res) => {
       cerrado
     });
   } catch (e) {
-    console.error('❌ GET /entradas/disponibilidad', e);
+    console.error('❌ GET /entradas/disponibilidad');
     try {
       await alertAdmin({
         area: 'micuenta.disponibilidad.route',

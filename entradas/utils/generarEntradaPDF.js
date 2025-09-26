@@ -70,7 +70,7 @@ async function generarEntradaPDF({
       doc.image(embedBuffer, 0, 0, { fit: [maxW, maxH] });
     }
   } catch (err) {
-    console.warn(`⚠️ No se pudo cargar imagen de fondo para ${codigo}:`, err.message);
+    console.warn('⚠️ No se pudo cargar imagen de fondo', err.message);
   }
 
   // ✅ QR
@@ -218,7 +218,7 @@ for (let i = 0; i < tablaItems.length; i += 2) {
 
     doc.image(clubBuffer, imgX, imgY, { width: imgWidth });
   } catch (err) {
-    console.warn('⚠️ No se pudo cargar la imagen del Club Laboroteca:', err.message);
+    console.warn('⚠️ No se pudo cargar la imagen del Club Laboroteca', err.message);
   }
 
   doc.end();

@@ -18,7 +18,7 @@ try {
   const creds = JSON.parse(credsJson);
   storage = new Storage({ credentials: creds });
 } catch (e) {
-  console.error('❌ GCS credentials error:', e?.message || e);
+  console.error('❌ GCS credentials error');
   // Fire-and-forget (sin await top-level)
   alertAdmin({
     area: 'entradas.generar.gcs.creds',
@@ -156,7 +156,7 @@ async function generarEntradas({
         }
         pdf.image(fondoBuf, 0, 0, { fit: [pdf.page.width, pdf.page.height] });
       } catch (err) {
-        console.warn(`⚠️ No se pudo cargar imagen de fondo para ${codigo}:`, err.message);
+        console.warn('⚠️ No se pudo cargar imagen de fondo para la entrada');
       }
     }
 
@@ -190,9 +190,9 @@ async function generarEntradas({
         resumable: false,
         metadata: { cacheControl: 'private, max-age=0' }
       });
-      console.log(`✅ Entrada subida a GCS: ${nombreArchivo}`);
+      console.log('✅ Entrada subida a GCS');
     } catch (err) {
-      console.error(`❌ Error GCS ${codigo}:`, err.message);
+      console.error('❌ Error GCS al subir entrada');
       // Aviso admin: fallo al subir PDF a GCS
       try {
         await alertAdmin({
@@ -223,7 +223,7 @@ async function generarEntradas({
           },
         });
       } catch (err) {
-        console.error(`❌ Error Sheets ${codigo}:`, err.message);
+        console.error('❌ Error registrando en Google Sheets');
         // Aviso admin: fallo al registrar en Google Sheets
         try {
           await alertAdmin({
@@ -296,7 +296,7 @@ async function generarEntradas({
         { merge: true }
       );
     } catch (err) {
-      console.error(`❌ Error guardando en Firestore entrada ${codigo}:`, err.message);
+      console.error('❌ Error guardando en Firestore entrada');
       // Aviso admin: fallo al registrar en Firestore
       try {
         await alertAdmin({

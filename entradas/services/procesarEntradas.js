@@ -11,13 +11,6 @@ const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 
 module.exports = async function procesarEntradas({ session, datosCliente, pdfBuffer = null }) {
   const requestId = (Math.random().toString(36).slice(2) + Date.now().toString(36)).toUpperCase();
-  const maskEmail = (e) => {
-    if (!e) return '';
-    const [u, d] = String(e).split('@');
-    const uh = (u || '').slice(0,2);
-    const tld = (d || '').split('.').pop() || '';
-    return `${uh}***@***.${tld}`;
-  };
   const emailComprador = datosCliente.email;
 
   // ⚙️ Datos del evento (preferimos descripcionProducto para carpeta/etiquetas)
@@ -96,7 +89,7 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
       facturaAdjunta: pdfBuffer || null
     });
   } catch (e) {
-    console.error('❌ Falló el envío con factura (o sin ella si no había):', e?.message || e);
+    console.error('❌ Falló el envío de email de entradas');
     // Aviso admin del fallo del 1º intento
     try {
       await alertAdmin({
@@ -123,7 +116,7 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
         facturaAdjunta: null
       });
     } catch (e2) {
-      console.error('❌ También falló el reenvío sin factura:', e2?.message || e2);
+      console.error('❌ También falló el reenvío de email sin factura');
       try {
         await alertAdmin({
           area: 'entradas.procesar.email.reintento',
@@ -152,7 +145,7 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
                 <p>Error: ${e.message || e}</p>`
         });
       } catch (err) {
-        console.error('⚠️ No se pudo avisar al admin del fallo de factura:', err?.message || err);
+        console.error('⚠️ No se pudo avisar al admin del fallo de factura');
       }
     }
   }
@@ -192,7 +185,7 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
       const nombreArchivo = `entradas/${carpetaDescripcion}/${codigo}.pdf`;
       await subirEntrada(nombreArchivo, buf);
     } catch (e) {
-      console.error('❌ GCS:', e.message || e);
+      console.error('❌ GCS: error al subir entrada');
       try {
         await alertAdmin({
           area: 'entradas.procesar.gcs',
@@ -221,7 +214,7 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
           fecha: fechaGeneracion
         });
       } catch (e) {
-        console.error('❌ Sheets:', e.message || e);
+        console.error('❌ Sheets: error registrando entrada');
         try {
           await alertAdmin({
             area: 'entradas.procesar.sheets',
@@ -252,7 +245,7 @@ module.exports = async function procesarEntradas({ session, datosCliente, pdfBuf
         fechaActuacion                  // "DD/MM/YYYY - HH:mm"
       });
     } catch (e) {
-      console.error('❌ Firestore:', e.message || e);
+      console.error('❌ Firestore: error registrando entrada');
       try {
         await alertAdmin({
           area: 'entradas.procesar.firestore',
@@ -359,7 +352,8 @@ ${textoErrores}
     }
   }
 
-  console.log(`✅ Entradas generadas y enviadas a ${maskEmail(emailComprador)}: ${archivosPDF.length} [${requestId}]`);
+  // Log final sin PII (sin email ni códigos)
+  console.log(`✅ Entradas generadas y enviadas: ${archivosPDF.length} [${requestId}]`);
 };
 
 function obtenerSheetIdPorFormulario(formularioId) {

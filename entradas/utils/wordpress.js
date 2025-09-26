@@ -20,17 +20,14 @@ async function emailRegistradoEnWordPress(email) {
     clearTimeout(timeout);
 
     if (!response.ok) {
-      console.warn('⚠️ Error HTTP verificando email en WP:', {
-        status: response.status,
-        email: emailNorm
-      });
+      console.warn('⚠️ Error HTTP verificando email en WP:', { status: response.status });
       return false;
     }
 
     const data = await response.json().catch(() => ({}));
     const existe = Boolean(data.existe);
 
-    console.log(`🔍 Email ${emailNorm} registrado en WordPress: ${existe}`);
+    console.log(`🔍 Verificación email en WordPress completada: ${existe}`);
     return existe;
   } catch (err) {
     if (err.name === 'AbortError') {

@@ -155,8 +155,6 @@ router.post('/', async (req, res) => {
   if (h.ok) {
     // ✅ LOG IRREFUTABLE DE HMAC OK
     console.log('🛡️ [ENTR HMAC OK]', {
-      ip: clientIp(req),
-      ua: req.get('user-agent') || '',
       path: expectedPath,
       ts: h.ts,
       bodyHash10: h.bodyHash10,
@@ -191,7 +189,7 @@ router.post('/', async (req, res) => {
     }
     const ip = clientIp(req);
     if (IP_ALLOW.length && !IP_ALLOW.includes(ip)) {
-      console.warn('[ENTR LEGACY BLOCKED IP]', { ip, allow: IP_ALLOW });
+      console.warn('[ENTR LEGACY BLOCKED IP]');
       // Aviso por IP bloqueada en modo legacy
       safeAlert('⚠️ IP no permitida en modo legacy', {
         ip,
@@ -202,8 +200,6 @@ router.post('/', async (req, res) => {
     }
     // ✅ LOG IRREFUTABLE DE LEGACY OK
     console.log('🟡 [ENTR LEGACY OK]', {
-      ip,
-      ua: req.get('user-agent') || '',
       authLen: provided.length,
       note: 'Se aceptó Authorization (modo compat).'
     });
@@ -239,7 +235,7 @@ router.post('/', async (req, res) => {
 
   const hashUnico = `${email}-${slugEvento}-${numEntradas}-${importe}`;
   if (processed.has(hashUnico)) {
-    console.warn(`⛔️ Solicitud duplicada ignorada para ${maskEmail(email)}`);
+    console.warn('⛔️ Solicitud duplicada ignorada');
     return res.status(200).json({ ok: true, mensaje: 'Duplicado ignorado' });
   }
   processed.add(hashUnico);
@@ -272,7 +268,7 @@ router.post('/', async (req, res) => {
         importe
       });
     } catch (e) {
-      console.error('❌ Error enviando email de entradas:', e.message || e);
+      console.error('❌ Error enviando email de entradas');
       await safeAlert('❌ Fallo crítico enviando email de entradas', {
         email, // admin ve email completo
         slugEvento,
@@ -291,7 +287,7 @@ router.post('/', async (req, res) => {
           text: JSON.stringify({ email, descripcionProducto, fechaEvento, slugEvento, idFormulario, errores }, null, 2)
         });
       } catch (e) {
-        console.error('⚠️ No se pudo avisar al admin (email personalizado):', e.message || e);
+        console.error('⚠️ No se pudo avisar al admin (email personalizado)');
       }
       // alerta discreta adicional
       safeAlert('⚠️ Errores no críticos en generarEntradas', {
@@ -302,10 +298,10 @@ router.post('/', async (req, res) => {
       });
     }
 
-    console.log(`✅ Entradas generadas y enviadas a ${maskEmail(email)} (${numEntradas})`);
+    console.log(`✅ Entradas generadas y enviadas (${numEntradas})`);
     return res.status(200).json({ ok: true, mensaje: 'Entradas generadas y enviadas' });
   } catch (err) {
-    console.error('❌ Error en /entradas/crear:', err.message || err);
+    console.error('❌ Error en /entradas/crear');
     await safeAlert('❌ Error generando entradas', {
       email, // admin ve email completo
       slugEvento,

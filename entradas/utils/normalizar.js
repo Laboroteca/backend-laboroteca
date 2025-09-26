@@ -9,7 +9,15 @@
  */
 function normalizar(texto) {
   if (typeof texto !== 'string') {
-    console.warn('⚠️ normalizar() recibió un valor no-string:', typeof texto);
+    try {
+      const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
+      alertAdmin({
+        area: 'utils.normalizar.tipo_invalido',
+        email: '-',
+        err: new Error('normalizar() recibió un valor no-string'),
+        meta: { tipo: typeof texto }
+      }).catch(() => {});
+    } catch (_) {}
     return '';
   }
   return texto

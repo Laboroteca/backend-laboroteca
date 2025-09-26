@@ -50,13 +50,6 @@ async function enviarEmailConEntradas({
 }) {
 
   const requestId = (Math.random().toString(36).slice(2) + Date.now().toString(36)).toUpperCase();
-  const maskEmail = (e) => {
-    if (!e) return '';
-    const [u, d] = String(e).split('@');
-    const uh = (u || '').slice(0,2);
-    const tld = (d || '').split('.').pop() || '';
-    return `${uh}***@***.${tld}`;
-  };
 
   // Validaciones mínimas
   if (!email || typeof email !== 'string') {
@@ -283,7 +276,8 @@ ${politicaTEXT || ''}`;
   }
 
 
-  console.log(`📧 Email (${modo}) con ${numEntradas} entrada(s) enviado a ${maskEmail(email)} [${requestId}]`);
+  // Log sin PII (sin email, sin nombre)
+  console.log(`📧 Email (${modo}) con ${numEntradas} entrada(s) enviado [${requestId}]`);
 }
 
 /** Escapa caracteres HTML básicos */

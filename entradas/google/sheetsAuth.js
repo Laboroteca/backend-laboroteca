@@ -12,7 +12,8 @@ const SCOPES = ['https://www.googleapis.com/auth/spreadsheets'];
  * - Alerta al admin si faltan credenciales, están mal formadas o falla GoogleAuth.
  * - No expone secretos en logs/alertas.
  */
-const auth = async () => {
+const auth = async (opts = {}) => {
+  const userEmail = typeof opts.email === 'string' && opts.email.trim() ? opts.email.trim() : '-';
   let alerted = false;
 
   try {
@@ -22,7 +23,7 @@ const auth = async () => {
       try {
         await alertAdmin({
           area: 'sheetsAuth',
-          email: '-',
+          email: userEmail,
           err,
           meta: { hasCreds: false, b64len: 0, scopes: SCOPES }
         });
@@ -40,7 +41,7 @@ const auth = async () => {
       try {
         await alertAdmin({
           area: 'sheetsAuth',
-          email: '-',
+          email: userEmail,
           err,
           meta: { hasCreds: true, b64len: b64.length, parseError: String(e?.message || e), scopes: SCOPES }
         });
@@ -61,7 +62,7 @@ const auth = async () => {
       try {
         await alertAdmin({
           area: 'sheetsAuth',
-          email: '-',
+          email: userEmail,
           err,
           meta: { note: 'Fallo al obtener GoogleAuth client', env: process.env.NODE_ENV || 'dev', scopes: SCOPES }
         });

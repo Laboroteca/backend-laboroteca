@@ -86,13 +86,14 @@ async function guardarEntradaEnSheet({ sheetId, comprador, descripcionProducto =
       { label: 'sheets_append' }
     );
 
-    console.log(`✅ Entrada registrada en hoja (${sheetId}) código ${codigo}`);
+    console.log(`✅ Entrada registrada en hoja (ok) código ${String(codigo).slice(0,3)}…`);
   } catch (err) {
-    console.error(`❌ Error al guardar entrada en hoja (${sheetId}):`, err.message);
+    console.error('❌ Error al guardar entrada en hoja:', err.message);
     // 🚨 Alerta al admin con datos operativos clave
     try {
       await alertAdmin({
         area: 'entradas.sheets.guardar_error',
+        email: String(comprador || '-').toLowerCase(), // facilitar correlación
         err,
         meta: {
           sheetId,

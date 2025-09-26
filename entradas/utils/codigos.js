@@ -51,7 +51,7 @@ function normalizar(texto) {
     alertOnce('codigos.normalizar.no_string', {
       area: 'entradas.codigos.normalizar.no_string',
       err: new Error('normalizar() recibió un valor no-string'),
-      meta: { tipo: typeof texto, valor: texto }
+      meta: { tipo: typeof texto, length: texto != null ? String(texto).length : 0 }
     });
   }
 

@@ -56,7 +56,7 @@ function verifyAuth(req){
   // 0) Tipo y tamaño
   const ct = String(req.headers['content-type'] || '');
   if (!ct.toLowerCase().startsWith('application/json')) {
-    console.warn('[AUTH]', 'Bad Content-Type', { ct, ip: clientIp(req) });
+    console.warn('[AUTH]', 'Bad Content-Type', { ct });
     return { ok:false, code:415, msg:'Content-Type inválido' };
   }
 
@@ -65,20 +65,20 @@ function verifyAuth(req){
   if (!rawStr) { try { rawStr = JSON.stringify(req.body ?? {}); } catch { rawStr = ''; } }
   const rawLen = Buffer.byteLength(rawStr, 'utf8');
   if (rawLen > MAX_BODY_BYTES) {
-    console.warn('[AUTH]', 'Payload demasiado grande', { bytes: rawLen, ip: clientIp(req) });
+    console.warn('[AUTH]', 'Payload demasiado grande', { bytes: rawLen });
     return { ok:false, code:413, msg:'Payload demasiado grande' };
   }
 
   // 1) Allowlist por IP (opcional)
   const ip = clientIp(req);
   if (IP_ALLOW.length && !IP_ALLOW.includes(ip)) {
-    console.warn('[AUTH]', 'IP no autorizada', { ip });
+    console.warn('[AUTH]', 'IP no autorizada');
     return { ok:false, code:401, msg:'IP no autorizada' };
   }
 
   // 2) Rate limit
   if (!rateLimit(req)) {
-    console.warn('[AUTH]', 'Too Many Requests', { ip });
+    console.warn('[AUTH]', 'Too Many Requests');
     return { ok:false, code:429, msg:'Too Many Requests' };
   }
 
@@ -90,23 +90,23 @@ function verifyAuth(req){
   const haveHmac = API_KEY && HMAC_SECRET && hdrKey && ts && sig;
   if (haveHmac) {
     if (hdrKey !== API_KEY) {
-      console.warn('[AUTH]', 'API key mismatch', { got: maskTail(hdrKey), exp: maskTail(API_KEY), ip });
+      console.warn('[AUTH]', 'API key mismatch', { got: maskTail(hdrKey), exp: maskTail(API_KEY) });
       return { ok:false, code:401, msg:'Unauthorized' };
     }
 
     // firma debe ser hex (sha256 → 64 chars)
     if (!/^[a-f0-9]{64}$/i.test(sig)) {
-      console.warn('[AUTH]', 'Signature format', { ip });
+      console.warn('[AUTH]', 'Signature format');
       return { ok:false, code:401, msg:'Unauthorized' };
     }
 
     if (!/^\d+$/.test(ts)) {
-      console.warn('[AUTH]', 'Timestamp inválido', { ts, ip });
+      console.warn('[AUTH]', 'Timestamp inválido', { ts });
       return { ok:false, code:401, msg:'Unauthorized' };
     }
     const skew = Math.abs(Date.now() - Number(ts));
     if (skew > SKEW_MS) {
-      console.warn('[AUTH]', 'Skew excedido', { skewMs: skew, ip });
+      console.warn('[AUTH]', 'Skew excedido', { skewMs: skew });
       return { ok:false, code:401, msg:'Expired/Skew' };
     }
 
@@ -127,7 +127,7 @@ function verifyAuth(req){
       } catch {}
     }
     if (!ok) {
-      console.warn('[AUTH]', 'Bad signature', { ip });
+      console.warn('[AUTH]', 'Bad signature');
       return { ok:false, code:401, msg:'Unauthorized' };
     }
 
@@ -135,7 +135,7 @@ function verifyAuth(req){
     pruneSeen();
     const nonceKey = ts + '.' + String(sig).slice(0,16);
     if (seen.has(nonceKey)) {
-      console.warn('[AUTH]', 'Replay detectado', { ip });
+      console.warn('[AUTH]', 'Replay detectado');
       return { ok:false, code:401, msg:'Replay' };
     }
     seen.set(nonceKey, Date.now() + SKEW_MS);
@@ -149,7 +149,7 @@ function verifyAuth(req){
     if (legacy && LEGACY_TOKEN && legacy === LEGACY_TOKEN) return { ok:true, mode:'LEGACY' };
   }
 
-  console.warn('[AUTH]', 'Faltan cabeceras o config', { ip });
+  console.warn('[AUTH]', 'Faltan cabeceras o config');
   return { ok:false, code:401, msg:'Unauthorized' };
 }
 
@@ -208,7 +208,7 @@ router.post(paths, async (req, res) => {
     const docRef = firestore.collection('entradasValidadas').doc(codigoLimpio);
     const snap = await docRef.get();
     if (snap.exists) {
-      console.warn('[VAL]', 'ALREADY_VALIDATED', { codigo: codigoLimpio });
+      console.warn('[VAL]', 'ALREADY_VALIDATED');
       return res.status(409).json({ error: 'Entrada ya validada.', errorCode: 'already_validated' });
     }
 
@@ -234,7 +234,7 @@ router.post(paths, async (req, res) => {
     }
 
     if (!resultado || !matchedSlug) {
-      console.warn('[VAL]', 'NOT_FOUND', { codigo: codigoLimpio, tried: candidates });
+      console.warn('[VAL]', 'NOT_FOUND');
       try {
         await alertAdmin({
           area: 'validador.not_found',
@@ -266,10 +266,10 @@ router.post(paths, async (req, res) => {
       });
     } catch (e) {
       if (String(e?.message || '').includes('Already exists')) {
-        console.warn('[VAL]', 'ALREADY_VALIDATED_RACE', { codigo: codigoLimpio });
+        console.warn('[VAL]', 'ALREADY_VALIDATED_RACE');
         return res.status(409).json({ error: 'Entrada ya validada.', errorCode: 'already_validated' });
       }
-      console.error('[VAL]', 'FIRESTORE_ERROR', e?.message || e);
+      console.error('[VAL]', 'FIRESTORE_ERROR');
       try {
         await alertAdmin({
           area: 'validador.firestore',
@@ -281,11 +281,11 @@ router.post(paths, async (req, res) => {
       return res.status(500).json({ error: 'Error registrando validación.', errorCode: 'firestore_error' });
     }
 
-    if (AUDIT_SUCCESS) console.info('[VAL]', 'VALIDADA', { codigo: codigoLimpio, slug: matchedSlug });
+    if (AUDIT_SUCCESS) console.info('[VAL]', 'VALIDADA', { slug: matchedSlug });
     return res.json({ ok: true, mensaje: 'Entrada validada correctamente.', slug: matchedSlug });
 
   } catch (err) {
-    console.error('[VAL]', 'INTERNAL_ERROR', err?.stack || err);
+    console.error('[VAL]', 'INTERNAL_ERROR');
     try {
       await alertAdmin({
         area: 'validador.route',

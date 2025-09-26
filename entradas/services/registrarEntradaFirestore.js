@@ -76,7 +76,8 @@ async function registrarEntradaFirestore({
         meta: { codigoEntrada, slugEvento, descripcionProducto, requestId }
       });
     } catch (_) {}
-    throw new Error(`registrarEntradaFirestore: fallo guardando documentos: ${e?.message || e}`);
+    // Error genérico para no filtrar detalles si alguien loguea err.message
+    throw new Error('registrarEntradaFirestore: fallo guardando documentos');
   }
 }
 module.exports = { registrarEntradaFirestore };

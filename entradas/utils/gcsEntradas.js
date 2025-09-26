@@ -12,7 +12,7 @@ try {
   storage = new Storage({ credentials: creds });
   bucket = storage.bucket('laboroteca-facturas');
 } catch (e) {
-  console.error('❌ Error inicializando GCS para entradas:', e?.message || e);
+  console.error('❌ Error inicializando GCS para entradas');
   // Aviso no bloqueante (dedupe via alertAdminProxy)
   try {
     alertAdmin({
@@ -34,7 +34,7 @@ try {
 async function subirEntrada(nombreArchivo, bufferPDF) {
   if (!bucket) {
     const err = new Error('Bucket no inicializado en GCS (entradas)');
-    console.error('❌', err.message, { nombreArchivo });
+    console.error('❌', err.message);
     try {
       await alertAdmin({
         area: 'entradas.gcs.no_bucket',
@@ -53,9 +53,9 @@ async function subirEntrada(nombreArchivo, bufferPDF) {
       contentType: 'application/pdf',
       metadata: { cacheControl: 'no-store' }
     });
-    console.log(`📂 Entrada subida a GCS: ${nombreArchivo}`);
+    console.log('📂 Entrada subida a GCS');
   } catch (err) {
-    console.error(`❌ Error subiendo entrada a GCS: ${err?.message || err}`, { nombreArchivo });
+    console.error('❌ Error subiendo entrada a GCS');
     try {
       await alertAdmin({
         area: 'entradas.gcs.subida',

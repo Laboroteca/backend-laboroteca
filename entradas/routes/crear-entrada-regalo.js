@@ -170,8 +170,9 @@ function getSheetId(formularioId) {
 }
 
 /* Inserta fila en A:G: A=fecha, B=desc, C=comprador, D=código, E="NO", F="NO", G="REGALO" */
-async function appendRegaloRow({ spreadsheetId, fecha, desc, comprador, codigo }) {
-  const authClient = await auth();
+async function appendRegaloRow({ spreadsheetId, fecha, desc, comprador, codigo, emailForAlerts = '-' }) {
+  // Pasamos el email SOLO a alertas internas de sheetsAuth; nunca a logs
+  const authClient = await auth({ email: emailForAlerts });
   const sheets = google.sheets({ version: 'v4', auth: authClient });
   await sheets.spreadsheets.values.append({
     spreadsheetId,
@@ -297,8 +298,9 @@ router.post('/crear-entrada-regalo', async (req, res) => {
           spreadsheetId: sheetId,
           fecha: fechaCompra,
           desc: descripcionProducto,
-          comprador: email,
-          codigo
+          comprador: email,             // se escribe en la hoja (OK)
+          codigo,
+          emailForAlerts: email         // SOLO para alertas internas en sheetsAuth
         });
       } catch (e) {
         try {
@@ -358,10 +360,11 @@ router.post('/crear-entrada-regalo', async (req, res) => {
       throw e; // mantener comportamiento original (propaga al catch general)
     }
 
-    console.log(`✅ Entradas REGALO generadas y enviadas a ${email} (${buffers.length})`);
+    // No exponer emails en logs
+    console.log(`✅ Entradas REGALO generadas y enviadas (${buffers.length})`);
     res.status(201).json({ ok: true, enviados: buffers.length, codigos, sheetId, formularioId });
   } catch (err) {
-    console.error('❌ /entradas/crear-entrada-regalo:', err?.message || err);
+    console.error('❌ /entradas/crear-entrada-regalo: error interno');
     try {
       await alertAdmin({
         area: 'entradas.regalo.route',

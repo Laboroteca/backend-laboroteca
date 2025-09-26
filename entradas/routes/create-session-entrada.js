@@ -10,17 +10,6 @@ const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 const router = express.Router();
 const URL_IMAGEN_DEFAULT = 'https://www.laboroteca.es/wp-content/uploads/2025/08/logo-entradas-laboroteca-scaled.webp';
 
-// Helpers de saneado para LOGS (no afectan a alertas)
-function maskEmail(e) {
-  const s = String(e || '').toLowerCase();
-  const m = s.match(/^([^@]+)@(.+)$/);
-  if (!m) return s.replace(/.(?=.{2})/g, '•');
-  const [_, local, domain] = m;
-  const localMasked  = local.length <= 2 ? '••' : local[0] + '•'.repeat(Math.max(1, local.length - 2)) + local.slice(-1);
-  const domainMasked = domain.replace(/[^.]/g, '•');
-  return `${localMasked}@${domainMasked}`;
-}
-
 
 // ——— utilidades locales (solo para logs; sin PII) ———
 const safeLogMeta = ({ totalAsistentes, tipoProducto, nombreProducto, formularioId, fechaActuacion }) => ({
@@ -35,10 +24,19 @@ const safeLogMeta = ({ totalAsistentes, tipoProducto, nombreProducto, formulario
 router.post('/crear-sesion-entrada', async (req, res) => {
   try {
     const datos = req.body;
-    // Log crudo (debug puntual). NO incluye PII en alertas.
+    // ⚠️ Nunca volcar el body completo: podría contener PII
     try {
       if (String(process.env.DEBUG || '0') === '1') {
-        console.log('📥 Datos crudos recibidos:\n', JSON.stringify(datos, null, 2));
+        console.log('📥 crear-sesion-entrada DEBUG', {
+          keys: Object.keys(datos || {}),
+          safe: {
+            totalAsistentes: datos?.totalAsistentes,
+            tipoProducto: datos?.tipoProducto,
+            nombreProducto: datos?.nombreProducto,
+            formularioId: datos?.formularioId ?? datos?.formId,
+            fechaActuacion: datos?.fechaActuacion ?? datos?.fechaEvento
+          }
+        });
       }
     } catch {}
     // Si algún middleware anterior marcó rate-limit, corta limpio
@@ -120,7 +118,7 @@ router.post('/crear-sesion-entrada', async (req, res) => {
     if (WP_CHECK_STRICT) {
       const registrado = await emailRegistradoEnWordPress(email);
       if (!registrado) {
-        console.warn('🚫 Email no registrado en WordPress (STRICT=1):', email);
+        console.warn('🚫 Email no registrado en WordPress (STRICT=1)');
         try {
           await alertAdmin({
             area: 'entradas.checkout.wp',
@@ -133,7 +131,7 @@ router.post('/crear-sesion-entrada', async (req, res) => {
       }
     } else {
       // En modo no estricto NO bloqueamos (email viene del usuario logueado/autorrelleno)
-      console.log('ℹ️ Verificación WP omitida (LAB_WP_CHECK_STRICT=0):', { email: maskEmail(email) });
+      console.log('ℹ️ Verificación WP omitida (LAB_WP_CHECK_STRICT=0)');
     }
 
     // Recoger asistentes (compat: no bloquea si faltan nombres)
@@ -192,9 +190,7 @@ router.post('/crear-sesion-entrada', async (req, res) => {
       }
       });
     } catch (e) {
-      console.error('❌ Stripe error creando sesión:', {
-        type: e?.type, code: e?.code, param: e?.param, message: e?.message, requestId: e?.requestId || undefined
-      });
+      console.error('❌ Stripe error creando sesión');
       try {
         await alertAdmin({
           area: 'entradas.checkout.stripe.create_error',
@@ -224,7 +220,7 @@ router.post('/crear-sesion-entrada', async (req, res) => {
     return res.json({ url: session.url });
 
   } catch (err) {
-    console.error('❌ Error creando sesión de entrada:', err.message || err);
+    console.error('❌ Error creando sesión de entrada');
     try {
       await alertAdmin({
         area: 'entradas.checkout.route',

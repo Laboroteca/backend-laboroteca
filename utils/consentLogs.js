@@ -49,7 +49,7 @@ function getBucket() {
  * Descarga HTML de una URL con soporte de redirecciones.
  * Sigue hasta 5 redirecciones para evitar 301/302.
  */
-function fetchHtml(rawUrl, hops = 0) {
+function fetchHtml(rawUrl, hops = 0, attempt = 1) {
   return new Promise((resolve, reject) => {
     if (!rawUrl) return reject(new Error('URL vacía para snapshot'));
     let parsed;
@@ -61,10 +61,12 @@ function fetchHtml(rawUrl, hops = 0) {
       port: parsed.port || (parsed.protocol === 'http:' ? 80 : 443),
       path: parsed.pathname + (parsed.search || ''),
       headers: {
-        'User-Agent': 'LaborotecaSnapshot/1.0 (+https://www.laboroteca.es)',
-        'Accept': 'text/html,application/xhtml+xml'
+        'User-Agent': 'LaborotecaSnapshot/1.1 (+https://www.laboroteca.es)',
+        'Accept': 'text/html,application/xhtml+xml',
+        'Referer': 'https://www.laboroteca.es',
+        'Connection': 'close'
       },
-      timeout: 15000
+      timeout: 30000
     }, (res) => {
       const code = res.statusCode || 0;
 
@@ -75,7 +77,7 @@ function fetchHtml(rawUrl, hops = 0) {
         }
         const next = new URL(res.headers.location, rawUrl).toString();
         res.resume(); // consumir para liberar socket
-        return fetchHtml(next, hops + 1).then(resolve, reject);
+        return fetchHtml(next, hops + 1, attempt).then(resolve, reject);
       }
 
       // OK
@@ -89,11 +91,9 @@ function fetchHtml(rawUrl, hops = 0) {
       reject(new Error(`HTTP ${code} al descargar ${rawUrl}`));
     });
 
-    req.on('timeout', () => {
-      req.destroy(new Error('Timeout al descargar snapshot HTML'));
-    });
-    req.on('error', reject);
-  });
+    req.on('timeout', () => req.destroy(new Error('Timeout al descargar snapshot HTML')));
+        req.on('error', reject);
+      });
 }
 
 /**
@@ -380,7 +380,16 @@ async function registrarConsentimiento(payload) {
     // TERMS (solo si NO es registro y existe url+versión y el checkbox "terms" está afirmativo)
     if (!registro && data.checkboxes.terms && data.termsUrl && data.termsVersion) {
       try {
-        const rawHtml = await fetchHtml(data.termsUrl);
+    let rawHtml;
+    for (let i = 1; i <= 3; i++) {
+      try {
+        rawHtml = await fetchHtml(data.termsUrl, 0, i);
+        break;
+      } catch (e) {
+        if (i === 3) throw e;
+        await new Promise(r => setTimeout(r, i === 1 ? 500 : 1500)); // backoff
+      }
+    }
         const htmlBufIndividual = buildSnapshotHtml({
           rawHtmlBuffer: rawHtml,
           title: `Términos y Condiciones v${data.termsVersion}`,

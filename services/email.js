@@ -64,7 +64,7 @@ Más información: https://www.laboroteca.es/politica-de-privacidad/
   // ——— ADVERTENCIA (mismo tamaño/fuente que el pie RGPD: 14px; color #606296) ———
   const advertenciaHtml = `
     <div style="font-size:14px;color:#606296;line-height:1.5;margin:8px 0;">
-      <strong>Importante:</strong> Tu acceso es personal e intransferible. Todos los contenidos están protegidos por derechos de autor.  
+      <strong>Importante:</strong> Todos los contenidos están protegidos por derechos de autor. Tu acceso es personal e intransferible.  
 Se prohíbe compartir tus credenciales de acceso o difundir el contenido sin autorización expresa.  
 Cualquier uso indebido o sospechoso podrá dar lugar a la suspensión o cancelación de la cuenta.
     </div>
@@ -76,7 +76,7 @@ Cualquier uso indebido o sospechoso podrá dar lugar a la suspensión o cancelac
     <hr style="margin:16px 0;border:0;border-top:1px solid #bbb;" />
   `;
 
-  const advertenciaText = `IMPORTANTE: Tu acceso es personal e intransferible. Todos los contenidos están protegidos por derechos de autor. Se prohíbe compartir tus credenciales de acceso o difundir el contenido sin autorización expresa. Cualquier uso indebido o sospechoso podrá dar lugar a la suspensión o cancelación de la cuenta.`;
+  const advertenciaText = `IMPORTANTE: Todos los contenidos están protegidos por derechos de autor. Tu acceso es personal e intransferible. Se prohíbe compartir tus credenciales de acceso o difundir el contenido sin autorización expresa. Cualquier uso indebido o sospechoso podrá dar lugar a la suspensión o cancelación de la cuenta.`;
   const sepText = '------------------------------------------------------------';
   // Construcción de cuerpo: la advertencia SOLO se incluye si incluirAdvertencia === true
   const html_body = incluirAdvertencia

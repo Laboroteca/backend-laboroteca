@@ -204,8 +204,9 @@ async function enviarFacturaPorEmail(datos, pdfBuffer) {
   const email = datos.email;
   const importeTexto = euros(datos.importe);
   // Usar solo el primer nombre en saludos
-  const nombreCompleto = escapeHtml(datos.nombre || '');
-  const nombre = nombreCompleto.split(' ')[0];
+  const nombreCompleto = escapeHtml(nombre || '');
+  const partes = nombreCompleto.trim().split(' ');
+  nombre = partes[0] || 'cliente';
 
   const esClub =
     (datos.tipoProducto && String(datos.tipoProducto).toLowerCase() === 'club') ||

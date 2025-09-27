@@ -203,10 +203,9 @@ function euros(v) {
 async function enviarFacturaPorEmail(datos, pdfBuffer) {
   const email = datos.email;
   const importeTexto = euros(datos.importe);
-  // Usar solo el primer nombre en saludos
-  const nombreCompleto = escapeHtml(nombre || '');
-  const partes = nombreCompleto.trim().split(' ');
-  nombre = partes[0] || 'cliente';
+  // Usar solo el primer nombre en saludos (fallback a 'cliente')
+  const nombreCompleto = escapeHtml(datos.nombre || '');
+  const nombre = (nombreCompleto.trim().split(/\s+/)[0] || 'cliente');
 
   const esClub =
     (datos.tipoProducto && String(datos.tipoProducto).toLowerCase() === 'club') ||

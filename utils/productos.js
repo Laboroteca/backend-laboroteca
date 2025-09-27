@@ -96,7 +96,7 @@ const PRODUCTOS = {
 
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // ✅ Nuevo: Libro "Conoce y defiende tus derechos laborales" (pago único)
+  // ✅ Nuevo: Libro "Conoce y protege tus derechos laborales" (pago único)
   //     * URL WP: /register/libro-conoce-y-protege-tus-derechos-laborales/
   //     * Nota: el slug sigue la URL ("protege") para coherencia con WP.
   // ─────────────────────────────────────────────────────────────────────────────

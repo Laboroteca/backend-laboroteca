@@ -321,7 +321,7 @@ async function enviarAvisoImpago(
       <p>Tu suscripción ha sido cancelada automáticamente.</p>
       <p>Puedes reactivarla en cualquier momento desde este enlace, sin penalización y con el mismo precio:</p>
       <p>${enlacePago}</p>
-      <p>Si crees que se trata de un error, revisa tu método de pago o tarjeta.</p>
+      <p>Si crees que se trata de un error, revisa tu método de pago o tarjeta y solicita de nuevo el alta.</p>
     </div>`;
   const text = `Hola ${nombre || ''},
 
@@ -442,7 +442,7 @@ async function enviarEmailValidacionEliminacionCuenta(email, token) {
   const html = `
     <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;">
       <p>Hola,</p>
-      <p>Has solicitado eliminar tu cuenta en Laboroteca. Necesitamos que confirmes que has sido tú quien lo ha solicitado. Si estás suscrito al Club Laboroteca, se eliminará también tu membresía.</p>
+      <p>Has solicitado eliminar tu cuenta en Laboroteca. Necesitamos que confirmes que has sido tú quien lo ha solicitado. Si estás suscrito al Club Laboroteca, o tienes activa cualquier membresía, perderás el acceso.</p>
       <p>Para confirmar la eliminación, pulsa en el siguiente enlace:</p>
       <p><a href="${enlace}" style="font-weight:bold;">Confirmar eliminación de cuenta</a></p>
       <p>Si no has solicitado esta acción, ignora este correo. El enlace caducará en 2 horas.</p>
@@ -450,7 +450,7 @@ async function enviarEmailValidacionEliminacionCuenta(email, token) {
     </div>`;
   const text = `Hola,
 
-Has solicitado eliminar tu cuenta en Laboroteca. Necesitamos que confirmes que has sido tú quien lo ha solicitado. Si estás suscrito al Club Laboroteca, se eliminará también tu membresía.
+Has solicitado eliminar tu cuenta en Laboroteca. Necesitamos que confirmes que has sido tú quien lo ha solicitado. Si estás suscrito al Club Laboroteca, o tienes activa cualquier membresía, perderás el acceso.
 
 Para confirmar la eliminación, pulsa en el siguiente enlace:
 Confirmar eliminación de cuenta -> ${enlace}

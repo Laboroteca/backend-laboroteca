@@ -4,6 +4,11 @@ const crypto = require('crypto');
 const { ensureOnce } = require('../utils/dedupe');
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
 
+// Debug sobrio controlado por env
+const LAB_DEBUG = (process.env.LAB_DEBUG === '1' || process.env.DEBUG === '1');
+const safeLog = (...a) => { if (LAB_DEBUG) console.log(...a); };
+
+
 // PII-safe helper para logs
 const maskEmail = (e = '') => {
   const [u, d] = String(e).split('@');
@@ -94,6 +99,20 @@ function fmtES(dateLike) {
   const mm = parts.find(p => p.type === 'month')?.value ?? '';
   const yyyy = parts.find(p => p.type === 'year')?.value ?? '';
   return `${dd}/${mm}/${yyyy}`;
+}
+
+// Hora HH:MM (24h) con ceros, zona Europe/Madrid
+function fmtES_HHMM(dateLike) {
+  const d = dateLike ? new Date(dateLike) : new Date();
+  const parts = new Intl.DateTimeFormat('es-ES', {
+    timeZone: 'Europe/Madrid',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(d);
+  const hh = parts.find(p => p.type === 'hour')?.value ?? '00';
+  const mm = parts.find(p => p.type === 'minute')?.value ?? '00';
+  return `${hh}:${mm}`;
 }
 
 // Siembra encabezados si faltan (no pisa los ya presentes)
@@ -222,7 +241,8 @@ async function escribirSiNoDuplicado(sheets, sheetId, fila, ctx) {
     const { email, descripcion, importe, fecha, uid, groupId } = ctx;
 
 
-  console.log('[Sheets] uid-debug', {
+  // Log de depuración solo en LAB_DEBUG
+  safeLog('[Sheets] uid-debug', {
     uid,
     uidColInSheet, groupColInSheet, dupColInSheet,
     effectiveIdx: { uidIdx, groupIdx, dupIdx },
@@ -322,7 +342,7 @@ async function escribirSiNoDuplicado(sheets, sheetId, fila, ctx) {
 
 
 
-  console.log(`✅ Compra registrada en ${sheetId} para ${maskEmail(email)}${uid ? ` (uid=${uid})` : ''}`);
+  safeLog(`✅ Compra registrada en ${sheetId} para ${maskEmail(email)}${uid ? ` (uid=${uid})` : ''}`);
 }
 
 async function guardarEnGoogleSheets(datos) {
@@ -331,7 +351,9 @@ async function guardarEnGoogleSheets(datos) {
     const sheets = google.sheets({ version: 'v4', auth: client });
 
     const now = new Date();
-    const nowString = now.toLocaleDateString('es-ES', { timeZone: 'Europe/Madrid' }); // dd/mm/aaaa
+    const fechaStr = fmtES(now);          // DD/MM/YYYY
+    const horaStr  = fmtES_HHMM(now);     // HH:MM
+    const fechaHoraStr = `${fechaStr} - ${horaStr}h`;
 
     const email = (datos.email || '').trim().toLowerCase();
     const descripcion = datos.descripcionProducto || datos.nombreProducto || 'Producto Laboroteca';
@@ -360,7 +382,7 @@ async function guardarEnGoogleSheets(datos) {
       datos.dni || '',
       descripcion,
       importe,
-      nowString,
+      fechaHoraStr,         // Fecha + hora en la columna "Fecha"
       email,
       datos.direccion || '',
       datos.ciudad || '',
@@ -380,8 +402,8 @@ async function guardarEnGoogleSheets(datos) {
     email,
     descripcion,
     importe: importeForCompare,
-    fecha: nowString,
-    hora: nowTime,
+    fecha: fechaHoraStr,    // el mismo string que se inserta en la celda
+    hora: horaStr,          // también disponible para claves
     uid,
     groupId,
   };

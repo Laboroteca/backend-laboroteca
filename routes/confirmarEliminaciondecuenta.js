@@ -226,18 +226,29 @@ router.post('/confirmar-eliminacion', async (req, res) => {
       if (rForzado.ok) verificacion = 'CORRECTO';
     }
 
-    // 8) Token fuera y email al usuario — SIEMPRE neutro
+    // 8) Token fuera SIEMPRE
     await ref.delete().catch(() => {});
-    await enviarEmailPersonalizado({
-      to: email,
-      subject: 'Cuenta eliminada con éxito',
-      html: `
-        <p><strong>✅ Tu cuenta en Laboroteca ha sido eliminada correctamente.</strong></p>
-        <p>Gracias por habernos acompañado. Si alguna vez decides volver, estaremos encantados de recibirte.</p>
-      `,
-      text: 'Tu cuenta en Laboroteca ha sido eliminada correctamente. Gracias por tu confianza.',
-      enviarACopy: true
-    });
+
+    if (verificacion === 'CORRECTO') {
+      await enviarEmailPersonalizado({
+        to: email,
+        subject: 'Cuenta eliminada con éxito',
+        html: `<p><strong>✅ Tu cuenta en Laboroteca ha sido eliminada correctamente.</strong></p>
+               <p>Gracias por habernos acompañado. Si alguna vez decides volver, estaremos encantados de recibirte.</p>`,
+        text: 'Tu cuenta ha sido eliminada correctamente.',
+        enviarACopy: true
+      });
+    } else {
+      // Opcional: correo más prudente
+      await enviarEmailPersonalizado({
+        to: email,
+        subject: 'Estamos completando la eliminación de tu cuenta',
+        html: `<p><strong>⚠️ Hemos recibido tu confirmación y estamos finalizando la eliminación.</strong></p>
+               <p>Si ves algún acceso residual, se resolverá en breve. Te avisaremos si necesitamos algo más.</p>`,
+        text: 'Estamos finalizando la eliminación de tu cuenta.',
+        enviarACopy: true
+      });
+    }
 
     if (verificacion === 'FALLIDA') {
       try {

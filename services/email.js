@@ -215,7 +215,7 @@ async function enviarFacturaPorEmail(datos, pdfBuffer) {
   const esRenovClub = esClub && /(renovación mensual|renovacion mensual|subscription_cycle|renovación)/i.test(etiqueta);
 
   const nombreProductoMostrar = escapeHtml(datos.nombreProducto || datos.descripcionProducto || 'Producto Laboroteca');
-  const debeIncluirAdvertencia = (!esClub) || esAltaClub; // ✅ SOLO productos y alta de Club (NO renovaciones)
+  const debeIncluirAdvertencia = (!esClub) || esAltaClub || esRenovClub; // ✅ ahora también en renovaciones del Club
   let subject = '';
   let html = '';
   let text = '';

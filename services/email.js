@@ -201,7 +201,9 @@ function euros(v) {
 async function enviarFacturaPorEmail(datos, pdfBuffer) {
   const email = datos.email;
   const importeTexto = euros(datos.importe);
-  const nombre = escapeHtml(datos.nombre || '');
+  // Usar solo el primer nombre en saludos
+  const nombreCompleto = escapeHtml(datos.nombre || '');
+  const nombre = nombreCompleto.split(' ')[0];
 
   const esClub =
     (datos.tipoProducto && String(datos.tipoProducto).toLowerCase() === 'club') ||
@@ -307,20 +309,21 @@ async function enviarAvisoImpago(
   intento,
   enlacePago = 'https://www.laboroteca.es/membresia-club-laboroteca/'
 ) {
-  nombre = escapeHtml(nombre || '');
+  const nombreCompleto = escapeHtml(nombre || '');
+  nombre = nombreCompleto.split(' ')[0];
   const subject = 'Tu suscripción al Club Laboroteca ha sido cancelada por impago';
   const html = `
     <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;">
       <p>Hola ${nombre || ''},</p>
-      <p>No hemos podido procesar el cobro de tu suscripción mensual al Club Laboroteca.</p>
+      <p><strong>No hemos podido procesar el cobro de tu suscripción mensual al Club Laboroteca.</strong></p>
       <p>Tu suscripción ha sido cancelada automáticamente.</p>
       <p>Puedes reactivarla en cualquier momento desde este enlace, sin penalización y con el mismo precio:</p>
       <p>${enlacePago}</p>
-      <p>Si crees que se trata de un error, revisa tu método de pago o tarjeta y solicita de nuevo el alta.</p>
+      <p>Si crees que se trata de un error, revisa tu método de pago o tarjeta.</p>
     </div>`;
   const text = `Hola ${nombre || ''},
 
-No hemos podido procesar el cobro de tu suscripción mensual al Club Laboroteca.
+**No hemos podido procesar el cobro de tu suscripción mensual al Club Laboroteca.**
 Tu suscripción ha sido cancelada automáticamente.
 
 Puedes reactivarla en cualquier momento desde este enlace, sin penalización y con el mismo precio:
@@ -342,7 +345,8 @@ async function enviarAvisoCancelacion(email, nombre, enlacePago) {
 
 // 📧 ACUSE DE SOLICITUD DE BAJA VOLUNTARIA (en el momento de solicitarla)
 async function enviarEmailSolicitudBajaVoluntaria(nombre = '', email, fechaSolicitudISO, fechaEfectosISO) {
-  nombre = escapeHtml(nombre || '');
+  const nombreCompleto = escapeHtml(nombre || '');
+  nombre = nombreCompleto.split(' ')[0];
   const fmt = iso => {
     try {
       return new Date(iso).toLocaleString('es-ES', { timeZone: 'Europe/Madrid', day:'2-digit', month:'2-digit', year:'numeric' });
@@ -375,7 +379,8 @@ Gracias por haber formado parte del Club Laboroteca.`;
 
 // CONFIRMACIÓN DE BAJA VOLUNTARIA
 async function enviarConfirmacionBajaClub(email, nombre = '') {
-  nombre = escapeHtml(nombre || '');
+  const nombreCompleto = escapeHtml(nombre || '');
+  nombre = nombreCompleto.split(' ')[0];
   const subject = 'Confirmación de baja del Club Laboroteca';
   const html = `
     <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;">
@@ -400,14 +405,17 @@ Laboroteca`;
 
 // AVISO DE CANCELACIÓN MANUAL (por admin/dashboard)
 async function enviarAvisoCancelacionManual(email, nombre = '') {
-  nombre = escapeHtml(nombre || '');
+  const nombreCompleto = escapeHtml(nombre || '');
+  nombre = nombreCompleto.split(' ')[0];
   const subject = 'Tu suscripción al Club Laboroteca ha sido cancelada';
   const html = `
-    <p>Hola ${nombre},</p>
-    <p>Tu suscripción al Club Laboroteca ha sido cancelada.</p>
-    <p>Puedes volver a hacerte miembro cuando quieras, por el mismo precio y sin compromiso de permanencia.</p>
-    <p>Reactivar: https://www.laboroteca.es/membresia-club-laboroteca/</p>
-    <p>Un saludo,<br/>Laboroteca</p>`;
+    <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;">
+      <p>Hola ${nombre},</p>
+      <p>Tu suscripción al Club Laboroteca ha sido cancelada.</p>
+      <p>Puedes volver a hacerte miembro cuando quieras, por el mismo precio y sin compromiso de permanencia.</p>
+      <p>Reactivar: https://www.laboroteca.es/membresia-club-laboroteca/</p>
+      <p>Un saludo,<br/>Laboroteca</p>
+    </div>`;
   const text = `Hola ${nombre},
 
 Tu suscripción al Club Laboroteca ha sido cancelada manualmente.

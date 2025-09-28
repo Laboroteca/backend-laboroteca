@@ -1,6 +1,17 @@
 // /entradas/routes/crear-entrada-regalo.js
 'use strict';
 
+/* ───────────────────── Estilos comunes email ─────────────────────
+   Centralizamos los estilos que venimos usando para los correos:
+   - Cuerpo: Arial 16px, #333, line-height 1.4
+   - Pie:    Arial 14px, #777, line-height 1.4
+   - Enlaces: azul accesible con subrayado (#0645AD)
+   (Nota: se definen aquí para consistencia; su uso se hace en los servicios de email)
+*/
+const EMAIL_STYLE_BODY   = 'font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.4;';
+const EMAIL_STYLE_FOOTER = 'font-family:Arial,sans-serif;font-size:14px;color:#777;line-height:1.4;';
+const EMAIL_STYLE_LINK   = 'color:#0645AD;text-decoration:underline;';
+
 const express = require('express');
 const crypto = require('crypto');
 const dayjs = require('dayjs');

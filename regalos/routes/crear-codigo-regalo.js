@@ -52,7 +52,7 @@ const PIE_HTML = `
   <div style="font-family:Arial,sans-serif;font-size:14px;color:#777;line-height:1.4;">
     En cumplimiento del Reglamento (UE) 2016/679 (RGPD) y la LOPDGDD, le informamos de que su dirección de correo electrónico forma parte de la base de datos de Ignacio Solsona Fernández-Pedrera (DNI 20481042W), con domicilio en calle Enmedio nº 22, 3.º E, 12001 Castellón de la Plana (España).<br /><br />
     Finalidades: prestación de servicios jurídicos, venta de infoproductos, gestión de entradas a eventos, emisión y envío de facturas por email y, en su caso, envío de newsletter y comunicaciones comerciales si usted lo ha consentido. Base jurídica: ejecución de contrato y/o consentimiento. Puede retirar su consentimiento en cualquier momento.<br /><br />
-    Puede ejercer sus derechos de acceso, rectificación, supresión, portabilidad, limitación y oposición escribiendo a <a href="mailto:laboroteca@gmail.com">laboroteca@gmail.com</a>. También puede presentar una reclamación ante la autoridad de control competente. Más información en nuestra política de privacidad: <a href="https://www.laboroteca.es/politica-de-privacidad/" target="_blank" rel="noopener">https://www.laboroteca.es/politica-de-privacidad/</a>.
+    Puede ejercer sus derechos de acceso, rectificación, supresión, portabilidad, limitación y oposición escribiendo a <a href="mailto:laboroteca@gmail.com">laboroteca@gmail.com</a>. También puede presentar una reclamación ante la autoridad de control competente. Más información en nuestra política de privacidad: <a href="https://www.laboroteca.es/politica-de-privacidad/">https://www.laboroteca.es/politica-de-privacidad/</a>.
   </div>
 `.trim();
 
@@ -351,7 +351,7 @@ ${PIE_TEXT}`;
          <p style="margin:0 0 12px;">Estimado/a ${esc(nombre)},</p>
          <p style="margin:0 0 12px;">Has recibido un código de regalo: <strong>${esc(codigo)}</strong></p>
          <p style="margin:0 0 16px;">Puedes canjearlo por cualquiera de mis libros publicados. Para el canje, introduce el código en el formulario de esta página:</p>
-         <p style="margin:0 0 16px;"><a href="${pageUrl}" target="_blank" rel="noopener" style="color:#0b5fff;text-decoration:none;">${pageUrl}</a></p>
+         <p style="margin:0 0 16px;"><a href="${pageUrl}">${pageUrl}</a></p>
          <p style="margin-top:16px;">Un saludo<br/>Ignacio Solsona<br/>Abogado</p>
        </div>
        ${PIE_HTML}`;

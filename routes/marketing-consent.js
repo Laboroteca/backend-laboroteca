@@ -864,7 +864,8 @@ router.post('/consent', async (req, res) => {
           <div style="font-family:Arial,sans-serif;font-size:14px;color:#777;line-height:1.4;">
             En cumplimiento del Reglamento (UE) 2016/679 (RGPD) y la LOPDGDD, le informamos de que su dirección de correo electrónico forma parte de la base de datos de Ignacio Solsona Fernández-Pedrera (DNI 20481042W), con domicilio en calle Enmedio nº 22, 3.º E, 12001 Castellón de la Plana (España).<br /><br />
             Finalidades: prestación de servicios jurídicos, venta de infoproductos, gestión de entradas a eventos, emisión y envío de facturas por email y, en su caso, envío de newsletter y comunicaciones comerciales si usted lo ha consentido. Base jurídica: ejecución de contrato y/o consentimiento. Puede retirar su consentimiento en cualquier momento.<br /><br />
-            Puede ejercer sus derechos de acceso, rectificación, supresión, portabilidad, limitación y oposición escribiendo a <a href="mailto:laboroteca@gmail.com" style="color:#0645AD;text-decoration:underline;">laboroteca@gmail.com</a>. También puede presentar una reclamación ante la autoridad de control competente. Más información en nuestra política de privacidad: <a href="https://www.laboroteca.es/politica-de-privacidad/" style="color:#0645AD;text-decoration:underline;" target="_blank" rel="noopener">https://www.laboroteca.es/politica-de-privacidad/</a>.
+            Puede ejercer sus derechos de acceso, rectificación, supresión, portabilidad, limitación y oposición escribiendo a <a href="mailto:laboroteca@gmail.com">laboroteca@gmail.com</a>. También puede presentar una reclamación ante la autoridad de control competente. Más información en nuestra política de privacidad: <a href="https://www.laboroteca.es/politica-de-privacidad/">https://www.laboroteca.es/politica-de-privacidad/</a>.
+
           </div>
         `;
 
@@ -873,8 +874,8 @@ router.post('/consent', async (req, res) => {
              <p>Hola {NOMBRE},</p>
              <p><strong>¡Gracias por suscribirte al Boletín de Laboroteca!</strong></p>
              <p>Desde ahora recibirás novedades por email sobre las materias que has seleccionado.</p>
-             <p>Si quieres enterarte de las últimas novedades, puedes visitar ahora mismo <a href="https://www.laboroteca.es/boletin-informativo/" style="color:#0645AD;text-decoration:underline;">la portada del Boletín</a>.</p>
-             <p>Si en algún momento quieres darte de baja y dejar de recibir emails, puedes hacerlo desde <a href="${unsubUrl}" style="color:#0645AD;text-decora
+             <p>Si quieres enterarte de las últimas novedades, puedes visitar ahora mismo <a href="https://www.laboroteca.es/boletin-informativo/">la portada del Boletín</a>.</p>
+             <p>Si en algún momento quieres darte de baja y dejar de recibir emails, puedes hacerlo desde <a href="${unsubUrl}">este enlace</a>.</p>
              <p>Un saludo,<br>Ignacio Solsona<br>Abogado</p>
            </div>`,
           tokens

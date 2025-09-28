@@ -320,7 +320,7 @@ async function enviarAvisoImpago(
       <p><strong>No hemos podido procesar el cobro de tu suscripción mensual al Club Laboroteca.</strong></p>
       <p>Tu suscripción ha sido cancelada automáticamente.</p>
       <p>Puedes reactivarla en cualquier momento desde este enlace, sin penalización y con el mismo precio:</p>
-      <p>${enlacePago}</p>
+      <p><a href="${enlacePago}">${enlacePago}</a></p>
       <p>Si crees que se trata de un error, revisa tu método de pago o tarjeta y solicita de nuevo el alta.</p>
     </div>`;
   const text = `Hola ${nombre || ''},

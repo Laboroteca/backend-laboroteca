@@ -104,7 +104,7 @@ async function enviarEmailConEntradas({
 
   // Bloque evento opcional
   const bloqueEventoHTML = (fecha || direccion)
-    ? `<p><strong>Fecha:</strong> ${fecha ? String(fecha) : '—'}<br><strong>Lugar:</strong> ${direccion ? String(direccion) : '—'}</p>`
+    ? `<p><strong>Fecha:</strong> ${fecha ? escapeHtml(String(fecha)) : '—'}<br><strong>Lugar:</strong> ${direccion ? escapeHtml(String(direccion)) : '—'}</p>`
     : '';
 
   const bloqueEventoTEXT = (fecha || direccion)
@@ -139,7 +139,7 @@ async function enviarEmailConEntradas({
         ${bloqueEventoHTML}
         <p><strong>Puedes presentar el PDF adjunto en tu móvil o impreso. Cada entrada incluye su código QR único.</strong></p>
         <p>Una vez validada tu entrada en el evento, el código de la misma podrá canjearse por un libro digital gratuito desde:</p>
-        <p><a href="https://www.laboroteca.es/canjear-codigo-regalo/" style="color:#0b5fff;text-decoration:none;" target="_blank" rel="noopener">https://www.laboroteca.es/canjear-codigo-regalo/</a></p>
+        <p><a href="https://www.laboroteca.es/canjear-codigo-regalo/">https://www.laboroteca.es/canjear-codigo-regalo/</a></p>
         <p>Solo se validará una entrada por cada asistente.</p>
         <p>Si no asistes y tu entrada no es validada, no podrás realizar el canje.</p>
         <p>Un saludo,<br>Ignacio Solsona<br>Laboroteca</p>
@@ -155,7 +155,7 @@ async function enviarEmailConEntradas({
         ${bloqueEventoHTML}
         <p>Cada entrada incluye un código QR único que se validará el día del evento. Puedes llevarlas en el móvil o impresas.</p>
         <p>Una vez validada tu entrada en el evento, el código de la misma podrá canjearse por un libro digital gratuito desde:</p>
-        <p><a href="https://www.laboroteca.es/canjear-codigo-regalo/" style="color:#0b5fff;text-decoration:none;" target="_blank" rel="noopener">https://www.laboroteca.es/canjear-codigo-regalo/</a></p>
+        <p><a href="https://www.laboroteca.es/canjear-codigo-regalo/">https://www.laboroteca.es/canjear-codigo-regalo/</a></p>
         <p>Solo se validará una entrada por cada asistente.</p>
         <p>Si no asistes y tu entrada no es validada, no podrás realizar el canje.</p>
         <p>Un saludo,<br>
@@ -175,7 +175,7 @@ async function enviarEmailConEntradas({
         ${euros ? `<p>Importe total: ${euros.html} €</p>` : ''}
         <p><strong>Puedes presentar el PDF adjunto en tu móvil o impreso. Cada entrada incluye su código QR único.</strong></p>
         <p>Una vez validada tu entrada en el evento, el código de la misma podrá canjearse por un libro digital gratuito desde:</p>
-        <p><a href="https://www.laboroteca.es/canjear-codigo-regalo/" style="color:#0b5fff;text-decoration:none;" target="_blank" rel="noopener">https://www.laboroteca.es/canjear-codigo-regalo/</a></p>
+        <p><a href="https://www.laboroteca.es/canjear-codigo-regalo/">https://www.laboroteca.es/canjear-codigo-regalo/</a></p>
         <p>Solo se validará una entrada por cada asistente.</p>
         <p>Si no asistes y tu entrada no es validada, no podrás realizar el canje.</p>
         <p>Un saludo,<br>Ignacio Solsona<br>Laboroteca</p>

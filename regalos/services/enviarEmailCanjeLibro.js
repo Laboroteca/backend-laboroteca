@@ -53,21 +53,26 @@ Más información: https://www.laboroteca.es/politica-de-privacidad/
  * ───────────────────────────────────────── */
 function construirHTMLBase({ nombreMostrar, libroElegido }) {
   const miCuentaURL = 'https://www.laboroteca.es/mi-cuenta/';
-  // Solo la segunda línea en negrita
-  return `
-    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.5;color:#111;">
-      <p style="margin:0 0 12px;font-size:16px;">¡Enhorabuena${nombreMostrar ? ', ' + nombreMostrar : ''}!</p>
-      <p style="margin:0 0 12px;"><strong>Tu código ha sido canjeado${libroElegido ? ` (${libroElegido})` : ''}.</strong></p>
+// Cuerpo completo con font-size 16px
+return `
+  <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+              line-height:1.5;color:#111;font-size:16px;">
+    <p style="margin:0 0 12px;">¡Enhorabuena${nombreMostrar ? ', ' + nombreMostrar : ''}!</p>
+    <p style="margin:0 0 12px;"><strong>Tu código ha sido canjeado${libroElegido ? ` (${libroElegido})` : ''}.</strong></p>
 
-      <p style="margin:0 0 16px;">
-        Siempre tendrás acceso a la versión más actualizada desde
-        <a href="${miCuentaURL}" target="_blank" rel="noopener" style="color:#0b5fff;text-decoration:none;">https://www.laboroteca.es/mi-cuenta/</a>.
-      </p>
+    <p style="margin:0 0 16px;">
+      Siempre tendrás acceso a la versión más actualizada desde
+      <a href="${miCuentaURL}" target="_blank" rel="noopener"
+         style="color:#0b5fff;text-decoration:none;">
+         https://www.laboroteca.es/mi-cuenta/
+      </a>.
+    </p>
 
-      <p style="margin:16px 0 0;">Atte.,</p>
-      <p style="margin:4px 0 0;">Ignacio Solsona<br/>Abogado</p>
-    </div>
-  `;
+    <p style="margin:16px 0 0;">Atte.,</p>
+    <p style="margin:4px 0 0;">Ignacio Solsona<br/>Abogado</p>
+  </div>
+`;
+
 }
 
 function construirTextoPlanoBase({ nombreMostrar, libroElegido }) {
@@ -154,7 +159,7 @@ async function enviarEmailCanjeLibro({
     pick([nombre, apellidos].filter(Boolean).join(' ')) ||
     (toEmail ? String(toEmail).split('@')[0] : '');
 
-  const subject = `✅ Código canjeado${libroElegido ? `: ${String(libroElegido).trim()}` : ''}`;
+  const subject = `Código canjeado${libroElegido ? `: ${String(libroElegido).trim()}` : ''}`;
 
   // Base sin “Recuerda”
   const htmlBase = construirHTMLBase({

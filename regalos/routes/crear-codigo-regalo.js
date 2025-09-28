@@ -39,6 +39,16 @@ function maskCode(c='') {
   return m ? `${m[1]}-*****` : '*****';
 }
 
+// ——— Pie RGPD (14px) + separadores ———
+const PIE_HTML = `
+  <hr style="margin:16px 0;border:0;border-top:1px solid #bbb;" />
+  <div style="font-size:14px;color:#777777;line-height:1.5;">[...]</div>
+`.trim();
+
+const PIE_TEXT = `------------------------------------------------------------
+[...texto RGPD 14px...]`.trim();
+
+
 async function verifyRegalosHmac(req, res, next) {
   // 0) Compat legacy: Authorization Bearer
   const bearer = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim();
@@ -306,8 +316,7 @@ router.post('/crear-codigo-regalo', verifyRegalosHmac, async (req, res) => {
       const pageUrl = 'https://www.laboroteca.es/canjear-codigo-regalo/';
       const saludo = `Un atento saludo\nIgnacio Solsona\nAbogado`;
 
-      const textoPlano =
-`Estimado/a ${nombre},
+      const textoPlano = `Estimado/a ${nombre},
 
 Has recibido un código de regalo: ${codigo}
 
@@ -317,23 +326,20 @@ ${pageUrl}
 
 ${saludo}
 
-`;
+${PIE_TEXT}`;
 
-      const html =
-        `<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.5;color:#111;">
-           <p>Estimado/a ${nombre},</p>
-           <p>Has recibido un código de regalo:<strong> ${codigo}</strong></p>
-           <p>Puedes canjearlo por cualquiera de mis libros publicados. Para el canje, introduce el código en el formulario de esta página:</p>
-           <p><a href="${pageUrl}" target="_blank" rel="noopener">${pageUrl}</a></p>
-           <p style="margin-top:16px;">
-             Un atento saludo<br />
-             Ignacio Solsona<br />
-             Abogado
-           </p>           
-         </div>`;
-
+      const html = `<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+                     line-height:1.5;color:#111;font-size:16px;">
+         <p style="margin:0 0 12px;">Estimado/a ${esc(nombre)},</p>
+         <p style="margin:0 0 12px;">Has recibido un código de regalo: <strong>${esc(codigo)}</strong></p>
+         <p style="margin:0 0 16px;">Puedes canjearlo por cualquiera de mis libros publicados. Para el canje, introduce el código en el formulario de esta página:</p>
+         <p style="margin:0 0 16px;"><a href="${pageUrl}" target="_blank" rel="noopener" style="color:#0b5fff;text-decoration:none;">${pageUrl}</a></p>
+         <p style="margin-top:16px;">Un atento saludo<br/>Ignacio Solsona<br/>Abogado</p>
+       </div>
+       ${PIE_HTML}`;
 
       await enviarEmailPersonalizado({ to: email, subject, text: textoPlano, html });
+
       console.log(`📧 Email de regalo enviado a ${maskEmail(email)} (codigo ${maskCode(codigo)})`);
     } catch (mailErr) {
       emailedOk = false;

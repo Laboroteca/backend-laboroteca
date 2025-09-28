@@ -229,7 +229,7 @@ async function enviarFacturaPorEmail(datos, pdfBuffer) {
     subject = 'Tu suscripción al Club Laboroteca está activada';
     html = `
       <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;">
-        <p>Estimado ${nombre || 'cliente'},</p>
+        <p>Estimado/a ${nombre || 'cliente'},</p>
         <p>Ya tienes activada tu suscripción al Club Laboroteca. Puedes acceder a todo el contenido exclusivo a través de https://www.laboroteca.es/club-laboroteca/.</p>
         <p>Adjunto a este correo la factura correspondiente a tu suscripción mensual.</p>
         <p>Importe: ${importeTexto}</p>
@@ -237,7 +237,7 @@ async function enviarFacturaPorEmail(datos, pdfBuffer) {
         <p>(Recuerda que en cualquier momento puedes cancelar tu suscripción sin ninguna penalización en: https://www.laboroteca.es/cancelar-suscripcion-club-laboroteca/)</p>
         <p>Ignacio Solsona<br/>Abogado</p>
       </div>`;
-    text = `Estimado ${nombre || 'cliente'},
+    text = `Estimado/a ${nombre || 'cliente'},
 Ya tienes activada tu suscripción al Club Laboroteca. Puedes acceder a todo el contenido exclusivo a través de https://www.laboroteca.es/club-laboroteca/.
 Adjunto a este correo la factura correspondiente a tu suscripción mensual.
 Importe: ${importeTexto}
@@ -251,7 +251,7 @@ Abogado`;
     subject = 'Se ha renovado tu suscripción al Club Laboroteca';
     html = `
       <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;">
-        <p>Estimado ${nombre || 'cliente'},</p>
+        <p>Estimado/a ${nombre || 'cliente'},</p>
         <p>Se ha renovado tu suscripción al Club Laboroteca. Puedes acceder a todo el contenido exclusivo a través de https://www.laboroteca.es/club-laboroteca/.</p>
         <p>Adjunto a este correo la factura correspondiente a tu suscripción mensual.</p>
         <p>Importe: ${importeTexto}</p>
@@ -259,7 +259,7 @@ Abogado`;
         <p>(Recuerda que en cualquier momento puedes cancelar tu suscripción sin ninguna penalización en: https://www.laboroteca.es/cancelar-suscripcion-club-laboroteca/)</p>
         <p>Ignacio Solsona<br/>Abogado</p>
       </div>`;
-    text = `Estimado ${nombre || 'cliente'},
+    text = `Estimado/a ${nombre || 'cliente'},
 Se ha renovado tu suscripción al Club Laboroteca. Puedes acceder a todo el contenido exclusivo a través de https://www.laboroteca.es/club-laboroteca/.
 Adjunto a este correo la factura correspondiente a tu suscripción mensual.
 Importe: ${importeTexto}

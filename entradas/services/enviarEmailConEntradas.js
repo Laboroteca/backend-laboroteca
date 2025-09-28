@@ -150,7 +150,7 @@ async function enviarEmailConEntradas({
       : modo === 'regalo'
         ? `
       <div style="font-size:16px;font-family:Arial,Helvetica,sans-serif;color:#111827;line-height:1.5;">
-        <p>Estimado ${escapeHtml(displayName)},</p>
+        <p>Estimado/a ${escapeHtml(displayName)},</p>
         <p>Te mando de forma <strong>totalmente gratuita</strong> tu(s) entrada(s) para: <strong>${escapeHtml(descripcionProducto)}</strong>.</p>
         ${bloqueEventoHTML}
         <p>Cada entrada incluye un código QR único que se validará el día del evento. Puedes llevarlas en el móvil o impresas.</p>
@@ -204,7 +204,7 @@ Ignacio Solsona
 Laboroteca
 ${politicaTEXT || ''}`
       : modo === 'regalo'
-        ? `Estimado ${displayName},
+        ? `Estimado/a ${displayName},
 
 Te mando de forma totalmente gratuita tu(s) entrada(s) para:
 - ${descripcionProducto}

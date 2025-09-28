@@ -230,11 +230,11 @@ async function enviarFacturaPorEmail(datos, pdfBuffer) {
     html = `
       <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.4;">
         <p>Estimado/a ${nombre || 'cliente'},</p>
-        <p>Ya tienes activada tu suscripción al Club Laboroteca. Puedes acceder a todo el contenido exclusivo a través de https://www.laboroteca.es/club-laboroteca/.</p>
+        <p>Ya tienes activada tu suscripción al Club Laboroteca. Puedes acceder a todo el contenido exclusivo a través de <a href="https://www.laboroteca.es/club-laboroteca/">https://www.laboroteca.es/club-laboroteca/</a>.</p>
         <p>Adjunto a este correo la factura correspondiente a tu suscripción mensual.</p>
         <p>Importe: ${importeTexto}</p>
         <p><strong>Muchas gracias por pertenecer al Club Laboroteca.</strong></p>
-        <p>Recuerda que en cualquier momento puedes cancelar tu suscripción sin ninguna penalización en: https://www.laboroteca.es/cancelar-suscripcion-club-laboroteca/</p>
+        <p>Recuerda que en cualquier momento puedes cancelar tu suscripción sin ninguna penalización en: <a href="https://www.laboroteca.es/cancelar-suscripcion-club-laboroteca/">https://www.laboroteca.es/cancelar-suscripcion-club-laboroteca/</a></p>
         <p>Ignacio Solsona<br/>Abogado</p>
       </div>`;
     text = `Estimado/a ${nombre || 'cliente'},
@@ -252,11 +252,11 @@ Abogado`;
     html = `
       <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.4;">
         <p>Estimado/a ${nombre || 'cliente'},</p>
-        <p>Se ha renovado tu suscripción al Club Laboroteca. Puedes acceder a todo el contenido exclusivo a través de https://www.laboroteca.es/club-laboroteca/.</p>
+        <p>Se ha renovado tu suscripción al Club Laboroteca. Puedes acceder a todo el contenido exclusivo a través de <a href="https://www.laboroteca.es/club-laboroteca/">https://www.laboroteca.es/club-laboroteca/</a>.</p>
         <p>Adjunto a este correo la factura correspondiente a tu suscripción mensual.</p>
         <p>Importe: ${importeTexto}</p>
         <p><strong>Muchas gracias por pertenecer al Club Laboroteca.</strong></p>
-        <p>Recuerda que en cualquier momento puedes cancelar tu suscripción sin ninguna penalización en: https://www.laboroteca.es/cancelar-suscripcion-club-laboroteca/</p>
+        <p>Recuerda que en cualquier momento puedes cancelar tu suscripción sin ninguna penalización en: <a href="https://www.laboroteca.es/cancelar-suscripcion-club-laboroteca/">https://www.laboroteca.es/cancelar-suscripcion-club-laboroteca/</a></p>
         <p>Ignacio Solsona<br/>Abogado</p>
       </div>`;
     text = `Estimado/a ${nombre || 'cliente'},
@@ -276,7 +276,7 @@ Abogado`;
         <p>Hola ${nombre || 'cliente'},</p>
         <p>Gracias por tu compra.</p>
         <p><strong>${nombreProductoMostrar}.</strong></p>
-        <p>Puedes acceder a tu contenido desde: www.laboroteca.es/mi-cuenta</p>
+        <p>Puedes acceder a tu contenido desde: <a href="https://www.laboroteca.es/mi-cuenta">https://www.laboroteca.es/mi-cuenta</a></p>
         <p>Adjuntamos en este correo la factura correspondiente al producto:</p>
         <p>Importe: ${importeTexto}</p>
         <p>Un afectuoso saludo,<br/>Ignacio Solsona<br/>Abogado</p>
@@ -284,7 +284,7 @@ Abogado`;
     text = `Hola ${nombre || 'cliente'},
 Gracias por tu compra.
 ${nombreProductoMostrar}.
-Puedes acceder a tu contenido desde: www.laboroteca.es/mi-cuenta
+Puedes acceder a tu contenido desde: https://www.laboroteca.es/mi-cuenta
 Adjuntamos en este correo la factura correspondiente al producto:
 Importe: ${importeTexto}
 
@@ -389,7 +389,7 @@ async function enviarConfirmacionBajaClub(email, nombre = '') {
       <p>Hola ${nombre},</p>
       <p>Tu suscripción al Club Laboroteca ha sido cancelada.</p>
       <p>Puedes volver a hacerte miembro cuando quieras, por el mismo precio y sin compromiso de permanencia.</p>
-      <p>Reactivar: https://www.laboroteca.es/membresia-club-laboroteca/</p>
+      <p>Reactivar: <a href="https://www.laboroteca.es/membresia-club-laboroteca/">https://www.laboroteca.es/membresia-club-laboroteca/</a></p>
       <p>Un saludo,<br/>Laboroteca</p>
     </div>`;
   const text = `Hola ${nombre},
@@ -415,7 +415,7 @@ async function enviarAvisoCancelacionManual(email, nombre = '') {
       <p>Hola ${nombre},</p>
       <p>Tu suscripción al Club Laboroteca ha sido cancelada.</p>
       <p>Puedes volver a hacerte miembro cuando quieras, por el mismo precio y sin compromiso de permanencia.</p>
-      <p>Reactivar: https://www.laboroteca.es/membresia-club-laboroteca/</p>
+      <p>Reactivar: <a href="https://www.laboroteca.es/membresia-club-laboroteca/">https://www.laboroteca.es/membresia-club-laboroteca/</a></p>
       <p>Un saludo,<br/>Laboroteca</p>
     </div>`;
   const text = `Hola ${nombre},

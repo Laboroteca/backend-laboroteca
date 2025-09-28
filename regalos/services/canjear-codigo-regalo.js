@@ -34,10 +34,6 @@ const {
   PRODUCTOS
   } = require('../../utils/productos');
 
-// Google Sheets (IDs/pestañas)
-const SHEET_ID_REGALOS   = process.env.SHEET_ID_CANJES
-  || '1MjxXebR3oQIyu0bYeRWo83Xzj1sBFnDcx53HvRRBiGE'; // Libros GRATIS (ID correcto)
-const SHEET_NAME_REGALOS = 'Hoja 1';
 const SHEET_ID_CONTROL   = '1DFZuhJtuQ0y8EHXOkUUifR_mCVfGyxgkCHXRvBoiwfo'; // Códigos REG- activos
 const SHEET_NAME_CONTROL = 'CODIGOS REGALO';
 
@@ -268,29 +264,7 @@ module.exports = async function canjearCodigoRegalo({
   }, { tries: 4, baseMs: 150 });
   L(reqId, 'Bloqueado en Firestore');
 
-  /* 3) Registro en "Libros GRATIS" (no bloquea si falla) */
-  (async () => {
-    try {
-      const sheets = await getSheets();
-      await sheets.spreadsheets.values.append({
-        spreadsheetId: SHEET_ID_REGALOS,
-        range: `'${SHEET_NAME_REGALOS}'!A2:G`,
-        valueInputOption: 'USER_ENTERED',
-        requestBody: { values: [[ nombre, apellidos, emailNorm, tsHuman, libroDisplay, esRegalo ? 'REGALO' : 'ENTRADA', codigoNorm ]] }
-      });
-    } catch (e) {
-      W(reqId, 'Registro en "Libros GRATIS" falló', { msg: e?.message });
-      try {
-        await alertAdmin({
-          area: 'regalos.canje.sheets_append_error',
-          email: emailNorm,
-          err: e,
-          meta: { reqId, email: emailNorm, codigo: codigoNorm, libro: libroNorm, sheetId: SHEET_ID_REGALOS, sheetName: SHEET_NAME_REGALOS }
-        });
-      } catch (_) {}
-    }
-  })();
-
+  
   /* 4) Activación MemberPress */
   try {
     let membershipId = null;

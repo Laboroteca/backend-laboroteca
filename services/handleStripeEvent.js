@@ -994,7 +994,7 @@ if (falloFactura) {
   try {
     await enviarEmailPersonalizado({
       to: email,
-      subject: '✅ Tu acceso al Club Laboroteca ya está activo',
+      subject: 'Tu acceso al Club Laboroteca ya está activo',
       html: `
         <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;">
           <p>Hola ${nombre || 'cliente'},</p>
@@ -1848,7 +1848,7 @@ if (!esEntrada && !isClub && falloFactura) {
 
     await enviarEmailPersonalizado({
       to: email,
-      subject: '✅ Acceso activo a tu compra',
+      subject: 'Acceso activo a tu compra',
       html: `
         <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;">
           <p>Hola ${datosCliente.nombre || 'cliente'},</p>

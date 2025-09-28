@@ -333,7 +333,7 @@ router.post('/crear-codigo-regalo', verifyRegalosHmac, async (req, res) => {
     try {
       const subject = `Tu código de regalo: ${codigo}`;
       const pageUrl = 'https://www.laboroteca.es/canjear-codigo-regalo/';
-      const saludo = `Un atento saludo\nIgnacio Solsona\nAbogado`;
+      const saludo = `Un saludo\nIgnacio Solsona\nAbogado`;
 
       const textoPlano = `Estimado/a ${nombre},
 
@@ -352,7 +352,7 @@ ${PIE_TEXT}`;
          <p style="margin:0 0 12px;">Has recibido un código de regalo: <strong>${esc(codigo)}</strong></p>
          <p style="margin:0 0 16px;">Puedes canjearlo por cualquiera de mis libros publicados. Para el canje, introduce el código en el formulario de esta página:</p>
          <p style="margin:0 0 16px;"><a href="${pageUrl}" target="_blank" rel="noopener" style="color:#0b5fff;text-decoration:none;">${pageUrl}</a></p>
-         <p style="margin-top:16px;">Un atento saludo<br/>Ignacio Solsona<br/>Abogado</p>
+         <p style="margin-top:16px;">Un saludo<br/>Ignacio Solsona<br/>Abogado</p>
        </div>
        ${PIE_HTML}`;
 

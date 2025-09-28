@@ -270,20 +270,20 @@ function buildLegalFooter({ email }) {
   const unsubUrl = `${UNSUB_PAGE}${UNSUB_PAGE.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
 
   const unsubBlock = `
-    <hr style="margin-top:32px;margin-bottom:12px" />
-    <p style="font-size:13px;color:#555;line-height:1.5">
+    <hr style="margin-top:32px;margin-bottom:14px" />
+    <p style="font-size:14px;color:#555;line-height:1.5">
       Para dejar de recibir este boletín, puedes darte de baja desde
-      <a href="${unsubUrl}" target="_blank" rel="noopener">este enlace seguro</a>.
+      <a href="${unsubUrl}" style="color:#0645AD;text-decoration:underline;" target="_blank" rel="noopener">este enlace seguro</a>.
     </p>
   `;
 
   const legalBlock = `
-    <div style="font-size:12px;color:#777;line-height:1.5">
+    <div style="font-size:14px;color:#777;line-height:1.5">
       En cumplimiento del Reglamento (UE) 2016/679 (RGPD) y la LOPDGDD, le informamos de que su dirección de correo electrónico forma parte de la base de datos de Ignacio Solsona Fernández-Pedrera (DNI 20481042W), con domicilio en calle Enmedio nº 22, 3.º E, 12001 Castellón de la Plana (España).<br /><br />
       Finalidades: prestación de servicios jurídicos, venta de infoproductos, gestión de entradas a eventos, emisión y envío de facturas por email y, en su caso, envío de newsletter y comunicaciones comerciales si usted lo ha consentido. Base jurídica: ejecución de contrato y/o consentimiento. Puede retirar su consentimiento en cualquier momento.<br /><br />
       Puede ejercer sus derechos de acceso, rectificación, supresión, portabilidad, limitación y oposición escribiendo a
-      <a href="mailto:laboroteca@gmail.com">laboroteca@gmail.com</a>. También puede presentar una reclamación ante la autoridad de control competente. Más información en nuestra política de privacidad:
-      <a href="https://www.laboroteca.es/politica-de-privacidad/" target="_blank" rel="noopener">https://www.laboroteca.es/politica-de-privacidad/</a>.
+      <a href="mailto:laboroteca@gmail.com" style="color:#0645AD;text-decoration:underline;">laboroteca@gmail.com</a>. También puede presentar una reclamación ante la autoridad de control competente. Más información en nuestra política de privacidad:
+      <a href="https://www.laboroteca.es/politica-de-privacidad/" style="color:#0645AD;text-decoration:underline;" target="_blank" rel="noopener">https://www.laboroteca.es/politica-de-privacidad/</a>.
     </div>
   `;
 
@@ -578,7 +578,11 @@ router.post(['/send', '/send-newsletter'], sendLimiter, async (req, res) => {
           { header: 'List-Unsubscribe-Post', value: 'List-Unsubscribe=One-Click' }
         ];
 
-        const finalHtml = `${htmlBase}${footerHtml}`;
+        const finalHtml = `
+          <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.5;">
+            ${htmlBase}
+          </div>
+          ${footerHtml}`;
         await sendSMTP2GO({ to: rcpt, subject, html: finalHtml, headers });
 
         await dedupRef.set({

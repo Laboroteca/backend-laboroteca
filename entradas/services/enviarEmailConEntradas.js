@@ -133,29 +133,29 @@ async function enviarEmailConEntradas({
   const htmlPorDefecto =
     modo === 'reenvio'
       ? `
-      <div style="font-size:16px;font-family:Arial,Helvetica,sans-serif;color:#111827;line-height:1.5;">
+      <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.5;">
         <p>Hola ${escapeHtml(displayName)},</p>
         <p>Te reenviamos tus entradas para <strong>«${escapeHtml(descripcionProducto)}»</strong>.</p>
         ${bloqueEventoHTML}
         <p><strong>Puedes presentar el PDF adjunto en tu móvil o impreso. Cada entrada incluye su código QR único.</strong></p>
         <p>Una vez validada tu entrada en el evento, el código de la misma podrá canjearse por un libro digital gratuito desde:</p>
-        <p><a href="https://www.laboroteca.es/canjear-codigo-regalo/">https://www.laboroteca.es/canjear-codigo-regalo/</a></p>
+        <p><a href="https://www.laboroteca.es/canjear-codigo-regalo/" style="color:#0b5fff;text-decoration:none;" target="_blank" rel="noopener">https://www.laboroteca.es/canjear-codigo-regalo/</a></p>
         <p>Solo se validará una entrada por cada asistente.</p>
         <p>Si no asistes y tu entrada no es validada, no podrás realizar el canje.</p>
         <p>Un saludo,<br>Ignacio Solsona<br>Laboroteca</p>
-        ${politicaHTML ? `<div style="font-size:14px;color:#606296;line-height:1.5;">${politicaHTML}</div>` : ''}
+        ${politicaHTML ? `<div style="font-family:Arial,sans-serif;font-size:14px;color:#777;line-height:1.5;">${politicaHTML}</div>` : ''}
       </div>
     `
     
       : modo === 'regalo'
         ? `
-      <div style="font-size:16px;font-family:Arial,Helvetica,sans-serif;color:#111827;line-height:1.5;">
+      <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.5;">
         <p>Estimado/a ${escapeHtml(displayName)},</p>
         <p>Te mando de forma <strong>totalmente gratuita</strong> tu(s) entrada(s) para: <strong>${escapeHtml(descripcionProducto)}</strong>.</p>
         ${bloqueEventoHTML}
         <p>Cada entrada incluye un código QR único que se validará el día del evento. Puedes llevarlas en el móvil o impresas.</p>
         <p>Una vez validada tu entrada en el evento, el código de la misma podrá canjearse por un libro digital gratuito desde:</p>
-        <p><a href="https://www.laboroteca.es/canjear-codigo-regalo/">https://www.laboroteca.es/canjear-codigo-regalo/</a></p>
+        <p><a href="https://www.laboroteca.es/canjear-codigo-regalo/" style="color:#0b5fff;text-decoration:none;" target="_blank" rel="noopener">https://www.laboroteca.es/canjear-codigo-regalo/</a></p>
         <p>Solo se validará una entrada por cada asistente.</p>
         <p>Si no asistes y tu entrada no es validada, no podrás realizar el canje.</p>
         <p>Un saludo,<br>
@@ -163,23 +163,23 @@ async function enviarEmailConEntradas({
           Abogado
         </p>
         <hr/>
-        ${politicaHTML ? `<div style="font-size:14px;color:#606296;line-height:1.5;">${politicaHTML}</div>` : ''}
+        ${politicaHTML ? `<div style="font-family:Arial,sans-serif;font-size:14px;color:#777;line-height:1.5;">${politicaHTML}</div>` : ''}
       </div>
     `
         : `
-      <div style="font-size:16px;font-family:Arial,Helvetica,sans-serif;color:#111827;line-height:1.5;">
+      <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.5;">
         <p>Hola ${escapeHtml(displayName)},</p>
         <p>Gracias por tu compra. Adjuntamos tus entradas para:</p>
         <p><strong>${escapeHtml(descripcionProducto)}</strong></p>
         ${bloqueEventoHTML}
-        ${euros ? `<p>Importe total: <strong>${euros.html} €</strong></p>` : ''}
+        ${euros ? `<p>Importe total: ${euros.html} €</p>` : ''}
         <p><strong>Puedes presentar el PDF adjunto en tu móvil o impreso. Cada entrada incluye su código QR único.</strong></p>
         <p>Una vez validada tu entrada en el evento, el código de la misma podrá canjearse por un libro digital gratuito desde:</p>
-        <p><a href="https://www.laboroteca.es/canjear-codigo-regalo/">https://www.laboroteca.es/canjear-codigo-regalo/</a></p>
+        <p><a href="https://www.laboroteca.es/canjear-codigo-regalo/" style="color:#0b5fff;text-decoration:none;" target="_blank" rel="noopener">https://www.laboroteca.es/canjear-codigo-regalo/</a></p>
         <p>Solo se validará una entrada por cada asistente.</p>
         <p>Si no asistes y tu entrada no es validada, no podrás realizar el canje.</p>
         <p>Un saludo,<br>Ignacio Solsona<br>Laboroteca</p>
-        ${politicaHTML ? `<div style="font-size:14px;color:#606296;line-height:1.5;">${politicaHTML}</div>` : ''}
+        ${politicaHTML ? `<div style="font-family:Arial,sans-serif;font-size:14px;color:#777;line-height:1.5;">${politicaHTML}</div>` : ''}
       </div>
     `;
 

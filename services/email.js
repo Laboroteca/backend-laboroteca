@@ -45,7 +45,7 @@ async function enviarEmailPersonalizado({
   const bcc = (enviarACopy && SEND_ADMIN_COPY) ? ['laboroteca@gmail.com'] : [];
 
   const pieHtml = `
-    <div style="font-size:14px;color:#777;line-height:1.5;">
+    <div style="font-size:14px;color:#777;line-height:1.4;">
       En cumplimiento del Reglamento (UE) 2016/679 (RGPD) y la LOPDGDD, le informamos de que su dirección de correo electrónico forma parte de la base de datos de Ignacio Solsona Fernández-Pedrera (DNI 20481042W), con domicilio en calle Enmedio nº 22, 3.º E, 12001 Castellón de la Plana (España).<br /><br />
       Finalidades: prestación de servicios jurídicos, venta de infoproductos, gestión de entradas a eventos, emisión y envío de facturas por email y, en su caso, envío de newsletter y comunicaciones comerciales si usted lo ha consentido. Base jurídica: ejecución de contrato y/o consentimiento. Puede retirar su consentimiento en cualquier momento.<br /><br />
       Puede ejercer sus derechos de acceso, rectificación, supresión, portabilidad, limitación y oposición escribiendo a <a href="mailto:laboroteca@gmail.com">laboroteca@gmail.com</a>. También puede presentar una reclamación ante la autoridad de control competente. Más información en nuestra política de privacidad: <a href="https://www.laboroteca.es/politica-de-privacidad/" target="_blank" rel="noopener">https://www.laboroteca.es/politica-de-privacidad/</a>.
@@ -63,7 +63,7 @@ Más información: https://www.laboroteca.es/politica-de-privacidad/
 
   // ——— ADVERTENCIA (mismo tamaño/fuente que el pie RGPD: 14px; color #606296) ———
   const advertenciaHtml = `
-    <div style="font-size:14px;color:#606296;line-height:1.5;margin:8px 0;">
+    <div style="font-size:14px;color:#606296;line-height:1.4;margin:8px 0;">
       <strong>Importante:</strong> Todos los contenidos están protegidos por derechos de autor. Tu acceso es personal e intransferible.  
 Se prohíbe compartir tus credenciales de acceso o difundir el contenido sin autorización expresa.  
 Cualquier uso indebido o sospechoso podrá dar lugar a la suspensión o cancelación de la cuenta.
@@ -228,7 +228,7 @@ async function enviarFacturaPorEmail(datos, pdfBuffer) {
     // ALTA INICIAL
     subject = 'Tu suscripción al Club Laboroteca está activada';
     html = `
-      <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.5;">
+      <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.4;">
         <p>Estimado/a ${nombre || 'cliente'},</p>
         <p>Ya tienes activada tu suscripción al Club Laboroteca. Puedes acceder a todo el contenido exclusivo a través de https://www.laboroteca.es/club-laboroteca/.</p>
         <p>Adjunto a este correo la factura correspondiente a tu suscripción mensual.</p>
@@ -250,7 +250,7 @@ Abogado`;
     // RENOVACIÓN
     subject = 'Se ha renovado tu suscripción al Club Laboroteca';
     html = `
-      <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.5;">
+      <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.4;">
         <p>Estimado/a ${nombre || 'cliente'},</p>
         <p>Se ha renovado tu suscripción al Club Laboroteca. Puedes acceder a todo el contenido exclusivo a través de https://www.laboroteca.es/club-laboroteca/.</p>
         <p>Adjunto a este correo la factura correspondiente a tu suscripción mensual.</p>
@@ -272,7 +272,7 @@ Abogado`;
     // OTROS PRODUCTOS (NO entradas)
     subject = `Has comprado ${nombreProductoMostrar}`;
     html = `
-      <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.5;">
+      <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.4;">
         <p>Hola ${nombre || 'cliente'},</p>
         <p>Gracias por tu compra.</p>
         <p><strong>${nombreProductoMostrar}.</strong></p>
@@ -315,7 +315,7 @@ async function enviarAvisoImpago(
   nombre = nombreCompleto.split(' ')[0];
   const subject = 'Tu suscripción al Club Laboroteca ha sido cancelada por impago';
   const html = `
-    <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.5;">
+    <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.4;">
       <p>Hola ${nombre || ''},</p>
       <p><strong>No hemos podido procesar el cobro de tu suscripción mensual al Club Laboroteca.</strong></p>
       <p>Tu suscripción ha sido cancelada automáticamente.</p>
@@ -358,7 +358,7 @@ async function enviarEmailSolicitudBajaVoluntaria(nombre = '', email, fechaSolic
   const FECHA_EFECTOS   = fmt(fechaEfectosISO);
   const subject = 'Hemos recibido tu solicitud de baja del Club Laboroteca';
   const html = `
-    <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.5;">
+    <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.4;">
       Hola ${nombre || 'cliente'},<br><br>
       Hemos recibido tu <strong>solicitud de baja voluntaria</strong> del Club Laboroteca el <strong>${FECHA_SOLICITUD}</strong>.<br>
       Tu suscripción seguirá activa hasta el <strong>${FECHA_EFECTOS}</strong>, que es el fin de tu periodo de facturación actual.<br><br>
@@ -385,7 +385,7 @@ async function enviarConfirmacionBajaClub(email, nombre = '') {
   nombre = nombreCompleto.split(' ')[0];
   const subject = 'Confirmación de baja del Club Laboroteca';
   const html = `
-    <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.5;">
+    <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.4;">
       <p>Hola ${nombre},</p>
       <p>Tu suscripción al Club Laboroteca ha sido cancelada.</p>
       <p>Puedes volver a hacerte miembro cuando quieras, por el mismo precio y sin compromiso de permanencia.</p>
@@ -411,7 +411,7 @@ async function enviarAvisoCancelacionManual(email, nombre = '') {
   nombre = nombreCompleto.split(' ')[0];
   const subject = 'Tu suscripción al Club Laboroteca ha sido cancelada';
   const html = `
-    <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.5;">
+    <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.4;">
       <p>Hola ${nombre},</p>
       <p>Tu suscripción al Club Laboroteca ha sido cancelada.</p>
       <p>Puedes volver a hacerte miembro cuando quieras, por el mismo precio y sin compromiso de permanencia.</p>
@@ -440,7 +440,7 @@ async function enviarEmailValidacionEliminacionCuenta(email, token) {
   const enlace = `https://www.laboroteca.es/confirmar-eliminacion-cuenta/?token=${token}`;
   const subject = 'Confirma la eliminación de tu cuenta en Laboroteca';
   const html = `
-    <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.5;">
+    <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.4;">
       <p>Hola,</p>
       <p>Has solicitado eliminar tu cuenta en Laboroteca. Necesitamos que confirmes que has sido tú quien lo ha solicitado. Si estás suscrito al Club Laboroteca, o tienes activa cualquier membresía, perderás el acceso.</p>
       <p>Para confirmar la eliminación, pulsa en el siguiente enlace:</p>

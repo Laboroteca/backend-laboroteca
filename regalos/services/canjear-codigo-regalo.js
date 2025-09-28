@@ -35,7 +35,8 @@ const {
   } = require('../../utils/productos');
 
 // Google Sheets (IDs/pestañas)
-const SHEET_ID_REGALOS   = '1MjxXebR3oQIyu0bYeRWo83xj1sBFnDcx53HvRRBiGE'; // Libros GRATIS
+const SHEET_ID_REGALOS   = process.env.SHEET_ID_CANJES
+  || '1MjxXebR3oQIyu0bYeRWo83Xzj1sBFnDcx53HvRRBiGE'; // Libros GRATIS (ID correcto)
 const SHEET_NAME_REGALOS = 'Hoja 1';
 const SHEET_ID_CONTROL   = '1DFZuhJtuQ0y8EHXOkUUifR_mCVfGyxgkCHXRvBoiwfo'; // Códigos REG- activos
 const SHEET_NAME_CONTROL = 'CODIGOS REGALO';

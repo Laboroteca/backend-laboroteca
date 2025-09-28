@@ -11,7 +11,7 @@ const { alertAdminProxy: alertAdmin } = require('../../utils/alertAdminProxy');
 
 // 📊 ID y nombre de hoja (env override) — corrige ID y permite configurar por entorno
 const SHEET_ID_CANJES   = process.env.SHEET_ID_CANJES
-  || '1MjxXebR3oQIyu0bYeRWo83xj1sBFnDcx53HvRRBiGE'; // ← corregido: "...83xj1..." (antes "83Xzj1")
+  || '1MjxXebR3oQIyu0bYeRWo83Xzj1sBFnDcx53HvRRBiGE';
 const SHEET_NAME_CANJES = process.env.SHEET_NAME_CANJES || 'Hoja 1';
 
 // 🛡️ Utilidades RGPD
@@ -78,7 +78,7 @@ module.exports = async function registrarCanjeEnSheet({
       throw last;
     };
 
-    console.log(`📤 Registrando canje en Sheet "${SHEET_NAME_CANJES}" → ${redactEmail(mail)} (${origen})`);
+    console.log(`📤 Registrando canje en Sheet "${SHEET_NAME_CANJES}" (id=${SHEET_ID_CANJES}) → ${redactEmail(mail)} (${origen})`);
 
     await withRetries(() => sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID_CANJES,
@@ -91,7 +91,7 @@ module.exports = async function registrarCanjeEnSheet({
 
     console.log(`📄 Canje registrado: ${cod} (${origen}) → ${redactEmail(mail)}`);
   } catch (err) {
-    console.error(`❌ Error registrando canje en Sheet "${SHEET_NAME_CANJES}":`, err?.message || err);
+    console.error(`❌ Error registrando canje en Sheet "${SHEET_NAME_CANJES}" (id=${SHEET_ID_CANJES}):`, err?.message || err);
     try {
       await alertAdmin({
         area: 'regalos.registrarCanjeEnSheet.error',

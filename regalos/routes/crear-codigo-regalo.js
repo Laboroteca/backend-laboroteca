@@ -39,14 +39,33 @@ function maskCode(c='') {
   return m ? `${m[1]}-*****` : '*****';
 }
 
-// ——— Pie RGPD (14px) + separadores ———
+// Escapado HTML básico
+function esc(t = '') {
+  return String(t)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
+}
+
 const PIE_HTML = `
   <hr style="margin:16px 0;border:0;border-top:1px solid #bbb;" />
-  <div style="font-size:14px;color:#777777;line-height:1.5;">[...]</div>
+  <div style="font-size:14px;color:#777777;line-height:1.5;">
+    En cumplimiento del Reglamento (UE) 2016/679 (RGPD) y la LOPDGDD, le informamos de que su dirección de correo electrónico forma parte de la base de datos de Ignacio Solsona Fernández-Pedrera (DNI 20481042W), con domicilio en calle Enmedio nº 22, 3.º E, 12001 Castellón de la Plana (España).<br /><br />
+    Finalidades: prestación de servicios jurídicos, venta de infoproductos, gestión de entradas a eventos, emisión y envío de facturas por email y, en su caso, envío de newsletter y comunicaciones comerciales si usted lo ha consentido. Base jurídica: ejecución de contrato y/o consentimiento. Puede retirar su consentimiento en cualquier momento.<br /><br />
+    Puede ejercer sus derechos de acceso, rectificación, supresión, portabilidad, limitación y oposición escribiendo a <a href="mailto:laboroteca@gmail.com">laboroteca@gmail.com</a>. También puede presentar una reclamación ante la autoridad de control competente. Más información en nuestra política de privacidad: <a href="https://www.laboroteca.es/politica-de-privacidad/" target="_blank" rel="noopener">https://www.laboroteca.es/politica-de-privacidad/</a>.
+  </div>
 `.trim();
 
-const PIE_TEXT = `------------------------------------------------------------
-[...texto RGPD 14px...]`.trim();
+const PIE_TEXT = `
+------------------------------------------------------------
+En cumplimiento del Reglamento (UE) 2016/679 (RGPD) y la LOPDGDD, su email forma parte de la base de datos de Ignacio Solsona Fernández-Pedrera (DNI 20481042W), calle Enmedio nº 22, 3.º E, 12001 Castellón de la Plana (España).
+
+Finalidades: prestación de servicios jurídicos, venta de infoproductos, gestión de entradas a eventos, emisión y envío de facturas por email y, en su caso, envío de newsletter y comunicaciones comerciales si usted lo ha consentido. Base jurídica: ejecución de contrato y/o consentimiento. Puede retirar su consentimiento en cualquier momento.
+
+Puede ejercer sus derechos de acceso, rectificación, supresión, portabilidad, limitación y oposición escribiendo a: laboroteca@gmail.com.
+También puede presentar una reclamación ante la autoridad de control competente.
+Más información: https://www.laboroteca.es/politica-de-privacidad/
+`.trim();
 
 
 async function verifyRegalosHmac(req, res, next) {
@@ -328,8 +347,7 @@ ${saludo}
 
 ${PIE_TEXT}`;
 
-      const html = `<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
-                     line-height:1.5;color:#111;font-size:16px;">
+      const html = `<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; line-height:1.5;color:#111;font-size:16px;">
          <p style="margin:0 0 12px;">Estimado/a ${esc(nombre)},</p>
          <p style="margin:0 0 12px;">Has recibido un código de regalo: <strong>${esc(codigo)}</strong></p>
          <p style="margin:0 0 16px;">Puedes canjearlo por cualquiera de mis libros publicados. Para el canje, introduce el código en el formulario de esta página:</p>

@@ -133,6 +133,15 @@ module.exports = async function canjearCodigoRegalo({
   const canjeRef = firestore.collection('regalos_canjeados').doc(codigoNorm);
   const ya = await canjeRef.get();
   if (ya.exists) {
+    // ✅ Bloqueo correcto: ya usado
+    try {
+      await alertAdmin({
+        area: 'regalos.canje.bloqueo_ok',
+        meta: { reqId, email: emailNorm, codigo: codigoNorm, motivo: 'codigo_ya_usado' }
+      });
+    } catch (_) {}
+    L(reqId, '✅ BLOQUEADO CORRECTAMENTE (ya usado)', { email: maskEmail(emailNorm), codigo: maskCode(codigoNorm) });
+    // seguimos devolviendo error funcional al cliente
     throw new Error('Este código ya ha sido utilizado.');
   }
 
@@ -146,17 +155,33 @@ module.exports = async function canjearCodigoRegalo({
       });
       const filas = control.data.values || [];
       const fila = filas.find(f => String(f[2] || '').trim().toUpperCase() === codigoNorm);
-      if (!fila) throw new Error('El código introducido no es válido.');
+      if (!fila) {
+        // ✅ Bloqueo correcto: código REG- no existe
+        try {
+          await alertAdmin({
+            area: 'regalos.canje.bloqueo_ok',
+            meta: { reqId, email: emailNorm, codigo: codigoNorm, motivo: 'codigo_no_valido' }
+          });
+        } catch (_) {}
+        L(reqId, '✅ BLOQUEADO CORRECTAMENTE (REG- no válido)', { codigo: maskCode(codigoNorm) });
+        throw new Error('El código introducido no es válido.');
+      }
       const emailAsignado = String(fila[1] || '').trim().toLowerCase();
       if (emailAsignado && emailAsignado !== emailNorm) {
+        // ✅ Bloqueo correcto: email no corresponde
+        try {
+          await alertAdmin({
+            area: 'regalos.canje.bloqueo_ok',
+            meta: { reqId, email: emailNorm, emailAsignado, codigo: codigoNorm, motivo: 'email_no_corresponde' }
+          });
+        } catch (_) {}
+        L(reqId, '✅ BLOQUEADO CORRECTAMENTE (email no corresponde)', { email: maskEmail(emailNorm) });
         throw new Error('Este código regalo no corresponde con tu email.');
       }
       L(reqId, 'REG validado');
     } catch (e) {
-      if (e.message && (
-        e.message.includes('válido') ||
-        e.message.includes('corresponde')
-      )) throw e;
+      // Solo averías reales (fallos de red/API). Los bloqueos funcionales ya se notifican arriba.
+      if (e.message && (e.message.includes('válido') || e.message.includes('corresponde'))) throw e;
       E(reqId, 'Validación REG falló', e);
       try {
         await alertAdmin({
@@ -174,6 +199,14 @@ module.exports = async function canjearCodigoRegalo({
       const docEntrada = await firestore.collection('entradasValidadas').doc(codigoNorm).get();
       const ent = docEntrada.exists ? (docEntrada.data() || {}) : null;
       if (!docEntrada.exists || ent.validado !== true) {
+        // ✅ Bloqueo correcto: PRE- no validada
+        try {
+          await alertAdmin({
+            area: 'regalos.canje.bloqueo_ok',
+            meta: { reqId, email: emailNorm, codigo: codigoNorm, motivo: 'entrada_no_validada' }
+          });
+        } catch (_) {}
+        L(reqId, '✅ BLOQUEADO CORRECTAMENTE (entrada no validada)', { codigo: maskCode(codigoNorm) });
         throw new Error('Esta entrada no está validada y no puede canjearse.');
       }
 
@@ -209,6 +242,7 @@ module.exports = async function canjearCodigoRegalo({
 
       L(reqId, 'PRE validado');
     } catch (e) {
+      // Solo averías reales. Bloqueo funcional ya notificado arriba.
       if (e.message && e.message.includes('no está validada')) throw e;
       E(reqId, 'Validación PRE falló', e);
       try {

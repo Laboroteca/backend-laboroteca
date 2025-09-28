@@ -228,7 +228,7 @@ async function enviarFacturaPorEmail(datos, pdfBuffer) {
     // ALTA INICIAL
     subject = 'Tu suscripción al Club Laboroteca está activada';
     html = `
-      <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;">
+      <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.5;">
         <p>Estimado/a ${nombre || 'cliente'},</p>
         <p>Ya tienes activada tu suscripción al Club Laboroteca. Puedes acceder a todo el contenido exclusivo a través de https://www.laboroteca.es/club-laboroteca/.</p>
         <p>Adjunto a este correo la factura correspondiente a tu suscripción mensual.</p>
@@ -250,7 +250,7 @@ Abogado`;
     // RENOVACIÓN
     subject = 'Se ha renovado tu suscripción al Club Laboroteca';
     html = `
-      <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;">
+      <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.5;">
         <p>Estimado/a ${nombre || 'cliente'},</p>
         <p>Se ha renovado tu suscripción al Club Laboroteca. Puedes acceder a todo el contenido exclusivo a través de https://www.laboroteca.es/club-laboroteca/.</p>
         <p>Adjunto a este correo la factura correspondiente a tu suscripción mensual.</p>
@@ -272,7 +272,7 @@ Abogado`;
     // OTROS PRODUCTOS (NO entradas)
     subject = `Has comprado ${nombreProductoMostrar}`;
     html = `
-      <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;">
+      <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.5;">
         <p>Hola ${nombre || 'cliente'},</p>
         <p>Gracias por tu compra.</p>
         <p><strong>${nombreProductoMostrar}.</strong></p>
@@ -315,7 +315,7 @@ async function enviarAvisoImpago(
   nombre = nombreCompleto.split(' ')[0];
   const subject = 'Tu suscripción al Club Laboroteca ha sido cancelada por impago';
   const html = `
-    <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;">
+    <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.5;">
       <p>Hola ${nombre || ''},</p>
       <p><strong>No hemos podido procesar el cobro de tu suscripción mensual al Club Laboroteca.</strong></p>
       <p>Tu suscripción ha sido cancelada automáticamente.</p>
@@ -358,7 +358,7 @@ async function enviarEmailSolicitudBajaVoluntaria(nombre = '', email, fechaSolic
   const FECHA_EFECTOS   = fmt(fechaEfectosISO);
   const subject = 'Hemos recibido tu solicitud de baja del Club Laboroteca';
   const html = `
-    <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;">
+    <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.5;">
       Hola ${nombre || 'cliente'},<br><br>
       Hemos recibido tu <strong>solicitud de baja voluntaria</strong> del Club Laboroteca el <strong>${FECHA_SOLICITUD}</strong>.<br>
       Tu suscripción seguirá activa hasta el <strong>${FECHA_EFECTOS}</strong>, que es el fin de tu periodo de facturación actual.<br><br>
@@ -385,7 +385,7 @@ async function enviarConfirmacionBajaClub(email, nombre = '') {
   nombre = nombreCompleto.split(' ')[0];
   const subject = 'Confirmación de baja del Club Laboroteca';
   const html = `
-    <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;">
+    <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.5;">
       <p>Hola ${nombre},</p>
       <p>Tu suscripción al Club Laboroteca ha sido cancelada.</p>
       <p>Puedes volver a hacerte miembro cuando quieras, por el mismo precio y sin compromiso de permanencia.</p>
@@ -411,7 +411,7 @@ async function enviarAvisoCancelacionManual(email, nombre = '') {
   nombre = nombreCompleto.split(' ')[0];
   const subject = 'Tu suscripción al Club Laboroteca ha sido cancelada';
   const html = `
-    <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;">
+    <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.5;">
       <p>Hola ${nombre},</p>
       <p>Tu suscripción al Club Laboroteca ha sido cancelada.</p>
       <p>Puedes volver a hacerte miembro cuando quieras, por el mismo precio y sin compromiso de permanencia.</p>
@@ -440,7 +440,7 @@ async function enviarEmailValidacionEliminacionCuenta(email, token) {
   const enlace = `https://www.laboroteca.es/confirmar-eliminacion-cuenta/?token=${token}`;
   const subject = 'Confirma la eliminación de tu cuenta en Laboroteca';
   const html = `
-    <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;">
+    <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.5;">
       <p>Hola,</p>
       <p>Has solicitado eliminar tu cuenta en Laboroteca. Necesitamos que confirmes que has sido tú quien lo ha solicitado. Si estás suscrito al Club Laboroteca, o tienes activa cualquier membresía, perderás el acceso.</p>
       <p>Para confirmar la eliminación, pulsa en el siguiente enlace:</p>

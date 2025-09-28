@@ -234,7 +234,7 @@ async function enviarFacturaPorEmail(datos, pdfBuffer) {
         <p>Adjunto a este correo la factura correspondiente a tu suscripción mensual.</p>
         <p>Importe: ${importeTexto}</p>
         <p><strong>Muchas gracias por pertenecer al Club Laboroteca.</strong></p>
-        <p>(Recuerda que en cualquier momento puedes cancelar tu suscripción sin ninguna penalización en: https://www.laboroteca.es/cancelar-suscripcion-club-laboroteca/)</p>
+        <p>Recuerda que en cualquier momento puedes cancelar tu suscripción sin ninguna penalización en: https://www.laboroteca.es/cancelar-suscripcion-club-laboroteca/</p>
         <p>Ignacio Solsona<br/>Abogado</p>
       </div>`;
     text = `Estimado/a ${nombre || 'cliente'},
@@ -243,7 +243,7 @@ Adjunto a este correo la factura correspondiente a tu suscripción mensual.
 Importe: ${importeTexto}
 
 Muchas gracias por pertenecer al Club Laboroteca.
-(Recuerda que en cualquier momento puedes cancelar tu suscripción sin ninguna penalización en: https://www.laboroteca.es/cancelar-suscripcion-club-laboroteca/)
+Recuerda que en cualquier momento puedes cancelar tu suscripción sin ninguna penalización en: https://www.laboroteca.es/cancelar-suscripcion-club-laboroteca/
 Ignacio Solsona
 Abogado`;
   } else if (esClub && esRenovClub) {
@@ -256,7 +256,7 @@ Abogado`;
         <p>Adjunto a este correo la factura correspondiente a tu suscripción mensual.</p>
         <p>Importe: ${importeTexto}</p>
         <p><strong>Muchas gracias por pertenecer al Club Laboroteca.</strong></p>
-        <p>(Recuerda que en cualquier momento puedes cancelar tu suscripción sin ninguna penalización en: https://www.laboroteca.es/cancelar-suscripcion-club-laboroteca/)</p>
+        <p>Recuerda que en cualquier momento puedes cancelar tu suscripción sin ninguna penalización en: https://www.laboroteca.es/cancelar-suscripcion-club-laboroteca/</p>
         <p>Ignacio Solsona<br/>Abogado</p>
       </div>`;
     text = `Estimado/a ${nombre || 'cliente'},
@@ -265,7 +265,7 @@ Adjunto a este correo la factura correspondiente a tu suscripción mensual.
 Importe: ${importeTexto}
 
 Muchas gracias por pertenecer al Club Laboroteca.
-(Recuerda que en cualquier momento puedes cancelar tu suscripción sin ninguna penalización en: https://www.laboroteca.es/cancelar-suscripcion-club-laboroteca/)
+Recuerda que en cualquier momento puedes cancelar tu suscripción sin ninguna penalización en: https://www.laboroteca.es/cancelar-suscripcion-club-laboroteca/
 Ignacio Solsona
 Abogado`;
   } else {

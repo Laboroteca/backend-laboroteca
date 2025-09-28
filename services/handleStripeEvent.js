@@ -1002,11 +1002,7 @@ if (falloFactura) {
           <p><strong>Producto:</strong> ${isAlta ? 'Alta y primera cuota Club Laboroteca' : 'Renovación mensual Club Laboroteca'}<br>
              <strong>Importe:</strong> ${((invoice.amount_paid ?? invoice.amount_due ?? 0)/100).toFixed(2).replace('.', ',')} €</p>
           <p><a href="https://www.laboroteca.es/mi-cuenta/">Accede a tu área de cliente</a></p>
-          <div style="font-size:14px;color:#606296;line-height:1.5;margin:8px 0;">
-            <strong>Importante:</strong> Todos los contenidos están protegidos por derechos de autor. Tu acceso es personal e intransferible.  
-            Se prohíbe compartir tus credenciales de acceso o difundir el contenido sin autorización expresa.  
-            Cualquier uso indebido o sospechoso podrá dar lugar a la suspensión o cancelación de la cuenta.
-          </div>
+          <p>Un saludo,<br/>Ignacio Solsona<br/>Abogado</p>
         </div>`,
       text: `Hola ${nombre || 'cliente'},
 
@@ -1016,8 +1012,10 @@ Importe: ${((invoice.amount_paid ?? invoice.amount_due ?? 0)/100).toFixed(2)} �
 
 Acceso: https://www.laboroteca.es/mi-cuenta/
 
-IMPORTANTE: Todos los contenidos están protegidos por derechos de autor. Tu acceso es personal e intransferible. Se prohíbe compartir tus credenciales de acceso o difundir el contenido sin autorización expresa. Cualquier uso indebido o sospechoso podrá dar lugar a la suspensión o cancelación de la cuenta.
-`
+Un afectuoso saludo,
+Ignacio Solsona
+Abogado`,
+      incluirAdvertencia: true
     });
     console.log('✅ Email de activación (solo por fallo de factura) enviado');
   } catch (e) {
@@ -1858,11 +1856,6 @@ if (!esEntrada && !isClub && falloFactura) {
           <p><strong>${productoLabel}</strong></p>
           <p><strong>Importe:</strong> ${importeFormateado}</p>
           <p>Puedes acceder a tu contenido desde: <a href="https://www.laboroteca.es/mi-cuenta/">www.laboroteca.es/mi-cuenta</a></p>
-          <div style="font-size:14px;color:#606296;line-height:1.5;margin:8px 0;">
-            <strong>Importante:</strong> Todos los contenidos están protegidos por derechos de autor. Tu acceso es personal e intransferible.  
-            Se prohíbe compartir tus credenciales de acceso o difundir el contenido sin autorización expresa.  
-            Cualquier uso indebido o sospechoso podrá dar lugar a la suspensión o cancelación de la cuenta.
-          </div>
           <p>Un afectuoso saludo,<br/>Ignacio Solsona<br/>Abogado</p>
         </div>`,
       text: `Hola ${datosCliente.nombre || 'cliente'},
@@ -1873,11 +1866,11 @@ Importe: ${importeFormateado}
 
 Acceso: https://www.laboroteca.es/mi-cuenta/
 
-IMPORTANTE: Todos los contenidos están protegidos por derechos de autor. Tu acceso es personal e intransferible. Se prohíbe compartir tus credenciales de acceso o difundir el contenido sin autorización expresa. Cualquier uso indebido o sospechoso podrá dar lugar a la suspensión o cancelación de la cuenta.
-
 Un afectuoso saludo,
 Ignacio Solsona
-Abogado`
+Abogado`,
+       incluirAdvertencia: true
+
     });
 
     console.log('✅ Email de apoyo (pago único, factura fallida) enviado');

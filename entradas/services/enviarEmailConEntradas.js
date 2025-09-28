@@ -133,7 +133,7 @@ async function enviarEmailConEntradas({
   const htmlPorDefecto =
     modo === 'reenvio'
       ? `
-      <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.5;">
+      <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.4;">
         <p>Hola ${escapeHtml(displayName)},</p>
         <p>Te reenviamos tus entradas para <strong>«${escapeHtml(descripcionProducto)}»</strong>.</p>
         ${bloqueEventoHTML}
@@ -143,13 +143,13 @@ async function enviarEmailConEntradas({
         <p>Solo se validará una entrada por cada asistente.</p>
         <p>Si no asistes y tu entrada no es validada, no podrás realizar el canje.</p>
         <p>Un saludo,<br>Ignacio Solsona<br>Laboroteca</p>
-        ${politicaHTML ? `<div style="font-family:Arial,sans-serif;font-size:14px;color:#777;line-height:1.5;">${politicaHTML}</div>` : ''}
+        ${politicaHTML ? `<div style="font-family:Arial,sans-serif;font-size:14px;color:#777;line-height:1.4;">${politicaHTML}</div>` : ''}
       </div>
     `
     
       : modo === 'regalo'
         ? `
-      <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.5;">
+      <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.4;">
         <p>Estimado/a ${escapeHtml(displayName)},</p>
         <p>Te mando de forma <strong>totalmente gratuita</strong> tu(s) entrada(s) para: <strong>${escapeHtml(descripcionProducto)}</strong>.</p>
         ${bloqueEventoHTML}
@@ -163,11 +163,11 @@ async function enviarEmailConEntradas({
           Abogado
         </p>
         <hr/>
-        ${politicaHTML ? `<div style="font-family:Arial,sans-serif;font-size:14px;color:#777;line-height:1.5;">${politicaHTML}</div>` : ''}
+        ${politicaHTML ? `<div style="font-family:Arial,sans-serif;font-size:14px;color:#777;line-height:1.4;">${politicaHTML}</div>` : ''}
       </div>
     `
         : `
-      <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.5;">
+      <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.4;">
         <p>Hola ${escapeHtml(displayName)},</p>
         <p>Gracias por tu compra. Adjuntamos tus entradas para:</p>
         <p><strong>${escapeHtml(descripcionProducto)}</strong></p>
@@ -179,7 +179,7 @@ async function enviarEmailConEntradas({
         <p>Solo se validará una entrada por cada asistente.</p>
         <p>Si no asistes y tu entrada no es validada, no podrás realizar el canje.</p>
         <p>Un saludo,<br>Ignacio Solsona<br>Laboroteca</p>
-        ${politicaHTML ? `<div style="font-family:Arial,sans-serif;font-size:14px;color:#777;line-height:1.5;">${politicaHTML}</div>` : ''}
+        ${politicaHTML ? `<div style="font-family:Arial,sans-serif;font-size:14px;color:#777;line-height:1.4;">${politicaHTML}</div>` : ''}
       </div>
     `;
 

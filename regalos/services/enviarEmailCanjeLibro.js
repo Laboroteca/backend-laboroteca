@@ -30,7 +30,7 @@ const esc = (t='') => String(t)
  * ───────────────────────────────────────── */
 const PIE_HTML = `
   <hr style="margin:16px 0;border:0;border-top:1px solid #bbb;" />
-  <div style="font-family:Arial,sans-serif;font-size:14px;color:#777;line-height:1.5;">
+  <div style="font-family:Arial,sans-serif;font-size:14px;color:#777;line-height:1.4;">
     En cumplimiento del Reglamento (UE) 2016/679 (RGPD) y la LOPDGDD, le informamos de que su dirección de correo electrónico forma parte de la base de datos de Ignacio Solsona Fernández-Pedrera (DNI 20481042W), con domicilio en calle Enmedio nº 22, 3.º E, 12001 Castellón de la Plana (España).<br /><br />
     Finalidades: prestación de servicios jurídicos, venta de infoproductos, gestión de entradas a eventos, emisión y envío de facturas por email y, en su caso, envío de newsletter y comunicaciones comerciales si usted lo ha consentido. Base jurídica: ejecución de contrato y/o consentimiento. Puede retirar su consentimiento en cualquier momento.<br /><br />
     Puede ejercer sus derechos de acceso, rectificación, supresión, portabilidad, limitación y oposición escribiendo a <a href="mailto:laboroteca@gmail.com">laboroteca@gmail.com</a>. También puede presentar una reclamación ante la autoridad de control competente. Más información en nuestra política de privacidad: <a href="https://www.laboroteca.es/politica-de-privacidad/" target="_blank" rel="noopener">https://www.laboroteca.es/politica-de-privacidad/</a>.
@@ -55,7 +55,7 @@ function construirHTMLBase({ nombreMostrar, libroElegido }) {
   const miCuentaURL = 'https://www.laboroteca.es/mi-cuenta/';
   // Cuerpo completo unificado
   return `
-  <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.5;">
+  <div style="font-family:Arial,sans-serif;font-size:16px;color:#333;line-height:1.4;">
     <p style="margin:0 0 12px;">¡Enhorabuena${nombreMostrar ? ', ' + nombreMostrar : ''}!</p>
     <p style="margin:0 0 12px;"><strong>Tu código ha sido canjeado${libroElegido ? ` (${libroElegido})` : ''}.</strong></p>
 
@@ -93,7 +93,7 @@ function construirTextoPlanoBase({ nombreMostrar, libroElegido }) {
  * ───────────────────────────────────────── */
 const advertenciaHtml = `
   <!-- Color gris SOLO para la advertencia -->
-  <div style="font-size:14px; line-height:1.5; margin:8px 0; color:#606296;">
+  <div style="font-size:14px; line-height:1.4; margin:8px 0; color:#606296;">
     <strong>Importante:</strong> tu acceso es personal e intransferible. Queda prohibido compartir tus claves con terceros o distribuir el material sin autorización. Si se detecta actividad sospechosa o irregular se puede suspender o bloquear la cuenta.
   </div>
 `.trim();

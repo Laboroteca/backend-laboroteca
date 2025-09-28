@@ -416,10 +416,9 @@ if (event.type === 'invoice.paid') {
     const customerId = invoice.customer;
     const billingReason = invoice.billing_reason;
 
-    // Gate de seguridad por motivo de facturación
-    const allowManualInTest = (billingReason === 'manual' && event.livemode === false);
+    // Gate producción: solo alta y renovación; 'manual' siempre ignorado
     const allowedReasons = new Set(['subscription_create', 'subscription_cycle']);
-    if (!allowedReasons.has(billingReason) && !allowManualInTest) {
+    if (!allowedReasons.has(billingReason)) {
       console.log(`⏭️ invoice.paid ignorada (billing_reason=${billingReason}, livemode=${event.livemode})`);
       return { ignored: true, reason: 'billing_reason_not_allowed' };
     }

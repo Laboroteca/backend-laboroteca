@@ -36,6 +36,25 @@ const maskAddress = (v = '') => {
     .replace(/\b(\d{1,4})([A-Z]?)\b/g, '***') // números de portal
     .replace(/([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{3})[A-Za-zÁÉÍÓÚÜÑáéíóúüñ-]*/g, '$1***');
 };
+const maskIP = (v = '') => {
+  const s = String(v).trim();
+  // IPv4 (toma el primero si viene con x-forwarded-for: "ip1, ip2")
+  const first = s.split(',')[0].trim();
+  const ipv4 = first.match(/^\d{1,3}(\.\d{1,3}){3}$/);
+  if (ipv4) {
+    const parts = first.split('.');
+    return `${parts[0]}.${parts[1]}.${parts[2]}.xxx`;
+  }
+  // IPv6 (anonimiza últimos bloques)
+  const ipv6 = first.match(/^[0-9a-f:]+$/i);
+  if (ipv6) {
+    // recorta a /64 aprox: conserva cuatro primeros bloques y anonimiza resto
+    const blocks = first.split(':');
+    const head = blocks.slice(0, 4).join(':');
+    return `${head}:xxxx:xxxx:xxxx:xxxx`;
+  }
+  return '***';
+};
 
 // Lista de claves sensibles (mapa básico)
 const piiKeys = new Set([
@@ -48,7 +67,8 @@ const piiKeys = new Set([
   'ciudad','provincia',
   'nombre','apellidos','first_name','last_name',
   'nombrecompleto','full_name','display_name',
-  'zip','postal_code'
+  'zip','postal_code',
+  'ip','remoteip','x-forwarded-for','x_forwarded_for'
 ]);
 
 // ============================
@@ -102,7 +122,11 @@ module.exports = function hardenConsole() {
               .replace(/([A-Z0-9._%+-]+)@([A-Z0-9.-]+\.[A-Z]{2,})/gi, (m) => maskEmail(m))
               .replace(/\b[XYZ]?\d{7,8}[A-Z]\b/gi, (m) => maskDNI(m))
               // dirección: limitar el reemplazo al segmento encontrado
-              .replace(/\b(Calle|Avda\.?|Avenida|Plaza|Ctra\.?|Carretera|Camino)\b[^,\n]*/gi, (m) => maskAddress(m));
+              .replace(/\b(Calle|Avda\.?|Avenida|Plaza|Ctra\.?|Carretera|Camino)\b[^,\n]*/gi, (m) => maskAddress(m))
+              // IPs sueltas en texto (IPv4)
+              .replace(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g, (m) => (process.env.LAB_LOG_IP === '1') ? m : maskIP(m))
+              // IPs sueltas en texto (IPv6 simple)
+              .replace(/\b[0-9a-f:]{2,}\b/gi, (m) => /:/.test(m) ? ((process.env.LAB_LOG_IP === '1') ? m : maskIP(m)) : m);
           }
           return a;
         });

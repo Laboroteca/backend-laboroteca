@@ -142,7 +142,7 @@ app.disable('x-powered-by');
 app.use((req, _res, next) => {
   const ct = (req.headers['content-type'] || '').toLowerCase();
   const ip = (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim();
-  console.log('→', req.method, req.originalUrl, '| ct:', ct || '(none)', '| ip:', ip);
+  console.log('→', req.method, req.path, '| ct:', ct || '(none)', '| ip:', ip);
   next();
 });
 
@@ -502,7 +502,8 @@ app.post('/marketing/consent-bridge', requireJson, async (req, res) => {
 
     // API KEY de entrada (la que pone Fluent Forms), tras normalizar
     if (!API_KEY || apiKeyIn !== API_KEY) {
-      console.warn('⛔ bridge UNAUTHORIZED: header hasKey=%s matches=%s', !!apiKeyIn, apiKeyIn===API_KEY);
+      console.warn('⛔ [consent-bridge] API KEY inválida');
+      return res.status(401).json({ ok:false, error:'UNAUTHORIZED' });
     }
 
     // Validación mínima
@@ -804,7 +805,7 @@ app.post(
         // 🔗 pista de catálogo (no rompe nada si falta)
         slug: slugCanon || ''
       },
-      success_url: `https://www.laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent(nombreProductoCanon)}`,
+      success_url: `https://www.laboroteca.es/gracias?producto=${encodeURIComponent(nombreProductoCanon)}`,
       cancel_url: 'https://www.laboroteca.es/error'
     });
 
@@ -916,7 +917,7 @@ app.post(
         descripcionProducto: descripcionProducto || CLUB?.descripcion || '',
         price_id: clubPriceId || ''
       },
-      success_url: `https://www.laboroteca.es/gracias?nombre=${encodeURIComponent(nombre)}&producto=${encodeURIComponent((CLUB?.nombre || nombreProducto))}`,
+      success_url: `https://www.laboroteca.es/gracias?producto=${encodeURIComponent((CLUB?.nombre || nombreProducto))}`,
       cancel_url: 'https://www.laboroteca.es/error'
     });
 

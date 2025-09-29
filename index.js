@@ -936,7 +936,7 @@ app.post(
         descripcionProducto: descripcionProducto || CLUB?.descripcion || '',
         price_id: clubPriceId || ''
       },
-      success_url: `https://www.laboroteca.es/gracias?producto=${encodeURIComponent((CLUB?.nombre || nombreProducto))}&tipoProducto=${encodeURIComponent(tipoProducto || 'suscripcion')}`,
+      success_url: `https://www.laboroteca.es/gracias?producto=${encodeURIComponent(CLUB?.nombre || nombreProducto)}&tipoProducto=${encodeURIComponent(tipoProducto || 'suscripcion')}`,
       cancel_url: 'https://www.laboroteca.es/error'
     });
 

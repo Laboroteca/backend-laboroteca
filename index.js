@@ -139,12 +139,14 @@ app.set('trust proxy', 1);
 app.disable('x-powered-by');
 
 // 🟢 LOGGER ULTRA-TEMPRANO (antes de helmet/cors/ratelimit/body-parsers)
-app.use((req, _res, next) => {
-  const ct = (req.headers['content-type'] || '').toLowerCase();
-  const ip = (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim();
-  console.log('→', req.method, req.path, '| ct:', ct || '(none)', '| ip:', ip);
-  next();
-});
+ app.use((req, _res, next) => {
+   if (LAB_DEBUG) {
+     const ct = (req.headers['content-type'] || '').toLowerCase();
+     const ip = (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim();
+     console.log('→', req.method, req.path, '| ct:', ct || '(none)', '| ip:', ip);
+   }
+   next();
+ });
 
 // util solo para logs de depuración (no imprime secretos completos)
 function _first10Sha256(str) {
@@ -180,6 +182,23 @@ const riskLimiter = rateLimit({
   max: Number(process.env.RISK_RL_MAX || 60),                   // 60 req/min
   standardHeaders: true,
   legacyHeaders: false
+});
+// 🔒 Rate limit específico para marketing (altas/bajas newsletter)
+const marketingLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Demasiadas solicitudes a marketing. Inténtalo más tarde.' }
+});
+
+// 🔒 Rate limit específico para el bridge de consentimiento (algo más laxo)
+const consentBridgeLimiter = rateLimit({
+  windowMs: Number(process.env.MKT_CB_RL_WINDOW_MS || 60 * 1000),
+  max: Number(process.env.MKT_CB_RL_MAX || 20),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Demasiadas solicitudes de consentimiento. Inténtalo más tarde.' }
 });
 
 // ── MW de cierre para pagos (POST + API KEY + HMAC opcional según flag global) ─────────────
@@ -271,10 +290,10 @@ function requireHmacPago(req,res,next){
   return res.status(401).json({ ok:false, error:'HMAC_INVALID', detail: v.error });
 }
 
-app.use((req, _res, next) => {
-  if (req.headers.origin) console.log('🌐 Origin:', req.headers.origin);
-  next();
-});
+ app.use((req, _res, next) => {
+   if (LAB_DEBUG && req.headers.origin) console.log('🌐 Origin:', req.headers.origin);
+   next();
+ });
 
 const allowProd = [
   'https://laboroteca.es',
@@ -462,7 +481,7 @@ app.post('/pago/bridge', requireJson, async (req, res) => {
 // - Logs claros de ida y vuelta + timeout
 // Requiere: PUBLIC_BASE_URL=https://laboroteca-production.up.railway.app
 // ───────────────────────────────────────────────────────────
-app.post('/marketing/consent-bridge', requireJson, async (req, res) => {
+app.post('/marketing/consent-bridge', consentBridgeLimiter, requireJson, async (req, res) => {
   // ⚙️ Normaliza claves (quita comillas, BOM/ZW chars, trim)
   const clean = (v) => String(v || '')
     .trim()
@@ -485,19 +504,23 @@ app.post('/marketing/consent-bridge', requireJson, async (req, res) => {
     const apiKeyIn = clean(rawHdr || rawAuth);
     const body = req.body || {};
 
+  if (LAB_DEBUG) {
     console.log('🟢 [/marketing/consent-bridge] IN ip=%s ua=%s keys=%s',
       ip, ua, Object.keys(body||{}).join(','));
+  }
 
 
     // 🔍 Debug seguro de claves: hash y longitud (sin exponer valores)
     try {
       const h8 = v => require('crypto').createHash('sha256').update(String(v)).digest('hex').slice(0,8);
+    if (LAB_DEBUG) {
       console.log('🔑 [/marketing/consent-bridge] key chk:', {
         hasHdr: !!rawHdr || !!rawAuth,
         hasEnv: !!process.env.MKT_API_KEY,
         in_h8: h8(apiKeyIn), env_h8: h8(API_KEY),
         len_in: apiKeyIn.length, len_env: API_KEY.length
       });
+    }
     } catch(_) {}
 
     // API KEY de entrada (la que pone Fluent Forms), tras normalizar
@@ -549,8 +572,10 @@ app.post('/marketing/consent-bridge', requireJson, async (req, res) => {
     try { data = JSON.parse(text); }
     catch { data = { ok:false, error:'NON_JSON_RESPONSE', _raw:text?.slice(0,200) }; }
 
+  if (LAB_DEBUG) {
     console.log('🟢 [/marketing/consent-bridge] OUT status=%s ok=%s error=%s',
       r.status, data?.ok, data?.error || '-');
+  }
 
     return res.status(r.status).json(data);
   } catch (e) {
@@ -602,15 +627,6 @@ const accountLimiter = rateLimit({
   max: Number(process.env.ACCOUNT_RL_MAX || 10), // por IP en ventana
   standardHeaders: true,
   legacyHeaders: false
-});
-
-// 🔒 Rate limit específico para marketing (altas/bajas newsletter)
-const marketingLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 min
-  max: 5,              // 5 req/min por IP
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Demasiadas solicitudes a marketing. Inténtalo más tarde.' }
 });
 
 // NUEVO: ruta para registrar consentimiento (vía /api/…)
@@ -805,7 +821,7 @@ app.post(
         // 🔗 pista de catálogo (no rompe nada si falta)
         slug: slugCanon || ''
       },
-      success_url: `https://www.laboroteca.es/gracias?producto=${encodeURIComponent(nombreProductoCanon)}`,
+      success_url: `https://www.laboroteca.es/gracias?producto=${encodeURIComponent(nombreProductoCanon)}&tipoProducto=${encodeURIComponent(tipoProducto || '')}`,
       cancel_url: 'https://www.laboroteca.es/error'
     });
 
@@ -917,7 +933,7 @@ app.post(
         descripcionProducto: descripcionProducto || CLUB?.descripcion || '',
         price_id: clubPriceId || ''
       },
-      success_url: `https://www.laboroteca.es/gracias?producto=${encodeURIComponent((CLUB?.nombre || nombreProducto))}`,
+      success_url: `https://www.laboroteca.es/gracias?producto=${encodeURIComponent((CLUB?.nombre || nombreProducto))}&tipoProducto=${encodeURIComponent(tipoProducto || 'suscripcion')}`,
       cancel_url: 'https://www.laboroteca.es/error'
     });
 

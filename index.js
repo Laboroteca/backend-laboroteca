@@ -703,8 +703,11 @@ app.post(
   // Log seguro (sin PII): redacta posibles emails/PII en el body
   try {
     const safe = _redactEmailsIn(datos);
-    console.log('📥 Datos recibidos en /crear-sesion-pago:', JSON.stringify(safe, null, 2));
-  } catch { console.log('📥 Datos recibidos en /crear-sesion-pago: (no serializable)'); }
+    // 👇 Log como objeto para que utils/hardenConsole aplique redacción por clave/valor
+    console.log('📥 Datos recibidos en /crear-sesion-pago:', safe);
+  } catch {
+    console.log('📥 Datos recibidos en /crear-sesion-pago: (no serializable)');
+  }
 
   const email = (typeof datos.email_autorelleno === 'string' && datos.email_autorelleno.includes('@'))
     ? datos.email_autorelleno.trim().toLowerCase()
@@ -828,7 +831,7 @@ app.post(
     return res.json({ url: session.url });
     } catch (error) {
       console.error('❌ Error Stripe (crear-sesion-pago):', error.message || error);
-      console.error('❌ Error completo:', error);
+      if (LAB_DEBUG) console.error('❌ Error completo:', error);
       try {
         await alertAdmin({
           area: 'stripe_crear_sesion_pago_error',

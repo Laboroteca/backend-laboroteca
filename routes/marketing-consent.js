@@ -699,7 +699,8 @@ router.post('/consent', async (req, res) => {
           htmlBuffer: htmlBuf,
           metadata: {
             kind:'newsletter',
-            email, consentVersion, sourceForm, formularioId, ip: ipAddr, userAgent
+            email_h12: sha256Hex(email).slice(0,12),
+            consentVersion, sourceForm, formularioId
           }
         });
         snapshotIndividualPath = indivPath;
@@ -751,7 +752,8 @@ router.post('/consent', async (req, res) => {
             htmlBuffer: htmlBufC,
             metadata: {
               kind:'comercial',
-              email, comercialVersion, sourceForm, formularioId, ip: ipAddr, userAgent
+              email_h12: sha256Hex(email).slice(0,12),
+              comercialVersion, sourceForm, formularioId
             }
           });
           snapshotComercialIndividualPath = indivPathC;

@@ -278,7 +278,7 @@ async function handleStripeEvent(event) {
           const nComp = [doc.nombre, doc.apellidos].filter(Boolean).join(' ').trim();
           nombre = doc.nombre || '';
           nombreCompleto = nComp || '';
-          console.log(`✅ Nombre recuperado para ${redactEmail(email)}: ${nombre}`);
+          console.log(`✅ Nombre recuperado para ${redactEmail(email)} (desde Firestore)`);
         }
       } catch (err) {
         console.error('❌ Error al recuperar nombre desde Firestore:', err.message);
@@ -289,7 +289,7 @@ async function handleStripeEvent(event) {
 
     // --- Enviar email y desactivar membresía inmediatamente ---
     try {
-      console.log(`⛔️ Primer intento de cobro fallido, CANCELANDO suscripción y SIN emitir factura para: ${redactEmail(email)} – ${nombre}`);
+      console.log(`⛔️ Primer intento de cobro fallido, CANCELANDO suscripción y SIN emitir factura para: ${redactEmail(email)}`);
 // ✅ Determinar subscriptionId primero
 const subscriptionId =
   invoice.subscription ||

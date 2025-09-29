@@ -258,16 +258,26 @@ async function handleUnsubscribe(req, res){
     }
 
     // 2) Suppression list (idempotente)
-    await db.collection('suppressionList').doc(email).set({
-      email, scope:'newsletter', reason:'user_unsubscribe',
+    const STORE_IP_UA = String(process.env.UNSUB_STORE_IP_UA || '').trim() === '1';
+    const supPayload = {
+      email,
+      scope: 'newsletter',
+      reason: 'user_unsubscribe',
       createdAt: admin.firestore.Timestamp.fromDate(new Date()),
-      createdAtISO: whenISO, ip, ua
-    }, { merge:true });
+      createdAtISO: whenISO
+    };
+    if (STORE_IP_UA) { supPayload.ip = ip; supPayload.ua = ua; }
+    await db.collection('suppressionList').doc(email).set(supPayload, { merge: true });
 
     // 3) Log (best-effort)
     try {
+      const emailHash = crypto.createHash('sha256').update(String(email).toLowerCase(),'utf8').digest('hex');
       await db.collection('consentLogs').add({
-        flow:'newsletter', action:'unsubscribe', email, ip, userAgent: ua,
+        flow: 'newsletter',
+        action: 'unsubscribe',
+        emailHash,
+        // ip/ua no se guardan aquí (minimización). Si los necesitas, activa UNSUB_STORE_IP_UA y
+        // consulta suppressionList para investigación puntual.
         acceptedAt: admin.firestore.Timestamp.fromDate(new Date()),
         acceptedAtISO: whenISO
       });

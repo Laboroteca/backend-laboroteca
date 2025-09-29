@@ -117,8 +117,13 @@ router.post('/solicitar-eliminacion', async (req, res) => {
     // 3) Guardar token
     await firestore.collection('eliminacionCuentas').doc(token).set({
       email,
+      // mantenemos expira (ms) por compatibilidad, pero añadimos campos canónicos
       expira,
-      createdAt: ahora
+      expiraISO: new Date(expira).toISOString(),
+      createdAt: ahora,
+      createdAtISO: new Date(ahora).toISOString(),
+      // 🔒 TTL para borrado automático (configura TTL en esta colección apuntando a 'ttlAt')
+      ttlAt: admin.firestore.Timestamp.fromMillis(expira)
     });
 
     // 4) Enviar email con enlace de validación
@@ -126,6 +131,8 @@ router.post('/solicitar-eliminacion', async (req, res) => {
       await enviarEmailValidacionEliminacionCuenta(email, token);
     } catch (e) {
       console.error('❌ Error enviando email de validación:', e?.message || e);
+      // 🧹 No dejamos token huérfano con PII si el email no sale
+      try { await firestore.collection('eliminacionCuentas').doc(token).delete(); } catch(_) {}
       try {
         await alertAdmin({
           area: 'elim_cuenta_email_validacion',

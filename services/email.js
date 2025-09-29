@@ -18,6 +18,12 @@ const escapeHtml = (s='') => String(s)
   .replace(/"/g,'&quot;')
   .replace(/'/g,'&#39;');
 
+// Redacción defensiva en cadenas (por si el provider devuelve emails en la respuesta)
+const redactEmailsInString = (s='') =>
+  String(s).replace(
+    /([A-Z0-9._%+-]+)@([A-Z0-9.-]+\.[A-Z]{2,})/gi,
+    (m)=>maskEmail(m)
+  );
 
 /**
  * Envía un email con o sin factura adjunta (PDF).
@@ -138,10 +144,12 @@ Cualquier uso indebido o sospechoso podrá dar lugar a la suspensión o cancelac
  successReal = succeeded >= destinatarios.length && failed === 0;
 
     if (!resultado.success && !successReal) {
-      console.error(
-        'Error real desde SMTP2GO:',
-        typeof resultado.raw === 'string' ? resultado.raw : JSON.stringify(resultado, null, 2)
-      );
+      // ⚠️ El provider podría devolver emails en claro en su respuesta → redactamos antes de loguear
+      const rawStr = typeof resultado?.raw === 'string'
+        ? resultado.raw
+        : JSON.stringify(resultado || {}, null, 2);
+      const safeRaw = redactEmailsInString(rawStr);
+      console.error('Error real desde SMTP2GO:', safeRaw.slice(0, 1000));
 
       try {
         await alertAdmin({
@@ -152,7 +160,7 @@ Cualquier uso indebido o sospechoso podrá dar lugar a la suspensión o cancelac
           subject: safeSubject,
           provider: 'smtp2go',
           httpStatus: response?.status ?? null,
-          responseSnippet: (resultado?.raw || raw || '').slice(0, 500)
+          responseSnippet: redactEmailsInString((resultado?.raw || raw || '')).slice(0, 500)
         }
 
         });

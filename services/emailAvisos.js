@@ -7,6 +7,12 @@ const maskEmail = (e='') => {
   if (!u || !d) return '***';
   return `${u.slice(0,2)}***@***${d.slice(Math.max(0,d.length-3))}`;
 };
+// Redacta emails dentro de cualquier string (p. ej., respuestas del provider)
+const redactEmailsInString = (s='') =>
+  String(s).replace(
+    /([A-Z0-9._%+-]+)@([A-Z0-9.-]+\.[A-Z]{2,})/gi,
+    (m)=>maskEmail(m)
+  );
 // quita scripts y normaliza <br>, permite markup simple controlado
 const sanitizeHtml = (s='') =>
   String(s)
@@ -91,10 +97,12 @@ async function enviarEmailAvisoImpago({ to, subject, body, bccAdmin=false, reply
   const ok = (resultado?.success === true) || (succeeded >= 1 && failed === 0);
 
   if (!ok) {
+    const snippetRaw = (resultado?.raw || raw || '');
+    const snippetSafe = redactEmailsInString(snippetRaw).slice(0, 400);
     console.error('❌ Error SMTP2GO:', {
       httpStatus: response?.status,
       succeeded, failed,
-      snippet: (resultado?.raw || raw || '').slice(0, 400)
+      snippet: snippetSafe
     });
     throw new Error('Error al enviar aviso de impago con SMTP2GO');
   }

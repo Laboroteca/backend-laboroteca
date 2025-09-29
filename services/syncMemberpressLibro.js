@@ -14,7 +14,9 @@ const DEFAULT_API_URL = (
 ).trim();
 const API_KEY         = (process.env.MP_SYNC_API_KEY || '').trim();
 const HMAC_SECRET     = (process.env.MP_SYNC_HMAC_SECRET || '').trim();
-const MP_SYNC_DEBUG   = String(process.env.MP_SYNC_DEBUG || '').trim() === '1';
+const MP_SYNC_DEBUG   = process.env.NODE_ENV !== 'production'
+   ? String(process.env.MP_SYNC_DEBUG || '').trim() === '1'
+   : String(process.env.MP_SYNC_DEBUG || '').trim() === '1' && String(process.env.ALLOW_DEBUG_IN_PROD || '') === '1';
 
 // ——— utilidades ———
 const maskTail = (s) => (s ? `••••${String(s).slice(-4)}` : null);
@@ -129,6 +131,7 @@ async function syncMemberpressLibro({
   let response;
   let text;
   try {
+    const u = new URL(API_URL);
     response = await fetch(API_URL, {
       method: 'POST',
       headers: {
@@ -141,9 +144,35 @@ async function syncMemberpressLibro({
         'x-request-id': reqId
       },
       body: bodyStr,
-      timeout: 15000 // 15s
+      timeout: 15000,
+      // No sigas redirecciones a ciegas; comprobamos Location a mano.
+      redirect: 'manual'
     });
 
+    // —— Gestión explícita de redirecciones
+    if (response.status >= 300 && response.status < 400) {
+      const loc = response.headers.get('location') || '';
+      const to = new URL(loc, API_URL);
+      if (to.protocol !== 'https:' || to.host !== u.host) {
+        throw new Error(`❌ Redirección insegura bloqueada: ${loc}`);
+      }
+      // Relanzamos una sola vez de forma controlada
+      response = await fetch(to.toString(), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'User-Agent': 'LaborotecaMP/1.0',
+          'x-api-key': API_KEY,
+          'x-mp-ts': ts,
+          'x-mp-sig': sig,
+          'x-request-id': reqId
+        },
+        body: bodyStr,
+        timeout: 15000,
+        redirect: 'manual'
+      });
+    }
     text = await response.text();
 
     // —— Parseo de JSON
@@ -176,11 +205,12 @@ async function syncMemberpressLibro({
 
   } catch (err) {
     // —— Log de error y alerta
-    console.error(
-      `❌ [syncMemberpressLibro#${reqId}]`,
-      err?.message || err,
-      text ? `| resp: ${sanitizeSnippet(text).substring(0, 200)}` : ''
-    );
+   const safeMsg = sanitizeSnippet(String(err?.message || err));
+   console.error(
+     `❌ [syncMemberpressLibro#${reqId}]`,
+     safeMsg,
+     text ? `| resp: ${sanitizeSnippet(text).substring(0, 200)}` : ''
+   );
 
     try {
       await alertAdmin({

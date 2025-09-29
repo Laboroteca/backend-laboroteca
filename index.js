@@ -2,6 +2,10 @@ if (process.env.NODE_ENV !== 'production') {
   require('dotenv').config();
 }
 
+// 🔐 Redacción automática de PII en TODOS los console.* (email/DNI/dirección/CP/teléfono)
+require('./utils/hardenConsole')();
+
+
 // ───────────────────────────────────────────────────────────
 // GCP creds desde Base64 → GOOGLE_APPLICATION_CREDENTIALS
 // (solo si aún no está definida)

@@ -19,6 +19,9 @@ const maskEmail = (e='') => {
   const [u,d] = String(e).split('@'); if(!u||!d) return '***';
   return `${u.slice(0,2)}***@***${d.slice(-3)}`;
 };
+// Evita que en errores caiga PII (emails) en logs si algún objeto se imprime entero
+const sanitizeSnippet = (s='') =>
+  String(s).replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig,'***@***');
 
 /**
  * Ruta “baja del Club”
@@ -93,11 +96,12 @@ async function desactivarMembresiaClub(email, password) {
       }
     }
   } catch (errStripe) {
-    console.error('❌ Stripe error (baja inmediata):', errStripe?.message || errStripe);
+    const msg = sanitizeSnippet(String(errStripe?.message || errStripe));
+    console.error('❌ Stripe error (baja inmediata):', msg);
     try { await alertAdmin({
       area: 'stripe_baja_inmediata',
       email, // ← email COMPLETO para soporte al admin
-      err: { message: errStripe?.message, code: errStripe?.code, type: errStripe?.type }
+      err: { message: String(errStripe?.message || errStripe), code: errStripe?.code, type: errStripe?.type }
     }); } catch (_) {}
   }
 
@@ -109,11 +113,12 @@ async function desactivarMembresiaClub(email, password) {
     );
      console.log(`📉 Firestore: baja inmediata registrada para ${maskEmail(email)}`);
   } catch (errFS) {
-    console.error('❌ Error Firestore (usuariosClub):', errFS?.message || errFS);
+    const msg = sanitizeSnippet(String(errFS?.message || errFS));
+    console.error('❌ Error Firestore (usuariosClub):', msg);
     try { await alertAdmin({
       area: 'firestore_baja_inmediata',
       email, // ← email COMPLETO para soporte al admin
-      err: { message: errFS?.message, code: errFS?.code, type: errFS?.type }
+      err: { message: String(errFS?.message || errFS), code: errFS?.code, type: errFS?.type }
     }); } catch (_) {}
   }
 
@@ -130,11 +135,12 @@ async function desactivarMembresiaClub(email, password) {
       return { ok: false, mensaje: `Error desactivando en MemberPress: ${resp?.error || 'Sin mensaje'}` };
     }
   } catch (errMP) {
-    console.error('❌ Error MemberPress (inmediata):', errMP?.message || errMP);
+    const msg = sanitizeSnippet(String(errMP?.message || errMP));
+    console.error('❌ Error MemberPress (inmediata):', msg);
     try { await alertAdmin({
       area: 'memberpress_baja_inmediata',
       email, // ← email COMPLETO para soporte al admin
-      err: { message: errMP?.message, code: errMP?.code, type: errMP?.type }
+      err: { message: String(errMP?.message || errMP), code: errMP?.code, type: errMP?.type }
     }); } catch (_) {}
     return { ok: false, mensaje: 'Error al desactivar en MemberPress.' };
   }

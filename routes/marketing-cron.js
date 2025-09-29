@@ -375,7 +375,7 @@ async function processChunk({ ref, job, recipients, startIndex, chunkSize }) {
       await dedupRef.create({
         mode: 'cron',
         jobId,
-        email: to,
+        emailHash: sha256(to.toLowerCase()),
         createdAt: admin.firestore.Timestamp.fromDate(new Date()),
         createdAtISO: nowISO(),
         status: 'pending'

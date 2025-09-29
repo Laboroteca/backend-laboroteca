@@ -557,7 +557,7 @@ router.post(['/send', '/send-newsletter'], sendLimiter, async (req, res) => {
           mode: 'immediate',
           status: 'pending',
           campaignKey,
-          email: rcpt,
+          emailHash: sha256(rcpt),
           subjectHash: sha256(subject),
           bodyHash: sha256(htmlBase),
           createdAt: admin.firestore.Timestamp.fromDate(new Date()),
@@ -611,13 +611,21 @@ router.post(['/send', '/send-newsletter'], sendLimiter, async (req, res) => {
 
     try {
       await db.collection('emailSends').add({
-        subject, html: htmlBase, materias: materiasNorm, testOnly, onlyCommercial,
-        recipients, count: sent, skipped, failed,
+        subject,
+        html: htmlBase,
+        materias: materiasNorm,
+        testOnly,
+        onlyCommercial,
+        recipientsCount: recipients.length,
+        count: sent,
+        skipped,
+        failed,
         createdAt: admin.firestore.Timestamp.fromDate(new Date()),
         createdAtISO: ts,
         authVariant: 'hmac',
         needsFooter: true,
         campaignKey
+        // opcional: recipientHashes: recipients.map(e => sha256(String(e).toLowerCase()))
       });
     } catch (e) {
       console.warn(`${LOG_PREFIX} ⚠️ log emailSends`, e?.message || e);

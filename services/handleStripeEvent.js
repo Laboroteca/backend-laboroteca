@@ -416,12 +416,19 @@ if (event.type === 'invoice.paid') {
     const customerId = invoice.customer;
     const billingReason = invoice.billing_reason;
 
-    // Gate producción: solo alta y renovación; 'manual' siempre ignorado
-    const allowedReasons = new Set(['subscription_create', 'subscription_cycle']);
-    if (!allowedReasons.has(billingReason)) {
+    // ✅ Procesar compra inicial y renovaciones; y (TEMP) 'manual' solo en modo TEST
+    //    Úsalo para pruebas de renovación e impago. Luego vuelve al gate “estricto”.
+    const isManual = billingReason === 'manual';
+    const isAllowed =
+      billingReason === 'subscription_create' ||
+      billingReason === 'subscription_cycle' ||
+      (isManual && event.livemode === false); // permitir 'manual' solo en TEST (livemode=false)
+
+    if (!isAllowed) {
       console.log(`⏭️ invoice.paid ignorada (billing_reason=${billingReason}, livemode=${event.livemode})`);
       return { ignored: true, reason: 'billing_reason_not_allowed' };
     }
+    // TODO: Revertir después → aceptar solo 'subscription_create' y 'subscription_cycle'
 
   // ⏱️ Determinar fecha de fin de ciclo de Stripe (para alinear MP.expires_at)
   let expiresAtISO = null;

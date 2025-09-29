@@ -91,7 +91,7 @@ function construirTextoPlanoBase({ nombreMostrar, libroElegido }) {
 const advertenciaHtml = `
   <!-- Color gris SOLO para la advertencia -->
   <div style="font-size:14px; line-height:1.4; margin:8px 0; color:#606296;">
-    <strong>Importante:</strong> tu acceso es personal e intransferible. Queda prohibido compartir tus claves con terceros o distribuir el material sin autorización. Si se detecta actividad sospechosa o irregular se puede suspender o bloquear la cuenta.
+    <strong>Importante:</strong> Todos los contenidos están protegidos por derechos de autor. Tu acceso es personal e intransferible. Se prohíbe compartir tus credenciales de acceso o difundir el contenido sin autorización expresa. Cualquier uso indebido o sospechoso podrá dar lugar a la suspensión o cancelación de la cuenta.
   </div>
 `.trim();
 

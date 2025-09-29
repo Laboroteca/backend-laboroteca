@@ -128,7 +128,6 @@ module.exports = function hardenConsole() {
               // IPs sueltas en texto (IPv6 simple)
               .replace(/\b[0-9a-f:]{2,}\b/gi, (m) => /:/.test(m) ? ((process.env.LAB_LOG_IP === '1') ? m : maskIP(m)) : m);
           }
-          return a;
         });
         base(...safeArgs);
       } catch {

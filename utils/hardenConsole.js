@@ -44,7 +44,8 @@ const piiKeys = new Set([
   'dni','nif','nie','cif',
   'direccion','address','calle',
   'cp','codigopostal',
-  'telefono','phone'
+  'telefono','phone',
+  'ciudad','provincia'
 ]);
 
 // ============================

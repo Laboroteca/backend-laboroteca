@@ -471,20 +471,6 @@ if (event.type === 'invoice.paid') {
       return;
     }
 
-    // ✅ Procesar compra inicial y renovaciones del Club
-// ✅ Procesar compra inicial, renovaciones y (TEMPORAL) facturas manuales en TEST
-function shouldProcessInvoicePaid(event, invoice) {
-  const invoiceId = String(invoice?.id || '');
-  const billingReason = String(invoice?.billing_reason || '');
-  const isManual = billingReason === 'manual';
-  const isAllowed =
-    billingReason === 'subscription_create' ||
-    billingReason === 'subscription_cycle' ||
-    (isManual && event?.livemode === false); // permitir 'manual' solo en modo TEST
-
-    // TODO: Revertir después → aceptar solo 'subscription_create' y 'subscription_cycle'
-
-    };
 
 // Etiqueta ALTA vs RENOVACIÓN
 const isAlta = billingReason === 'subscription_create';

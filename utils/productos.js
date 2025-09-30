@@ -40,11 +40,11 @@ const PRODUCTOS = {
     activar_membresia: true,
     // Canónicos
     memberpressId: 7994,
-    priceId: 'price_1RMG0mEe6Cd77jenTtn9xlB7',
+    priceId: 'price_1RLX9QEe6Cd77jen9erw5BYb',
     precio: 29.90,
     // Compat legacy
     membership_id: 7994,
-    price_id: 'price_1RMG0mEe6Cd77jenTtn9xlB7',
+    price_id: 'price_1RLX9QEe6Cd77jen9erw5BYb',
     imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/06/DE-CARA-A-LA-JUBILACION-IGNACIO-SOLSONA-ABOGADO-scaled.png',
     precio_cents: 2990, // informativo/compat
     descripcion_factura: 'Libro digital (acceso vitalicio): "De cara a la jubilación".',
@@ -73,11 +73,11 @@ const PRODUCTOS = {
     activar_membresia: true,
     // Canónicos
     memberpressId: 11006,
-    priceId: 'price_1S2sReEe6Cd77jenmOhFqFuX',
-    precio: 34.90,
+    priceId: 'price_1SD85rEe6Cd77jeneemDMvJb',
+    precio: 39.90,
     // Compat legacy
     membership_id: 11006,
-    price_id: 'price_1S2sReEe6Cd77jenmOhFqFuX',
+    price_id: 'price_1SD85rEe6Cd77jeneemDMvJb',
     imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/06/adelantar-la-jubilacion-IGNACIO-SOLSONA-scaled.webp',
     precio_cents: 3490, // informativo/compat
     descripcion_factura: 'Libro digital (acceso vitalicio): "Adelanta tu jubilación".',
@@ -147,10 +147,10 @@ const PRODUCTOS = {
     activar_membresia: true,
     // Canónicos
     memberpressId: 10663,
-    priceId: 'price_1RmY1YEe6Cd77jenSc0mZxBi',
+    priceId: 'price_1SD83dEe6Cd77jenstXE9xPO',
     // Compat legacy
     membership_id: 10663,
-    price_id: 'price_1RmY1YEe6Cd77jenSc0mZxBi',
+    price_id: 'price_1SD83dEe6Cd77jenstXE9xPO',
     imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/07/Club-laboroteca-precio-suscripcion-mensual-2.webp',
     precio_cents: null,
     precio: null, // suscripción → no aplica aquí

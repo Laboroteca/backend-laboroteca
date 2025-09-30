@@ -824,7 +824,7 @@ app.post(
         // 🔗 pista de catálogo (no rompe nada si falta)
         slug: slugCanon || ''
       },
-      success_url: `https://www.laboroteca.es/gracias?producto=${encodeURIComponent(nombreProductoCanon)}&tipoProducto=${encodeURIComponent(tipoProducto || '')}`,
+      success_url: `https://www.laboroteca.es/gracias?producto=${encodeURIComponent(descripcionCanon || nombreProductoCanon)}&tipoProducto=${encodeURIComponent(tipoProducto || '')}`,
       cancel_url: 'https://www.laboroteca.es/error'
     });
 
@@ -936,7 +936,7 @@ app.post(
         descripcionProducto: descripcionProducto || CLUB?.descripcion || '',
         price_id: clubPriceId || ''
       },
-      success_url: `https://www.laboroteca.es/gracias?producto=${encodeURIComponent(CLUB?.nombre || nombreProducto)}&tipoProducto=${encodeURIComponent(tipoProducto || 'suscripcion')}`,
+      success_url: `https://www.laboroteca.es/gracias?producto=${encodeURIComponent(descripcionProducto || CLUB?.descripcion || CLUB?.nombre || nombreProducto)}&tipoProducto=${encodeURIComponent(tipoProducto || 'suscripcion')}`,
       cancel_url: 'https://www.laboroteca.es/error'
     });
 
@@ -1269,8 +1269,8 @@ app.use((req, res) => {
   res.status(404).json({ ok:false, error:'NOT_FOUND' });
 });
 
-
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-  console.log(`✅ Backend funcionando en http://localhost:${PORT}`);
+  const base = process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}`;
+  console.log(`✅ Backend funcionando en ${base}`);
 });

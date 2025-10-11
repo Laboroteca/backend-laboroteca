@@ -51,14 +51,19 @@ const PRODUCTOS = {
     aliases: [
       'de cara a la jubilacion',
       'libro jubilacion',
-      'libro digital de cara a la jubilación'
+      'libro digital de cara a la jubilación',
+      // Alias tal como aparece en los Sheets (compras/regalos), añade aquí cualquier variante nueva
+      'libro digital (acceso vitalicio): "de cara a la jubilación".',
+      'libro digital. de cara a la jubilación'
     ],
     caducidadDias: null, // vitalicio por defecto
     meta: {
       // Opcionales para registrar/archivar si quieres diferenciarlos
       gcs_folder: 'facturas/libros/de-cara-a-la-jubilacion'
       // sheet_id, sheet_range: por defecto usa tu hoja general
-    }
+    },
+    // ⬇️ Nuevo: solo se invitan a reseñas los productos de pago único que tengan este enlace definido
+    enlaceResenas: 'https://www.laboroteca.es/comprar-de-cara-a-la-jubilacion-libro-digital/'
   },
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -91,7 +96,9 @@ const PRODUCTOS = {
     meta: {
       gcs_folder: 'facturas/libros/adelanta-tu-jubilacion'
       // mp_api_url: 'https://www.laboroteca.es/wp-json/laboroteca/v1/libro-membership'
-    }
+    },
+    // Enlace para reseñas (habilita envío del cron)
+    enlaceResenas: 'https://www.laboroteca.es/libro-adelanta-tu-jubilacion-ignacio-solsona/'
   },
 
 
@@ -157,6 +164,7 @@ const PRODUCTOS = {
     descripcion_factura: 'Suscripción mensual: El Club Laboroteca.',
     aliases: ['el club laboroteca', 'club laboroteca', 'club'],
     meta: {}
+    // ⚠️ No definir "enlaceResenas" aquí: se excluye explícitamente del cron
   },
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -181,6 +189,7 @@ const PRODUCTOS = {
     descripcion_factura: 'Entrada para evento presencial Laboroteca.',
     aliases: ['entrada', 'ticket', 'evento', 'entrada evento'],
     meta: {}
+    // ⚠️ No definir "enlaceResenas" aquí: se excluye explícitamente del cron
   }
 };
 

@@ -16,7 +16,9 @@
     "job:bajasClub:replayer": "node jobs/stripe_bajasClub_planB.js replayer",
     "job:bajasClub:reconciler": "node jobs/stripe_bajasClub_planB.js reconciler",
     "job:bajasClub:bajas": "node jobs/stripe_bajasClub_planB.js bajas",
-    "job:bajasClub:sanity": "node jobs/stripe_bajasClub_planB.js sanity"
+    "job:bajasClub:sanity": "node jobs/stripe_bajasClub_planB.js sanity",
+    "job:reviews:run": "node jobs/cron_invitarResenas.js",
+    "job:reviews:dry": "DRY_RUN=1 node jobs/cron_invitarResenas.js"
   },
   "engines": {
     "node": "18.x"

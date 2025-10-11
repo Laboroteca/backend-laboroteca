@@ -8,7 +8,10 @@ const { google } = require('googleapis');
 const dayjs = require('dayjs');
 const utc = require('dayjs/plugin/utc');
 const tz = require('dayjs/plugin/timezone');
-dayjs.extend(utc); dayjs.extend(tz);
+const customParseFormat = require('dayjs/plugin/customParseFormat');
+dayjs.extend(utc);
+dayjs.extend(tz);
+dayjs.extend(customParseFormat);
 
 const admin = require('../firebase'); // Inicialización Firebase Admin
 const firestore = admin.firestore();
@@ -41,7 +44,7 @@ const a1 = (tab, range) => {
 };
 
 const maskEmail = (e = '') => {
-  const [u, d] = String(e).split('@');
+  const [u, d] = String(e || '').split('@');
   if (!u || !d) return '***';
   return `${u.slice(0, 2)}***@***${d.slice(Math.max(0, d.length - 3))}`;
 };
@@ -54,24 +57,55 @@ function makeKey(email, slug) {
   return crypto.createHash('sha256').update(raw).digest('hex');
 }
 
-function inWindow(dateStr, source) {
-  // source: 'ventas' | 'regalos' (formatos levemente distintos)
-  let m;
-  if (source === 'ventas') {
-    // Ej.: "02/10/2025 - 13:43h" o "02/10/2025 – 13:43h"
-    const cleaned = String(dateStr || '')
-      .replace(/[–—]/g, '-')         // guiones raros → "-"
-      .replace(/\s*-\s*/, ' ')       // " - " → " "
-      .replace('h', '');             // quitar h
-    m = dayjs.tz(cleaned, 'DD/MM/YYYY HH:mm', TZ);
-  } else {
-    // Regalos: "DD/MM/YYYY HH:mmh"
-    const cleaned = String(dateStr || '').replace('h', '');
-    m = dayjs.tz(cleaned, 'DD/MM/YYYY HH:mm', TZ);
+/**
+ * Parser robusto para textos de fecha/hora que llegan desde Sheets.
+ * Acepta:
+ *  - "DD/MM/YYYY - HH:mmh"  (ventas)
+ *  - "DD/MM/YYYY HH:mmh"    (regalos)
+ *  - variantes con guiones raros, NBSP, con/sin "h", con/sin guion
+ *  - números seriales de Sheets (base 1899-12-30)
+ */
+function parseSheetDate(raw) {
+  const s0 = (raw ?? '').toString();
+  if (!s0) return dayjs.invalid();
+
+  const s = s0
+    .replace(/\u00A0/g, ' ') // NBSP → espacio normal
+    .replace(/[–—]/g, '-')   // guiones raros → "-"
+    .replace(/\s*-\s*/, ' ') // " - " → espacio
+    .replace(/\bh\b/gi, '')  // quitar "h" final si está pegada
+    .trim();
+
+  const formats = [
+    'DD/MM/YYYY HH:mm', 'D/M/YYYY HH:mm',
+    'DD/MM/YYYY H:mm',  'D/M/YYYY H:mm',
+    'DD/MM/YYYY',       'D/M/YYYY'
+  ];
+
+  for (const f of formats) {
+    const m = dayjs.tz(s, f, TZ, true);
+    if (m.isValid()) return m;
   }
-  if (!m.isValid()) return false;
+
+  // ¿número serial de Sheets?
+  const n = Number(s);
+  if (Number.isFinite(n)) {
+    // Google/Excel serial date: base 1899-12-30
+    const base = dayjs.tz('1899-12-30 00:00', TZ);
+    // Si tuviera fracción (horas), también suma
+    const days = Math.trunc(n);
+    const frac = n - days;
+    return base.add(days, 'day').add(Math.round(frac * 24 * 60), 'minute');
+  }
+
+  return dayjs.invalid();
+}
+
+function inWindow(dateStr) {
+  const m = parseSheetDate(dateStr);
+  if (!m.isValid()) return { ok: false, diff: null };
   const diffDays = NOW.diff(m, 'day');
-  return (diffDays > MIN_DAYS) && (diffDays < MAX_DAYS);
+  return { ok: (diffDays > MIN_DAYS) && (diffDays < MAX_DAYS), diff: diffDays };
 }
 
 function shouldInvite(producto) {
@@ -91,14 +125,14 @@ async function fetchRowsVentas(sheets) {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_VENTAS_ID,
     range: a1(SHEET_VENTAS_TAB, 'A2:G'),
-    valueRenderOption: 'UNFORMATTED_VALUE'
+    valueRenderOption: 'FORMATTED_VALUE'
   });
   return (res.data.values || []).map((r, idx) => ({
     _row: idx + 2,
-    nombre: (r[0] || '').toString().trim(),                // A
-    desc:   (r[3] || '').toString().trim(),                // D
-    fecha:  (r[5] || '').toString().trim(),                // F
-    email:  (r[6] || '').toString().trim().toLowerCase()   // G
+    nombre: (r[0] || '').toString().trim(),              // A
+    desc:   (r[3] || '').toString().trim(),              // D
+    fecha:  (r[5] || '').toString().trim(),              // F
+    email:  (r[6] || '').toString().trim().toLowerCase() // G
   })).filter(r => r.email && r.nombre && r.desc && r.fecha);
 }
 
@@ -107,14 +141,14 @@ async function fetchRowsRegalos(sheets) {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_REGALOS_ID,
     range: a1(SHEET_REGALOS_TAB, 'A2:G'),
-    valueRenderOption: 'UNFORMATTED_VALUE'
+    valueRenderOption: 'FORMATTED_VALUE'
   });
   return (res.data.values || []).map((r, idx) => ({
     _row: idx + 2,
-    fecha:  (r[0] || '').toString().trim(),                // A
-    nombre: (r[1] || '').toString().trim(),                // B (solo nombre)
-    email:  (r[3] || '').toString().trim().toLowerCase(),  // D
-    libro:  (r[4] || '').toString().trim()                 // E (texto visible -> normalizarProducto)
+    fecha:  (r[0] || '').toString().trim(),               // A
+    nombre: (r[1] || '').toString().trim(),               // B (solo nombre)
+    email:  (r[3] || '').toString().trim().toLowerCase(), // D
+    libro:  (r[4] || '').toString().trim()                // E (texto visible -> normalizarProducto)
   })).filter(r => r.email && r.nombre && r.libro && r.fecha);
 }
 
@@ -122,11 +156,9 @@ async function fetchRowsRegalos(sheets) {
 // Envío con dedupe atómico
 // ───────────────────────────────────────────────────────────────────────────────
 async function trySendOnce({ email, nombre, producto, slug, subject, variant, source, sheetRow }) {
-  // Clave idempotente por usuario+producto
   const key = makeKey(email, slug);
   const docRef = firestore.collection('reviewInvites').doc(key);
 
-  // 1) Marca PENDING atómica (create falla si ya existe)
   if (!DRY_RUN) {
     try {
       await docRef.create({
@@ -141,17 +173,13 @@ async function trySendOnce({ email, nombre, producto, slug, subject, variant, so
       });
     } catch (e) {
       const code = e?.code || e?.status || e?.message || '';
-      // Firestore Admin suele dar code '6' o 'already-exists'
       if (String(code).includes('already') || String(code) === '6') {
-        // Ya invitado → abortar sin enviar
         return { sent: false, reason: 'duplicate' };
       }
-      // Otro error al crear la marca
       throw e;
     }
   }
 
-  // 2) Envío (o simulación)
   if (!DRY_RUN) {
     await enviarInvitacionResena({
       toEmail: email,
@@ -162,7 +190,6 @@ async function trySendOnce({ email, nombre, producto, slug, subject, variant, so
       variant
     });
 
-    // 3) Confirmar estado SENT
     await docRef.set({
       status: 'sent',
       sentAt: admin.firestore.FieldValue.serverTimestamp()
@@ -184,6 +211,7 @@ async function trySendOnce({ email, nombre, producto, slug, subject, variant, so
     duplicados: 0,
     errores: 0,
     omapped: 0,
+    invalid_dates: 0,
     unmapped: [] // ejemplos
   };
 
@@ -198,7 +226,16 @@ async function trySendOnce({ email, nombre, producto, slug, subject, variant, so
     for (const row of ventas) {
       try {
         stats.ventas_checked++;
-        if (!inWindow(row.fecha, 'ventas')) { stats.omitidos++; continue; }
+        const win = inWindow(row.fecha);
+        if (!win.ok) {
+          if (win.diff === null) {
+            stats.invalid_dates++;
+            console.warn(`[ventas] Fecha inválida fila ${row._row}: "${row.fecha}"`);
+          } else {
+            // fuera de ventana
+          }
+          stats.omitidos++; continue;
+        }
 
         const slug = normalizarProducto(row.desc, 'libro');
         const producto = slug ? getProducto(slug) : null;
@@ -238,7 +275,14 @@ async function trySendOnce({ email, nombre, producto, slug, subject, variant, so
     for (const row of regalos) {
       try {
         stats.regalos_checked++;
-        if (!inWindow(row.fecha, 'regalos')) { stats.omitidos++; continue; }
+        const win = inWindow(row.fecha);
+        if (!win.ok) {
+          if (win.diff === null) {
+            stats.invalid_dates++;
+            console.warn(`[regalos] Fecha inválida fila ${row._row}: "${row.fecha}"`);
+          }
+          stats.omitidos++; continue;
+        }
 
         const slug = normalizarProducto(row.libro, 'libro');
         const producto = slug ? getProducto(slug) : null;
@@ -257,7 +301,7 @@ async function trySendOnce({ email, nombre, producto, slug, subject, variant, so
 
         const result = await trySendOnce({
           email: row.email,
-          nombre: row.nombre, // solo nombre (sin apellidos)
+          nombre: row.nombre, // solo nombre
           producto,
           slug,
           subject,
@@ -283,6 +327,7 @@ async function trySendOnce({ email, nombre, producto, slug, subject, variant, so
       `• Omitidos: ${stats.omitidos}`,
       `• Duplicados: ${stats.duplicados}`,
       `• Errores: ${stats.errores}`,
+      stats.invalid_dates ? `• Fechas inválidas: ${stats.invalid_dates}` : null,
       stats.omapped ? `• No mapeados: ${stats.omapped}` : null,
       DRY_RUN ? '⚠️ DRY_RUN activo: no se envió ningún email.' : ''
     ].filter(Boolean).join('\n');
@@ -291,7 +336,7 @@ async function trySendOnce({ email, nombre, producto, slug, subject, variant, so
     try {
       await alertAdmin({
         area: 'reviews.cron.summary',
-        meta: { ...stats, unmapped_examples: stats.unmapped },
+        meta: { ...stats, unmapped_examples: stats.unmapped, window: { MIN_DAYS, MAX_DAYS } },
         message
       });
     } catch (_) {}

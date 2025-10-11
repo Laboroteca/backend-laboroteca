@@ -29,8 +29,8 @@ const { auth } = require('../entradas/google/sheetsAuth');
 const TZ = 'Europe/Madrid';
 const NOW = dayjs().tz(TZ);
 
-const MIN_DAYS = Number(process.env.WINDOW_MIN_DAYS || 14); // >14
-const MAX_DAYS = Number(process.env.WINDOW_MAX_DAYS || 22); // <22
+const MIN_DAYS = Number(process.env.WINDOW_MIN_DAYS || 7);  // >7
+const MAX_DAYS = Number(process.env.WINDOW_MAX_DAYS || 14); // <14
 const DRY_RUN  = String(process.env.DRY_RUN || '') === '1';
 
 const SHEET_VENTAS_ID   = '1Mtffq42G7Q0y44ekzvy7IWPS8obvN4pNahA-08igdGk';
@@ -105,7 +105,7 @@ function inWindow(dateStr) {
   const m = parseSheetDate(dateStr);
   if (!m.isValid()) return { ok: false, diff: null };
   const diffDays = NOW.diff(m, 'day');
-  return { ok: (diffDays > MIN_DAYS) && (diffDays < MAX_DAYS), diff: diffDays };
+  return { ok: (diffDays >= MIN_DAYS) && (diffDays <= MAX_DAYS), diff: diffDays };
 }
 
 function shouldInvite(producto) {
@@ -351,6 +351,7 @@ async function trySendOnce({ email, nombre, producto, slug, subject, variant, so
       if (stats.enviados || stats.duplicados || stats.errores) {
         await alertAdmin({
           area: 'reviews.cron.summary',
+          severity: 'info',         // ← marcar como informativo (evita el formato de “Fallo …”)
           subject,                  // ← asunto personalizado
           message,                  // ← cuerpo resumido
           meta: {
@@ -358,7 +359,8 @@ async function trySendOnce({ email, nombre, producto, slug, subject, variant, so
             byProducto: stats.byProducto,
             enviados: stats.enviados,
             duplicados: stats.duplicados,
-            errores: stats.errores
+            errores: stats.errores,
+            ok: true                // ← pista adicional para renderizar como “OK/Info”
           }
         });
       }

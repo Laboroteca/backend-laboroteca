@@ -137,6 +137,9 @@ module.exports = async function canjearCodigoRegalo({
     try {
       await alertAdmin({
         area: 'regalos.canje.bloqueo_ok',
+        severity: 'info',
+        subject: '🔒 Canje bloqueado correctamente (ya usado)',
+        message: 'Código ya usado: bloqueo correcto',
         meta: { reqId, email: emailNorm, codigo: codigoNorm, motivo: 'codigo_ya_usado' }
       });
     } catch (_) {}
@@ -160,6 +163,9 @@ module.exports = async function canjearCodigoRegalo({
         try {
           await alertAdmin({
             area: 'regalos.canje.bloqueo_ok',
+            severity: 'info',
+            subject: '🔒 Canje bloqueado (código REG- no válido)',
+            message: 'Código REG- no válido: bloqueo correcto',
             meta: { reqId, email: emailNorm, codigo: codigoNorm, motivo: 'codigo_no_valido' }
           });
         } catch (_) {}
@@ -172,6 +178,9 @@ module.exports = async function canjearCodigoRegalo({
         try {
           await alertAdmin({
             area: 'regalos.canje.bloqueo_ok',
+            severity: 'info',
+            subject: '🔒 Canje bloqueado (email no corresponde)',
+            message: 'Email asignado distinto: bloqueo correcto',
             meta: { reqId, email: emailNorm, emailAsignado, codigo: codigoNorm, motivo: 'email_no_corresponde' }
           });
         } catch (_) {}
@@ -203,6 +212,9 @@ module.exports = async function canjearCodigoRegalo({
         try {
           await alertAdmin({
             area: 'regalos.canje.bloqueo_ok',
+            severity: 'info',
+            subject: '🔒 Canje bloqueado (entrada no validada)',
+            message: 'Entrada PRE- no validada: bloqueo correcto',
             meta: { reqId, email: emailNorm, codigo: codigoNorm, motivo: 'entrada_no_validada' }
           });
         } catch (_) {}

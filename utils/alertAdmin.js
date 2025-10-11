@@ -50,6 +50,11 @@ async function alertAdmin(arg, legacyMeta = {}) {
     const area = payload.area || 'general';
     const email = payload.email || '-';
     const err = payload.err ?? payload.error ?? payload.message ?? '-';
+    // Nuevo: severidad opcional (retrocompatible). Por defecto: "error"
+    const severity = String(payload.severity || 'error').toLowerCase();
+    const prefix =
+      severity === 'info' ? 'ℹ️ INFO' :
+      severity === 'warn' ? '⚠️ AVISO' : '🚨 FALLO';
     const meta = payload.meta || {};
     const dedupeKey =
       payload.dedupeKey ||
@@ -62,12 +67,15 @@ async function alertAdmin(arg, legacyMeta = {}) {
 
     const E = (v) => escapeHtml(String(v ?? '-'));
     const T = (v) => String(v ?? '-');
-
-    const subject = `🚨 FALLO ${T(area).toUpperCase()} — ${T(email)}`;
+    // Si llega subject explícito, lo usamos tal cual; si no, mantenemos el formato antiguo
+    const explicitSubject = (payload.subject && String(payload.subject).trim()) || '';
+    const subject = explicitSubject || `${prefix} ${T(area).toUpperCase()} — ${T(email)}`;
+    const mainLabel = severity === 'info' ? 'Mensaje' : 'Error';
+    const heading   = severity === 'info' ? `Informe de ${E(area)}` : `Fallo en ${E(area)}`;
     const text = [
       `Área: ${T(area)}`,
       `Email: ${T(email)}`,
-      `Error: ${T(err && err.message ? err.message : err || '-')}`,
+      `${mainLabel}: ${T(err && err.message ? err.message : err || '-')}`,
       `Meta: ${T(JSON.stringify(meta))}`,
       `Entorno: ${T(process.env.NODE_ENV || 'dev')}`,
       ``,
@@ -75,10 +83,10 @@ async function alertAdmin(arg, legacyMeta = {}) {
     ].join('\n');
 
     const html = `
-      <h3>Fallo en ${E(area)}</h3>
+      <h3>${heading}</h3>
       <ul>
         <li><strong>Email:</strong> ${E(email)}</li>
-        <li><strong>Error:</strong> ${E(err && err.message ? err.message : err || '-')}</li>
+        <li><strong>${mainLabel}:</strong> ${E(err && err.message ? err.message : err || '-')}</li>
         <li><strong>Entorno:</strong> ${E(process.env.NODE_ENV || 'dev')}</li>
       </ul>
       <pre style="white-space:pre-wrap">${E(JSON.stringify(meta, null, 2))}</pre>

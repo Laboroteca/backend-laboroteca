@@ -248,15 +248,24 @@ async function handleCanje(req, res) {
 
   } catch (err) {
     const { status, error } = mapError(err?.message || err);
+    // 4xx -> INFO (bloqueo/entrada inválida); 5xx -> FALLO real
+    const severity = status >= 500 ? 'error' : 'info';
+    const subject  = severity === 'error'
+      ? '🚨 FALLO regalos.canjear.exception'
+      : 'ℹ️ Intento de canje inválido (bloqueo correcto)';
     try {
       await alertAdmin({
         area: 'regalos.canjear.exception',
-        err,
+        severity,
+        subject,
+        // Para INFO enviamos el mensaje mapeado; para ERROR mandamos el error original
+        err: severity === 'error' ? err : new Error(error),
         meta: {
-          email: req.body?.email || null,      // OK: admin recibe completo
-          codigo: req.body?.codigo || req.body?.codigo_regalo || null, // OK en admin
+          email: req.body?.email || null,
+          codigo: req.body?.codigo || req.body?.codigo_regalo || null,
           libro: req.body?.libro_elegido || req.body?.libro || null,
-          reqId: req.header('x-req-id') || ''
+          reqId: req.header('x-req-id') || '',
+          httpStatus: status
         }
       });
     } catch (_) {}

@@ -212,7 +212,8 @@ async function trySendOnce({ email, nombre, producto, slug, subject, variant, so
     errores: 0,
     omapped: 0,
     invalid_dates: 0,
-    unmapped: [] // ejemplos
+    unmapped: [], // ejemplos
+    byProducto: {} // ← contador por nombre de producto
   };
 
   try {
@@ -263,7 +264,12 @@ async function trySendOnce({ email, nombre, producto, slug, subject, variant, so
           sheetRow: row._row
         });
 
-        if (result.sent) stats.enviados++;
+        if (result.sent) {
+          stats.enviados++;
+          // conteo por producto (nombre público)
+          const nom = producto?.nombre || slug || 'Producto';
+          stats.byProducto[nom] = (stats.byProducto[nom] || 0) + 1;
+        }
         else if (result.reason === 'duplicate') stats.duplicados++;
       } catch (err) {
         stats.errores++;
@@ -310,7 +316,11 @@ async function trySendOnce({ email, nombre, producto, slug, subject, variant, so
           sheetRow: row._row
         });
 
-        if (result.sent) stats.enviados++;
+        if (result.sent) {
+          stats.enviados++;
+          const nom = producto?.nombre || slug || 'Producto';
+          stats.byProducto[nom] = (stats.byProducto[nom] || 0) + 1;
+        }
         else if (result.reason === 'duplicate') stats.duplicados++;
       } catch (err) {
         stats.errores++;
@@ -318,27 +328,40 @@ async function trySendOnce({ email, nombre, producto, slug, subject, variant, so
       }
     }
 
-    // Informe final
-    const message = [
-      `📬 CRON reseñas completado (${NOW.format('YYYY-MM-DD HH:mm')} ${TZ})`,
-      `• Ventas revisadas: ${stats.ventas_checked}`,
-      `• Regalos revisados: ${stats.regalos_checked}`,
-      `• Enviados: ${stats.enviados}`,
-      `• Omitidos: ${stats.omitidos}`,
-      `• Duplicados: ${stats.duplicados}`,
-      `• Errores: ${stats.errores}`,
-      stats.invalid_dates ? `• Fechas inválidas: ${stats.invalid_dates}` : null,
-      stats.omapped ? `• No mapeados: ${stats.omapped}` : null,
-      DRY_RUN ? '⚠️ DRY_RUN activo: no se envió ningún email.' : ''
-    ].filter(Boolean).join('\n');
+    // Informe final (solo lo relevante)
+    const subject = '📨 Resumen de reseñas solicitadas esta semana';
+    const lines = [];
+    lines.push(`Semana de referencia: ${NOW.format('YYYY-MM-DD')} (${TZ})`);
+    lines.push(`Reseñas solicitadas: ${stats.enviados}`);
+    // Desglose por producto (ordenado desc)
+    const desglose = Object.entries(stats.byProducto)
+      .sort((a,b)=>b[1]-a[1])
+      .map(([k,v]) => `  • ${k}: ${v}`);
+    if (desglose.length) {
+      lines.push('Desglose por producto:');
+      lines.push(...desglose);
+    }
+    lines.push(`Bloqueadas por duplicado: ${stats.duplicados}`);
+    if (DRY_RUN) lines.push('⚠️ DRY_RUN: no se envió ningún email.');
+    const message = lines.join('\n');
 
     console.log(message);
     try {
-      await alertAdmin({
-        area: 'reviews.cron.summary',
-        meta: { ...stats, unmapped_examples: stats.unmapped, window: { MIN_DAYS, MAX_DAYS } },
-        message
-      });
+      // Enviamos solo si hubo actividad o incidencias
+      if (stats.enviados || stats.duplicados || stats.errores) {
+        await alertAdmin({
+          area: 'reviews.cron.summary',
+          subject,                  // ← asunto personalizado
+          message,                  // ← cuerpo resumido
+          meta: {
+            window: { MIN_DAYS, MAX_DAYS },
+            byProducto: stats.byProducto,
+            enviados: stats.enviados,
+            duplicados: stats.duplicados,
+            errores: stats.errores
+          }
+        });
+      }
     } catch (_) {}
   } catch (err) {
     console.error('❌ Error en cron_invitarResenas:', err?.message || err);

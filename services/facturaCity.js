@@ -216,8 +216,15 @@ if (!FACTURACITY_API_KEY) {
       throw new Error(`❌ El importe recibido no es válido: "${datosCliente.importe}"`);
     }
 
+    // === Tipo de producto → IVA aplicable ===
+    const tp = (datosCliente.tipoProducto || '').toLowerCase();
+    const esLibro   = tp === 'libro';
+    const esEntrada = tp === 'entrada';
+    const ivaFactor   = esLibro ? 1.04 : (esEntrada ? 1.10 : 1.21);
+    const codImpuesto = esLibro ? 'IVA4' : (esEntrada ? 'IVA10' : 'IVA21');
+
     // === CALCULAR BASE IMPONIBLE TRUNCADA A 4 DECIMALES (sin redondeo) ===
-    const baseTotal = trunc4(totalConIVA / 1.21); // Mantener 4 decimales
+    const baseTotal = trunc4(totalConIVA / ivaFactor); // Mantener 4 decimales
     console.log('💶 Base imponible (truncada):', baseTotal.toFixed(4), '→ Total con IVA:', totalConIVA.toFixed(2));
 
     // ===== Cliente =====
@@ -287,7 +294,6 @@ if (!codcliente) {
     // ===== Referencia/Descripción =====
     const descripcion = datosCliente.descripcionProducto || datosCliente.descripcion || datosCliente.producto;
     let referencia = 'OTRO001';
-    const tp = (datosCliente.tipoProducto || '').toLowerCase();
     const nombreNorm = (datosCliente.nombreProducto || '').toLowerCase().replace(/\s+/g,' ').trim();
     const esClub = /club laboroteca/.test(nombreNorm) || tp === 'club';
     if (esClub) referencia = 'CLUB001';
@@ -311,7 +317,7 @@ if (!codcliente) {
         descripcion,
         cantidad: parseInt(cantidad, 10), // 👈 Forzamos número entero (sin decimales)
         pvpunitario: pvpUnitarioBase,     // BASE imponible por unidad
-        codimpuesto: 'IVA21',
+        codimpuesto: codImpuesto,
         incluyeiva: '0'                   // 👈 Indicamos que el pvpunitario NO incluye IVA
       }
     ];

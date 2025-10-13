@@ -303,27 +303,29 @@ if (!codcliente) {
     else if (tp === 'guia') referencia = 'GUIA001';
 
 
-    // ===== Cantidad y PRECIO UNITARIO (CON IVA) =====
+    // ===== Cantidad y PRECIO UNITARIO NETO (SIN IVA) =====
     let cantidad = esEntrada ? parseInt(datosCliente.totalAsistentes || '1', 10) : 1;
     if (!Number.isFinite(cantidad) || cantidad < 1) cantidad = 1;
 
-    // Total por unidad (CON IVA) = totalConIVA / cantidad, 4 decimales
- const pvpUnitarioTotal = trunc4(totalConIVA / cantidad).toFixed(4);
- if (!Number.isFinite(Number(pvpUnitarioTotal))) {
-   throw new Error('pvpUnitarioTotal no es numérico');
- }
+    // Neto por unidad = baseTotal / cantidad, 4 decimales (string)
+    const pvpUnitarioNeto = trunc4(baseTotal / cantidad).toFixed(4);
+    if (!Number.isFinite(Number(pvpUnitarioNeto))) {
+      throw new Error('pvpUnitarioNeto no es numérico');
+    }
 
-    // ⚠️ IMPORTANTE: enviar "con IVA" + incluyeiva=1 para que desglose correctamente
+    // ⚠️ Enviar NETO + incluyeiva=0 + iva=4 para que desglosen como hace la UI
+
+   
     const lineas = [
       {
         referencia,
         descripcion,
         cantidad: parseInt(cantidad, 10),
-        pvpunitario: pvpUnitarioTotal,   // Precio por unidad CON IVA
+        pvpunitario: pvpUnitarioNeto,    // Precio por unidad SIN IVA
         codimpuesto: impuestoCode,       // 'IVA4' | 'IVA10' | 'IVA21'
-        iva: ivaPct,                     // % IVA (4 | 10 | 21)
+        iva: ivaPct,                     // % IVA (4 | 10 | 21) ← NECESARIO
         recargo: 0,                      // Sin Recargo de Equivalencia
-        incluyeiva: '1'                  // pvpunitario YA incluye IVA
+        incluyeiva: '0'                  // pvpunitario NO incluye IVA
       }
     ];
 
@@ -439,11 +441,19 @@ if (pdfSize <= 0) {
   if (error.response) {
     console.error(`⛔ Error FacturaCity invoiceId=${datosCliente.invoiceId || 'N/A'} email=${redactEmail(datosCliente.email)}`);
     console.error('🔢 Status:', error.response.status);
-    if (process.env.NODE_ENV !== 'production') {
-      console.error('📦 Data:', error.response.data);
-    } else {
-      const size = typeof error.response.data === 'string' ? error.response.data.length : (error.response.data?.length || 0);
-      console.error('📦 Data (sanitized): tipo=', typeof error.response.data, 'bytes=', size);
+    // Mostrar SIEMPRE un resumen útil del cuerpo de error (sin PII)
+    try {
+      const raw = error.response.data;
+      if (typeof raw === 'string') {
+        console.error('📦 FC error body (text):', raw.slice(0, 500));
+      } else if (raw) {
+        const pretty = JSON.stringify(raw);
+        console.error('📦 FC error body (json):', pretty.slice(0, 500));
+      } else {
+        console.error('📦 FC error body vacío/indefinido');
+      }
+    } catch (e) {
+      console.error('📦 No se pudo imprimir el cuerpo de error:', e.message);
     }
   } else {
     console.error(`⛔ Error FacturaCity sin respuesta invoiceId=${datosCliente.invoiceId || 'N/A'} email=${redactEmail(datosCliente.email)} → ${error.message}`);

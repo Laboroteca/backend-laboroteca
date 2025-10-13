@@ -222,6 +222,7 @@ if (!FACTURACITY_API_KEY) {
     const esEntrada = tp === 'entrada';
     const impuestoCode = esEntrada ? 'IVA10' : (esLibro ? 'IVA4' : 'IVA21');
     const divisorIVA   = impuestoCode === 'IVA10' ? 1.10 : (impuestoCode === 'IVA4' ? 1.04 : 1.21);
+    const ivaPct       = (impuestoCode === 'IVA10') ? 10 : (impuestoCode === 'IVA4') ? 4 : 21;
 
     // === CALCULAR BASE IMPONIBLE TRUNCADA A 4 DECIMALES (sin redondeo) ===
     const baseTotal = trunc4(totalConIVA / divisorIVA); // Mantener 4 decimales
@@ -302,22 +303,23 @@ if (!codcliente) {
     else if (tp === 'guia') referencia = 'GUIA001';
 
 
-    // ===== Cantidad y PRECIO UNITARIO BASE (sin IVA) =====
+    // ===== Cantidad y PRECIO UNITARIO CON IVA =====
     let cantidad = esEntrada ? parseInt(datosCliente.totalAsistentes || '1', 10) : 1;
     if (!Number.isFinite(cantidad) || cantidad < 1) cantidad = 1;
 
-    // Base unitario = baseTotal / cantidad, TRUNCADO a 4 decimales (no redondear)
-    const pvpUnitarioBase = trunc4(baseTotal / cantidad).toFixed(4);
+    // Precio unitario CON IVA (truncado a 4 decimales para estabilidad)
+    const pvpUnitarioConIVA = trunc4(totalConIVA / cantidad).toFixed(4);
 
-    // === Línea SIN incluyeiva (0) para que FacturaCity calcule total exacto desde la base truncada ===
+    // === Línea CON IVA incluido: FacturaCity desglosa base/IVA correctamente ===
     const lineas = [
       {
         referencia,
         descripcion,
-        cantidad: parseInt(cantidad, 10), // 👈 Forzamos número entero (sin decimales)
-        pvpunitario: pvpUnitarioBase,     // BASE imponible por unidad
-        codimpuesto: impuestoCode,
-        incluyeiva: '0'                   // 👈 Indicamos que el pvpunitario NO incluye IVA
+        cantidad: parseInt(cantidad, 10),
+        pvpunitario: pvpUnitarioConIVA,  // PRECIO con IVA por unidad
+        codimpuesto: impuestoCode,       // 'IVA4' | 'IVA10' | 'IVA21'
+        iva: ivaPct,                     // 4 | 10 | 21
+        incluyeiva: '1'
       }
     ];
 

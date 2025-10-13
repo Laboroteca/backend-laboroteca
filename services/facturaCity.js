@@ -303,23 +303,22 @@ if (!codcliente) {
     else if (tp === 'guia') referencia = 'GUIA001';
 
 
-    // ===== Cantidad y PRECIO UNITARIO CON IVA =====
+    // ===== Cantidad y PRECIO UNITARIO NETO (SIN IVA) =====
     let cantidad = esEntrada ? parseInt(datosCliente.totalAsistentes || '1', 10) : 1;
     if (!Number.isFinite(cantidad) || cantidad < 1) cantidad = 1;
 
-    // Precio unitario CON IVA (truncado a 4 decimales para estabilidad)
-    const pvpUnitarioConIVA = trunc4(totalConIVA / cantidad).toFixed(4);
+    // Neto por unidad = baseTotal / cantidad, truncado a 4 decimales
+    const pvpUnitarioNeto = trunc4(baseTotal / cantidad).toFixed(4);
 
-    // === Línea CON IVA incluido: FacturaCity desglosa base/IVA correctamente ===
+    // ⚠️ IMPORTANTE: enviar SIEMPRE neto + incluyeiva=0 para que se desglose el IVA
     const lineas = [
       {
         referencia,
         descripcion,
         cantidad: parseInt(cantidad, 10),
-        pvpunitario: pvpUnitarioConIVA,  // PRECIO con IVA por unidad
+        pvpunitario: pvpUnitarioNeto,    // PRECIO NETO por unidad (sin IVA)
         codimpuesto: impuestoCode,       // 'IVA4' | 'IVA10' | 'IVA21'
-        iva: ivaPct,                     // 4 | 10 | 21
-        incluyeiva: '1'
+        incluyeiva: '0'                  // indicamos que el pvpunitario es SIN IVA → desglose correcto
       }
     ];
 

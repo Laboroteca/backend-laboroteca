@@ -303,9 +303,9 @@ if (!codcliente) {
 
 
     // ===== Cantidad y PRECIO UNITARIO BASE (sin IVA) =====
-    const esEntrada = tp === 'entrada';
-    let cantidad = esEntrada ? parseInt(datosCliente.totalAsistentes || '1', 10) : 1;
-    if (!Number.isFinite(cantidad) || cantidad < 1) cantidad = 1;
+    // (evita colisión con otra variable homónima)
+    const esEntradaLinea = tp === 'entrada';
+    let cantidad = esEntradaLinea ? parseInt(datosCliente.totalAsistentes || '1', 10) : 1;
 
     // Base unitario = baseTotal / cantidad, TRUNCADO a 4 decimales (no redondear)
     const pvpUnitarioBase = trunc4(baseTotal / cantidad).toFixed(4);

@@ -304,6 +304,18 @@ if (process.env.NODE_ENV !== 'production') {
         : (claveNormalizada ? Number(MEMBERPRESS_IDS[claveNormalizada]) : null));
     const esClub  = (tipoEfectivo === 'club') || (Number(membership_id) === Number(CLUB_ID));
     const esLibro = (tipoEfectivo === 'libro');
+    // 🧾 Canonicalizar tipo para FACTURA (IVA):
+    //    — Solo "libro" debe ir al 4 %. Resto (club, cursos, entradas, etc.) → 21 %.
+    if (esLibro) {
+      datosCliente.tipoProducto = 'libro';
+      // (opcional) Anotar en descripción la base legal del 4 %
+      if (!/art\.?\s*91/i.test(String(datosCliente.descripcionProducto || ''))) {
+        datosCliente.descripcionProducto = `${datosCliente.descripcionProducto} — Libro digital (art. 91 LIVA, 4%)`;
+      }
+    } else if (esClub) {
+      datosCliente.tipoProducto = 'Club';
+    }
+
     // ✅ Regla general: si hay mapping MemberPress, activamos.
     //    ÚNICA caducidad mensual = CLUB (10663). Todo lo demás = pago único sin caducidad.
     const activarMembresia =

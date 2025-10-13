@@ -307,8 +307,11 @@ if (!codcliente) {
     let cantidad = esEntrada ? parseInt(datosCliente.totalAsistentes || '1', 10) : 1;
     if (!Number.isFinite(cantidad) || cantidad < 1) cantidad = 1;
 
-    // Neto por unidad = baseTotal / cantidad, truncado a 4 decimales (string)
-    const pvpUnitarioNeto = trunc4(baseTotal / cantidad).toFixed(4);
+    // Neto por unidad = baseTotal / cantidad, truncado a 4 decimales → NÚMERO
+    const pvpUnitarioNeto = Number(trunc4(baseTotal / cantidad).toFixed(4));
+    if (!Number.isFinite(pvpUnitarioNeto)) {
+      throw new Error('pvpUnitarioNeto no es numérico');
+    }
 
     // ⚠️ IMPORTANTE: enviar neto + incluyeiva=0 y forzar el % de IVA en el campo 'iva'
     const lineas = [
@@ -316,11 +319,11 @@ if (!codcliente) {
         referencia,
         descripcion,
         cantidad: parseInt(cantidad, 10),
-        pvpunitario: pvpUnitarioNeto,    // Neto por unidad (sin IVA, 4 decimales)
-        codimpuesto: impuestoCode,       // 'IVA4' | 'IVA10' | 'IVA21'
-        iva: ivaPct,                     // 🔑 Porcentaje de IVA
-        recargo: 0,                      // Sin Recargo de Equivalencia
-        incluyeiva: '0'                  // El pvpunitario NO incluye IVA
+        pvpunitario: pvpUnitarioNeto,      // número (sin IVA)
+        codimpuesto: impuestoCode,         // 'IVA4' | 'IVA10' | 'IVA21'
+        iva: Number(ivaPct),               // número: 4 | 10 | 21
+        recargo: 0,                        // número
+        incluyeiva: 0                      // número: 0 = NO incluye IVA
       }
     ];
 

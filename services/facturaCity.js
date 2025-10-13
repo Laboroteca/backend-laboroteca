@@ -307,8 +307,8 @@ if (!codcliente) {
     let cantidad = esEntrada ? parseInt(datosCliente.totalAsistentes || '1', 10) : 1;
     if (!Number.isFinite(cantidad) || cantidad < 1) cantidad = 1;
 
-    // Neto por unidad = baseTotal / cantidad (número, no string) con 4 decimales
-    const pvpUnitarioNetoNum = Number(trunc4(baseTotal / cantidad).toFixed(4));
+    // Neto por unidad = baseTotal / cantidad, truncado a 4 decimales (string)
+    const pvpUnitarioNeto = trunc4(baseTotal / cantidad).toFixed(4);
 
     // ⚠️ IMPORTANTE: enviar neto + incluyeiva=0 y forzar el % de IVA en el campo 'iva'
     const lineas = [
@@ -316,9 +316,9 @@ if (!codcliente) {
         referencia,
         descripcion,
         cantidad: parseInt(cantidad, 10),
-        pvpunitario: pvpUnitarioNeto,    // Neto por unidad (sin IVA)
+        pvpunitario: pvpUnitarioNeto,    // Neto por unidad (sin IVA, 4 decimales)
         codimpuesto: impuestoCode,       // 'IVA4' | 'IVA10' | 'IVA21'
-        iva: ivaPct,                     // 🔑 Porcentaje de IVA (obligatorio vía API)
+        iva: ivaPct,                     // 🔑 Porcentaje de IVA
         recargo: 0,                      // Sin Recargo de Equivalencia
         incluyeiva: '0'                  // El pvpunitario NO incluye IVA
       }

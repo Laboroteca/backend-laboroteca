@@ -216,16 +216,16 @@ if (!FACTURACITY_API_KEY) {
       throw new Error(`❌ El importe recibido no es válido: "${datosCliente.importe}"`);
     }
 
-    // === Tipo de producto → IVA aplicable ===
+    // === Tipo de producto → IVA aplicable (y divisor) ===
     const tp = (datosCliente.tipoProducto || '').toLowerCase();
-    const esLibro   = tp === 'libro';
+    const esLibro   = tp === 'libro' || /libro/.test(String(datosCliente.producto || datosCliente.nombreProducto || '').toLowerCase());
     const esEntrada = tp === 'entrada';
-    const ivaFactor   = esLibro ? 1.04 : (esEntrada ? 1.10 : 1.21);
-    const codImpuesto = esLibro ? 'IVA4' : (esEntrada ? 'IVA10' : 'IVA21');
+    const impuestoCode = esEntrada ? 'IVA10' : (esLibro ? 'IVA4' : 'IVA21');
+    const divisorIVA   = impuestoCode === 'IVA10' ? 1.10 : (impuestoCode === 'IVA4' ? 1.04 : 1.21);
 
     // === CALCULAR BASE IMPONIBLE TRUNCADA A 4 DECIMALES (sin redondeo) ===
-    const baseTotal = trunc4(totalConIVA / ivaFactor); // Mantener 4 decimales
-    console.log('💶 Base imponible (truncada):', baseTotal.toFixed(4), '→ Total con IVA:', totalConIVA.toFixed(2));
+    const baseTotal = trunc4(totalConIVA / divisorIVA); // Mantener 4 decimales
+    console.log('💶 Base imponible (truncada):', baseTotal.toFixed(4), '→ IVA:', impuestoCode, '→ Total con IVA:', totalConIVA.toFixed(2));
 
     // ===== Cliente =====
     const cliente = {
@@ -303,9 +303,8 @@ if (!codcliente) {
 
 
     // ===== Cantidad y PRECIO UNITARIO BASE (sin IVA) =====
-    // (evita colisión con otra variable homónima)
-    const esEntradaLinea = tp === 'entrada';
-    let cantidad = esEntradaLinea ? parseInt(datosCliente.totalAsistentes || '1', 10) : 1;
+    let cantidad = esEntrada ? parseInt(datosCliente.totalAsistentes || '1', 10) : 1;
+    if (!Number.isFinite(cantidad) || cantidad < 1) cantidad = 1;
 
     // Base unitario = baseTotal / cantidad, TRUNCADO a 4 decimales (no redondear)
     const pvpUnitarioBase = trunc4(baseTotal / cantidad).toFixed(4);
@@ -317,7 +316,7 @@ if (!codcliente) {
         descripcion,
         cantidad: parseInt(cantidad, 10), // 👈 Forzamos número entero (sin decimales)
         pvpunitario: pvpUnitarioBase,     // BASE imponible por unidad
-        codimpuesto: codImpuesto,
+        codimpuesto: impuestoCode,
         incluyeiva: '0'                   // 👈 Indicamos que el pvpunitario NO incluye IVA
       }
     ];

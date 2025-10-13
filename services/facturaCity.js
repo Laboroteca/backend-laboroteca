@@ -216,15 +216,9 @@ if (!FACTURACITY_API_KEY) {
       throw new Error(`❌ El importe recibido no es válido: "${datosCliente.importe}"`);
     }
 
-    // === TIPO DE IVA SEGÚN PRODUCTO ===
-    const tpLower  = (datosCliente.tipoProducto || '').toLowerCase();
-    const esLibro  = (tpLower === 'libro' || tpLower === 'libro_digital' || /\blibro\b/.test(tpLower));
-    const ivaPct   = esLibro ? 4 : 21;              // solo libros al 4 %, resto 21 %
-    const ivaFactor= 1 + (ivaPct / 100);
-
     // === CALCULAR BASE IMPONIBLE TRUNCADA A 4 DECIMALES (sin redondeo) ===
-    const baseTotal = trunc4(totalConIVA / ivaFactor); // Mantener 4 decimales
-    console.log('💶 Base imponible (truncada):', baseTotal.toFixed(4), 'IVA%:', ivaPct, '→ Total con IVA:', totalConIVA.toFixed(2));
+    const baseTotal = trunc4(totalConIVA / 1.21); // Mantener 4 decimales
+    console.log('💶 Base imponible (truncada):', baseTotal.toFixed(4), '→ Total con IVA:', totalConIVA.toFixed(2));
 
     // ===== Cliente =====
     const cliente = {
@@ -317,7 +311,7 @@ if (!codcliente) {
         descripcion,
         cantidad: parseInt(cantidad, 10), // 👈 Forzamos número entero (sin decimales)
         pvpunitario: pvpUnitarioBase,     // BASE imponible por unidad
-        codimpuesto: esLibro ? 'IVA4' : 'IVA21',
+        codimpuesto: 'IVA21',
         incluyeiva: '0'                   // 👈 Indicamos que el pvpunitario NO incluye IVA
       }
     ];

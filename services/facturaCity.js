@@ -303,29 +303,27 @@ if (!codcliente) {
     else if (tp === 'guia') referencia = 'GUIA001';
 
 
-    // ===== Cantidad y PRECIO UNITARIO NETO (SIN IVA) =====
+    // ===== Cantidad y PRECIO UNITARIO BRUTO (CON IVA) =====
     let cantidad = esEntrada ? parseInt(datosCliente.totalAsistentes || '1', 10) : 1;
     if (!Number.isFinite(cantidad) || cantidad < 1) cantidad = 1;
 
-    // Neto por unidad = baseTotal / cantidad, 4 decimales (string)
-    const pvpUnitarioNeto = trunc4(baseTotal / cantidad).toFixed(4);
-    if (!Number.isFinite(Number(pvpUnitarioNeto))) {
-      throw new Error('pvpUnitarioNeto no es numérico');
+    // Bruto por unidad = totalConIVA / cantidad, 4 decimales (string)
+    const pvpUnitarioBruto = trunc4(totalConIVA / cantidad).toFixed(4);
+    if (!Number.isFinite(Number(pvpUnitarioBruto))) {
+      throw new Error('pvpUnitarioBruto no es numérico');
     }
 
-    // ⚠️ Enviar NETO + incluyeiva=0 + iva=4 para que desglosen como hace la UI
-
-   
+    // ⚠️ Enviar BRUTO + incluyeiva=1 + iva correcto → FacturaCity desglosa siempre.
     const lineas = [
       {
         referencia,
         descripcion,
         cantidad: parseInt(cantidad, 10),
-        pvpunitario: pvpUnitarioNeto,    // Precio por unidad SIN IVA
-        codimpuesto: impuestoCode,       // 'IVA4' | 'IVA10' | 'IVA21'
-        iva: ivaPct,                     // % IVA (4 | 10 | 21) ← NECESARIO
-        recargo: 0,                      // Sin Recargo de Equivalencia
-        incluyeiva: '0'                  // pvpunitario NO incluye IVA
+        pvpunitario: pvpUnitarioBruto,   // Precio por unidad CON IVA
+        iva: ivaPct,                     // 4 | 10 | 21
+        recargo: 0,
+        incluyeiva: 1,                   // numérico (no '1' en string)
+        codimpuesto: impuestoCode        // 'IVA4' | 'IVA10' | 'IVA21'
       }
     ];
 

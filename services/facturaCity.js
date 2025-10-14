@@ -329,19 +329,14 @@ if (!codcliente) {
 
 
     // ===== Cabecera factura =====
-    const factura = {
+     const factura = {
       codcliente,
       lineas: JSON.stringify(lineas),
       pagada: 1,
       fecha: obtenerFechaHoy(),
       codserie: 'A',
-      // 🔑 Igual que cuando lo pones en “Por defecto”:
+      // ✅ único campo fiscal en cabecera que necesitamos
       codimpuesto: impuestoCode,   // 'IVA4' | 'IVA10' | 'IVA21'
-      ivaincluido: 0,              // precios NETOS
-      irpf: 0,
-      // (opcional pero ayuda a cuadrar): pistas de totales
-      neto: baseTotal.toFixed(2),
-      total: totalConIVA.toFixed(2),
       nombrecliente: `${datosCliente.nombre} ${datosCliente.apellidos}`,
       cifnif: datosCliente.dni,
       direccion: datosCliente.direccion || '',

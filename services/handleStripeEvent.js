@@ -416,9 +416,18 @@ if (event.type === 'invoice.paid') {
     const customerId = invoice.customer;
     const billingReason = invoice.billing_reason;
 
-    // Gate producción: solo alta y renovación; 'manual' siempre ignorado
-    const allowedReasons = new Set(['subscription_create', 'subscription_cycle']);
-    if (!allowedReasons.has(billingReason)) {
+    /**
+     * Gate de control para invoice.paid
+     * - Estado NORMAL (producción): solo 'subscription_create' y 'subscription_cycle'.
+     * - Modo PRUEBAS: permite además 'manual' ÚNICAMENTE si event.livemode === false
+     *   y se ha puesto ALLOW_MANUAL_IN_TEST=true en el entorno.
+     */
+    const ALLOW_MANUAL_IN_TEST = String(process.env.ALLOW_MANUAL_IN_TEST || 'false').toLowerCase() === 'true';
+    const isAllowedBillingReason =
+      billingReason === 'subscription_create' ||
+      billingReason === 'subscription_cycle' ||
+      (billingReason === 'manual' && event.livemode === false && ALLOW_MANUAL_IN_TEST);
+    if (!isAllowedBillingReason) {
       console.log(`⏭️ invoice.paid ignorada (billing_reason=${billingReason}, livemode=${event.livemode})`);
       return { ignored: true, reason: 'billing_reason_not_allowed' };
     }

@@ -20,7 +20,11 @@ function obtenerFechaHoy() {
 const { ensureOnce } = require('../utils/dedupe');
 
 const AXIOS_TIMEOUT = 10000; // 10s razonable
-const fcHeaders = { Token: FACTURACITY_API_KEY, 'Content-Type': 'application/x-www-form-urlencoded' };
+const fcHeaders = {
+  Token: FACTURACITY_API_KEY,
+  'Content-Type': 'application/x-www-form-urlencoded',
+  Accept: 'application/json'
+};
 
 // Helpers PII-safe (mismo criterio que procesarCompra)
 const hash12 = e => crypto.createHash('sha256').update(String(e || '').toLowerCase()).digest('hex').slice(0,12);
@@ -154,8 +158,8 @@ function trunc4(n) {
 // Detecta errores de cálculo en FacturaCity para probar variantes de payload sin duplicar facturas
 function isCalcError(err) {
   const msg = err?.response?.data?.message || err?.message || '';
-  // Ampliamos: algunos servers devuelven mensajes tipo "pvpunitario requerido" o "precio inválido"
-  return /calculat(e|ing)|calcular|pvp|precio|unitario|price/i.test(msg);
+  // Ampliamos heurística con textos típicos del backend
+  return /calculat(e|ing)|calcular|pvp|precio|unitario|price|descripcion|linea|línea|referenc|producto|not\s*found|requerid/i.test(msg);
 }
 
 async function crearFacturaEnFacturaCity(datosCliente) {
@@ -335,21 +339,31 @@ if (!codcliente) {
     // 4) Neto + porcentaje (tu variante previa)
     // 5) Neto + codimpuesto (tu variante previa)
     const variantes = [
+      // 1) Producto por referencia con auto-actualización de precio/IVA (neto)
       {
-        nombre: 'REF+QTY (actualizaprecios)',
-        header: { actualizaprecios: 1, recalcular: 1 },
-        line:   { referencia, cantidad: parseInt(cantidad,10) }
+        nombre: 'REF+QTY+NETO (auto)',
+        header: { actualizaprecios: 1, actualizarprecios: 1, recalcular: 1 },
+        line:   { referencia, descripcion, cantidad: parseInt(cantidad,10), pvpunitario: pvpUnitarioNeto, incluyeiva: 0 }
       },
+      // 2) Igual pero pasando bruto
       {
-        nombre: 'REF+QTY+NETO',
-        header: { actualizaprecios: 1, recalcular: 1 },
-        line:   { referencia, cantidad: parseInt(cantidad,10), pvpunitario: pvpUnitarioNeto,  incluyeiva: 0 }
+        nombre: 'REF+QTY+BRUTO (auto)',
+        header: { actualizaprecios: 1, actualizarprecios: 1, recalcular: 1 },
+        line:   { referencia, descripcion, cantidad: parseInt(cantidad,10), pvpunitario: pvpUnitarioBruto, incluyeiva: 1 }
       },
+      // 3) Solo referencia + cantidad (algunos setups lo aceptan)
       {
-        nombre: 'REF+QTY+BRUTO',
-        header: { actualizaprecios: 1, recalcular: 1 },
-        line:   { referencia, cantidad: parseInt(cantidad,10), pvpunitario: pvpUnitarioBruto, incluyeiva: 1 }
+        nombre: 'REF+QTY (auto sin pvp)',
+        header: { actualizaprecios: 1, actualizarprecios: 1, recalcular: 1 },
+        line:   { referencia, descripcion, cantidad: parseInt(cantidad,10) }
       },
+      // 4) Referencia con neto y codimpuesto en cabecera (por si el server lo exige)
+      {
+        nombre: 'REF+QTY+NETO (header codimpuesto)',
+        header: { codimpuesto: impuestoCode },
+        line:   { referencia, descripcion, cantidad: parseInt(cantidad,10), pvpunitario: pvpUnitarioNeto, incluyeiva: 0 }
+      },
+      // 5) Fallbacks originales
       {
         nombre: 'NETO+porcentaje',
         header: {},
@@ -379,7 +393,7 @@ if (!codcliente) {
     };
 
     // Intento secuencial con variantes (sin crear duplicados)
-    let facturaResp;
+    let facturaResp, lastErr;
     for (const v of variantes) {
       try {
         const factura = { ...facturaBase, ...(v.header || {}), lineas: JSON.stringify([v.line]) };
@@ -391,15 +405,21 @@ if (!codcliente) {
         );
         break; // éxito
       } catch (e) {
+        lastErr = e;
         if (isCalcError(e)) {
-          console.warn(`↻ Error de cálculo (${v.nombre}), probando siguiente variante…`);
+          const st = e?.response?.status || '-';
+          let body = e?.response?.data;
+          try { body = typeof body === 'string' ? body.slice(0,300) : JSON.stringify(body).slice(0,300); } catch {}
+          console.warn(`↻ Error de cálculo (${v.nombre}) [${st}] → ${body || '(sin cuerpo)'} → siguiente…`);
           continue;
         }
         throw e; // otros errores → salimos
       }
     }
-    if (!facturaResp) throw new Error('No se pudo crear la factura (todas las variantes fallaron)');
-
+    if (!facturaResp) {
+      const reason = lastErr?.response?.data?.message || lastErr?.message || 'todas las variantes fallaron';
+      throw new Error(`No se pudo crear la factura (${reason})`);
+    }
 
     if (process.env.NODE_ENV !== 'production') {
       console.log('📩 Respuesta crearFacturaCliente:', JSON.stringify(facturaResp.data, null, 2));

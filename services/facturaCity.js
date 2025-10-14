@@ -151,6 +151,12 @@ function trunc4(n) {
   return Math.floor(n * 10000) / 10000; // 4 decimales exactos
 }
 
+// Detecta errores de cálculo en FacturaCity para probar variantes de payload sin duplicar facturas
+function isCalcError(err) {
+  const msg = err?.response?.data?.message || err?.message || '';
+  return /calculat(e|ing)|calcular/i.test(msg);
+}
+
 async function crearFacturaEnFacturaCity(datosCliente) {
   try {
 // ✅ Kill-switch de duplicados FacturaCity
@@ -294,48 +300,43 @@ if (!codcliente) {
 
     // ===== Referencia/Descripción =====
     const descripcion = datosCliente.descripcionProducto || datosCliente.descripcion || datosCliente.producto;
-    // Referencias de producto creadas en FacturaCity:
-    // 1: Libro "De cara a la jubilación"  (IVA 4%)
-    // 2: Libro "Adelanta tu jubilación"   (IVA 4%)
-    // 3: Entrada evento presencial        (IVA 10%)
-    // 4: Cuota mensual club               (IVA 21% o el que tengas)
-    const nombreNorm = (datosCliente.nombreProducto || datosCliente.producto || '').toLowerCase();
-    let referencia = '1';
-    if (nombreNorm.includes('adelanta')) referencia = '2';
-    else if (tp === 'entrada' || nombreNorm.includes('entrada')) referencia = '3';
-    else if (tp === 'club' || nombreNorm.includes('club')) referencia = '4';
+    let referencia = 'OTRO001';
+    const nombreNorm = (datosCliente.nombreProducto || '').toLowerCase().replace(/\s+/g,' ').trim();
+    const esClub = /club laboroteca/.test(nombreNorm) || tp === 'club';
+    if (esClub) referencia = 'CLUB001';
+    else if (tp === 'libro') referencia = 'LIBRO001';
+    else if (tp === 'curso') referencia = 'CURSO001';
+    else if (tp === 'guia') referencia = 'GUIA001';
 
 
-    // ===== Cantidad =====
+    // ===== Cantidad y PRECIO UNITARIO NETO (SIN IVA) =====
     let cantidad = esEntrada ? parseInt(datosCliente.totalAsistentes || '1', 10) : 1;
     if (!Number.isFinite(cantidad) || cantidad < 1) cantidad = 1;
 
-    // ➕ Calcula el neto por unidad (4 decimales, string) para usarlo en la línea
-    const pvpUnitarioNeto = trunc4(baseTotal / cantidad).toFixed(4);
-    if (!Number.isFinite(Number(pvpUnitarioNeto))) {
-      throw new Error('pvpUnitarioNeto no es numérico');
-    }
+// Neto y bruto por unidad (4 decimales, string)
+    const pvpUnitarioNeto  = trunc4(baseTotal / cantidad).toFixed(4);
+    const pvpUnitarioBruto = trunc4(totalConIVA / cantidad).toFixed(4);
+    if (!Number.isFinite(Number(pvpUnitarioNeto)))  throw new Error('pvpUnitarioNeto no es numérico');
+    if (!Number.isFinite(Number(pvpUnitarioBruto))) throw new Error('pvpUnitarioBruto no es numérico');
 
-    // Enviamos NETO + impuesto en la línea (crearFacturaCliente no autocompleta desde referencia)
-    const lineas = [{
-      referencia,
-      descripcion,
-      cantidad,
-      pvpunitario: pvpUnitarioNeto, // string con punto y 4 decimales
-      incluyeiva: 0,                // precio neto
-      codimpuesto: impuestoCode,    // 'IVA4' | 'IVA10' | 'IVA21'
-      iva: ivaPct                   // 4 | 10 | 21 (opcional, pero ayuda)
-    }];
+    // Variantes de línea para robustez (evita conflictos iva/codimpuesto)
+    const variantesLinea = [
+      // A) NETO + incluyeiva=0 + iva (recomendado)
+      { referencia, descripcion, cantidad: parseInt(cantidad,10), pvpunitario: pvpUnitarioNeto,  incluyeiva: 0, iva: ivaPct, recargo: 0 },
+      // B) BRUTO + incluyeiva=1 + iva (algunos setups lo requieren)
+      { referencia, descripcion, cantidad: parseInt(cantidad,10), pvpunitario: pvpUnitarioBruto, incluyeiva: 1, iva: ivaPct, recargo: 0 },
+      // C) NETO + incluyeiva=0 + codimpuesto (por código del impuesto)
+      { referencia, descripcion, cantidad: parseInt(cantidad,10), pvpunitario: pvpUnitarioNeto,  incluyeiva: 0, codimpuesto: impuestoCode, recargo: 0 },
+    ];
 
 
     // ===== Cabecera factura =====
-     const factura = {
+     const facturaBase = {
       codcliente,
-      lineas: JSON.stringify(lineas),
       pagada: 1,
       fecha: obtenerFechaHoy(),
       codserie: 'A',
-      // No necesitamos flags de recálculo en crearFacturaCliente
+      // ⚠️ No enviamos codimpuesto en cabecera para evitar conflictos con la línea
       nombrecliente: `${datosCliente.nombre} ${datosCliente.apellidos}`,
       cifnif: datosCliente.dni,
       direccion: datosCliente.direccion || '',
@@ -344,12 +345,26 @@ if (!codcliente) {
       codpostal: datosCliente.cp || ''
     };
 
-    // ⚠️ Sin reintentos aquí para evitar facturas duplicadas si el 1er intento crea la factura
-    const facturaResp = await axios.post(
-      `${API_BASE}/crearFacturaCliente`,
-      qs.stringify(factura),
-      { headers: fcHeaders, timeout: AXIOS_TIMEOUT }
-    );
+    // Intento secuencial con variantes de línea SOLO si hay error de cálculo (sin crear duplicados)
+    let facturaResp;
+    for (const variante of variantesLinea) {
+      try {
+        const factura = { ...facturaBase, lineas: JSON.stringify([variante]) };
+        facturaResp = await axios.post(
+          `${API_BASE}/crearFacturaCliente`,
+          qs.stringify(factura),
+          { headers: fcHeaders, timeout: AXIOS_TIMEOUT }
+        );
+        break; // éxito
+      } catch (e) {
+        if (isCalcError(e)) {
+          console.warn('↻ Error de cálculo, probando siguiente variante de línea…');
+          continue;
+        }
+        throw e; // otros errores → salimos
+      }
+    }
+    if (!facturaResp) throw new Error('No se pudo crear la factura (todas las variantes fallaron)');
 
 
     if (process.env.NODE_ENV !== 'production') {

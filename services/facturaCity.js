@@ -310,9 +310,17 @@ if (!codcliente) {
     let cantidad = esEntrada ? parseInt(datosCliente.totalAsistentes || '1', 10) : 1;
     if (!Number.isFinite(cantidad) || cantidad < 1) cantidad = 1;
 
-    // Dejamos que FacturaCity tome precio e impuesto del producto (referencia).
-    // No enviamos pvpunitario/iva/codimpuesto para evitar inconsistencias.
-    const lineas = [{ referencia, cantidad }];
+
+    // Enviamos NETO + impuesto en la línea (crearFacturaCliente no autocompleta desde referencia)
+    const lineas = [{
+      referencia,
+      descripcion,
+      cantidad,
+      pvpunitario: pvpUnitarioNeto, // string con punto y 4 decimales
+      incluyeiva: 0,                // precio neto
+      codimpuesto: impuestoCode,    // 'IVA4' | 'IVA10' | 'IVA21'
+      iva: ivaPct                   // 4 | 10 | 21 (opcional, pero ayuda)
+    }];
 
 
     // ===== Cabecera factura =====
@@ -322,8 +330,7 @@ if (!codcliente) {
       pagada: 1,
       fecha: obtenerFechaHoy(),
       codserie: 'A',
-      // Pedimos que herede precio e impuesto desde el producto
-      actualizaprecios: 1,
+      // No necesitamos flags de recálculo en crearFacturaCliente
       nombrecliente: `${datosCliente.nombre} ${datosCliente.apellidos}`,
       cifnif: datosCliente.dni,
       direccion: datosCliente.direccion || '',

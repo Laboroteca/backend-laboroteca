@@ -294,38 +294,25 @@ if (!codcliente) {
 
     // ===== Referencia/Descripción =====
     const descripcion = datosCliente.descripcionProducto || datosCliente.descripcion || datosCliente.producto;
-    let referencia = 'OTRO001';
-    const nombreNorm = (datosCliente.nombreProducto || '').toLowerCase().replace(/\s+/g,' ').trim();
-    const esClub = /club laboroteca/.test(nombreNorm) || tp === 'club';
-    if (esClub) referencia = 'CLUB001';
-    else if (tp === 'libro') referencia = 'LIBRO001';
-    else if (tp === 'curso') referencia = 'CURSO001';
-    else if (tp === 'guia') referencia = 'GUIA001';
+    // Referencias de producto creadas en FacturaCity:
+    // 1: Libro "De cara a la jubilación"  (IVA 4%)
+    // 2: Libro "Adelanta tu jubilación"   (IVA 4%)
+    // 3: Entrada evento presencial        (IVA 10%)
+    // 4: Cuota mensual club               (IVA 21% o el que tengas)
+    const nombreNorm = (datosCliente.nombreProducto || datosCliente.producto || '').toLowerCase();
+    let referencia = '1';
+    if (nombreNorm.includes('adelanta')) referencia = '2';
+    else if (tp === 'entrada' || nombreNorm.includes('entrada')) referencia = '3';
+    else if (tp === 'club' || nombreNorm.includes('club')) referencia = '4';
 
 
-    // ===== Cantidad y PRECIO UNITARIO NETO (SIN IVA) =====
+    // ===== Cantidad =====
     let cantidad = esEntrada ? parseInt(datosCliente.totalAsistentes || '1', 10) : 1;
     if (!Number.isFinite(cantidad) || cantidad < 1) cantidad = 1;
 
-    // Neto por unidad = baseTotal / cantidad, 4 decimales (string)
-    const pvpUnitarioNeto = trunc4(baseTotal / cantidad).toFixed(4);
-    if (!Number.isFinite(Number(pvpUnitarioNeto))) {
-      throw new Error('pvpUnitarioNeto no es numérico');
-    }
-
-    // Enviar NETO + incluyeiva=0 + iva y codimpuesto (según contrato de la API)
-    const lineas = [
-      {
-        referencia,
-        descripcion,
-        cantidad: parseInt(cantidad, 10),
-        pvpunitario: pvpUnitarioNeto,     // "28.7500" (string, punto, 4 decimales)
-        iva: ivaPct,                      // 4 | 10 | 21 (entero)
-        recargo: 0,
-        incluyeiva: 0,                    // 0 = neto
-        codimpuesto: impuestoCode         // 'IVA4' | 'IVA10' | 'IVA21'
-      }
-    ];
+    // Dejamos que FacturaCity tome precio e impuesto del producto (referencia).
+    // No enviamos pvpunitario/iva/codimpuesto para evitar inconsistencias.
+    const lineas = [{ referencia, cantidad }];
 
 
     // ===== Cabecera factura =====
@@ -335,8 +322,8 @@ if (!codcliente) {
       pagada: 1,
       fecha: obtenerFechaHoy(),
       codserie: 'A',
-      // ✅ impuesto en cabecera (opcional; la línea tiene prioridad)
-      codimpuesto: impuestoCode,
+      // Pedimos que herede precio e impuesto desde el producto
+      actualizaprecios: 1,
       nombrecliente: `${datosCliente.nombre} ${datosCliente.apellidos}`,
       cifnif: datosCliente.dni,
       direccion: datosCliente.direccion || '',

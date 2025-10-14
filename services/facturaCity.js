@@ -303,26 +303,26 @@ if (!codcliente) {
     else if (tp === 'guia') referencia = 'GUIA001';
 
 
-    // ===== Cantidad y PRECIO UNITARIO BRUTO (CON IVA) =====
+    // ===== Cantidad y PRECIO UNITARIO NETO (SIN IVA) =====
     let cantidad = esEntrada ? parseInt(datosCliente.totalAsistentes || '1', 10) : 1;
     if (!Number.isFinite(cantidad) || cantidad < 1) cantidad = 1;
 
-    // Bruto por unidad = totalConIVA / cantidad, 4 decimales (string)
-    const pvpUnitarioBruto = trunc4(totalConIVA / cantidad).toFixed(4);
-    if (!Number.isFinite(Number(pvpUnitarioBruto))) {
-      throw new Error('pvpUnitarioBruto no es numérico');
+    // Neto por unidad = baseTotal / cantidad, 4 decimales (string)
+    const pvpUnitarioNeto = trunc4(baseTotal / cantidad).toFixed(4);
+    if (!Number.isFinite(Number(pvpUnitarioNeto))) {
+      throw new Error('pvpUnitarioNeto no es numérico');
     }
 
-    // ⚠️ Enviar BRUTO + incluyeiva=1 + iva correcto → FacturaCity desglosa siempre.
+    // Enviar NETO + incluyeiva=0 + iva y codimpuesto
     const lineas = [
       {
         referencia,
         descripcion,
         cantidad: parseInt(cantidad, 10),
-        pvpunitario: pvpUnitarioBruto,   // Precio por unidad CON IVA
+        pvpunitario: pvpUnitarioNeto,    // Precio por unidad SIN IVA
         iva: ivaPct,                     // 4 | 10 | 21
         recargo: 0,
-        incluyeiva: 1,                   // numérico (no '1' en string)
+        incluyeiva: 0,                   // número (sin comillas)
         codimpuesto: impuestoCode        // 'IVA4' | 'IVA10' | 'IVA21'
       }
     ];
@@ -335,8 +335,10 @@ if (!codcliente) {
       pagada: 1,
       fecha: obtenerFechaHoy(),
       codserie: 'A',
-      // ✅ único campo fiscal en cabecera que necesitamos
-      codimpuesto: impuestoCode,   // 'IVA4' | 'IVA10' | 'IVA21'
+      // ✅ impuesto en cabecera + pedir recálculo de totales
+      codimpuesto: impuestoCode,
+      recalcular: 1,               // <— clave para que el servidor calcule base/IVA/total
+      actualizaprecios: 1,         // ayuda a su motor a refrescar importes
       nombrecliente: `${datosCliente.nombre} ${datosCliente.apellidos}`,
       cifnif: datosCliente.dni,
       direccion: datosCliente.direccion || '',

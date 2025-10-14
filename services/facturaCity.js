@@ -8,6 +8,11 @@ const crypto = require('crypto');
 
 const FACTURACITY_API_KEY = process.env.FACTURACITY_API_KEY?.trim().replace(/"/g, '');
 const API_BASE = process.env.FACTURACITY_API_URL;
+// Empresas adicionales (10% y 21%)
+const FACTURACITY_API_KEY_10 = process.env.FACTURACITY_API_KEY_10?.trim().replace(/"/g, '');
+const API_BASE_10 = process.env.FACTURACITY_API_URL_10;
+const FACTURACITY_API_KEY_21 = process.env.FACTURACITY_API_KEY_21?.trim().replace(/"/g, '');
+const API_BASE_21 = process.env.FACTURACITY_API_URL_21;
 
 function obtenerFechaHoy() {
   const hoy = new Date();
@@ -20,11 +25,31 @@ function obtenerFechaHoy() {
 const { ensureOnce } = require('../utils/dedupe');
 
 const AXIOS_TIMEOUT = 10000; // 10s razonable
-const fcHeaders = {
-  Token: FACTURACITY_API_KEY,
-  'Content-Type': 'application/x-www-form-urlencoded',
-  Accept: 'application/json'
-};
+const fcHeaders = { Token: FACTURACITY_API_KEY, 'Content-Type': 'application/x-www-form-urlencoded' };
+
+// Normaliza la URL base: fuerza https y asegura sufijo /api/3
+function normalizeBase(u) {
+  if (!u) return u;
+  let out = String(u).trim().replace(/\/+$/, '');
+  if (!/\/api\/3$/.test(out)) out += '/api/3';
+  if (out.startsWith('http://')) out = 'https://' + out.slice(7);
+  return out;
+}
+
+// Selección de empresa/API por tipo de IVA
+function resolveFcEnvByImpuesto(impuestoCode) {
+  // Por defecto: empresa de 4% (libros)
+  let base = normalizeBase(API_BASE);
+  let token = FACTURACITY_API_KEY;
+  if (impuestoCode === 'IVA10' && API_BASE_10 && FACTURACITY_API_KEY_10) {
+    base = normalizeBase(API_BASE_10);
+    token = FACTURACITY_API_KEY_10;
+  } else if (impuestoCode === 'IVA21' && API_BASE_21 && FACTURACITY_API_KEY_21) {
+    base = normalizeBase(API_BASE_21);
+    token = FACTURACITY_API_KEY_21;
+  }
+  return { apiBase: base, headers: { Token: token, 'Content-Type': 'application/x-www-form-urlencoded' } };
+}
 
 // Helpers PII-safe (mismo criterio que procesarCompra)
 const hash12 = e => crypto.createHash('sha256').update(String(e || '').toLowerCase()).digest('hex').slice(0,12);
@@ -158,8 +183,7 @@ function trunc4(n) {
 // Detecta errores de cálculo en FacturaCity para probar variantes de payload sin duplicar facturas
 function isCalcError(err) {
   const msg = err?.response?.data?.message || err?.message || '';
-  // Ampliamos heurística con textos típicos del backend
-  return /calculat(e|ing)|calcular|pvp|precio|unitario|price|descripcion|linea|línea|referenc|producto|not\s*found|requerid/i.test(msg);
+  return /calculat(e|ing)|calcular/i.test(msg);
 }
 
 async function crearFacturaEnFacturaCity(datosCliente) {
@@ -181,8 +205,9 @@ if (dedupeId) {
 }
 
 
-    const maskedKey = FACTURACITY_API_KEY ? FACTURACITY_API_KEY.slice(-4).padStart(8, '•') : '(no definida)';
-    console.log('🔐 API KEY utilizada (mascarada):', maskedKey);
+    // La empresa/API concreta se decide más abajo tras conocer el impuesto
+    const maskedKey = (FACTURACITY_API_KEY ? FACTURACITY_API_KEY.slice(-4) : '').padStart(8, '•') || '(no definida)';
+    console.log('🔐 API KEY (empresa por defecto) utilizada (mascarada):', maskedKey);
 
 if (!API_BASE) {
   await alertAdmin({
@@ -205,7 +230,7 @@ if (!FACTURACITY_API_KEY) {
 
 
 
-    console.log('🌐 API URL utilizada:', API_BASE);
+    // (la URL efectiva se mostrará tras resolver el impuesto)
     if (process.env.NODE_ENV !== 'production') {
       console.log('🧾 Datos del cliente recibidos para facturar:', JSON.stringify(datosCliente, null, 2));
     } else {
@@ -239,6 +264,20 @@ if (!FACTURACITY_API_KEY) {
     const baseTotal = trunc4(totalConIVA / divisorIVA); // Mantener 4 decimales
     console.log('💶 Base imponible (truncada):', baseTotal.toFixed(4), '→ IVA:', impuestoCode, '→ Total con IVA:', totalConIVA.toFixed(2));
 
+    // Resolver empresa/API por impuesto
+    const { apiBase, headers: fcHeadersEff } = resolveFcEnvByImpuesto(impuestoCode);
+    if (!apiBase || !fcHeadersEff?.Token) {
+      await alertAdmin({
+        area: 'facturacity_config',
+        email: datosCliente?.email || '-',
+        err: new Error('API base o token no definidos para el IVA seleccionado'),
+        meta: { impuestoCode }
+      });
+      throw new Error('Configuración de API incompleta');
+    }
+    console.log('🌐 API URL utilizada (efectiva):', apiBase);
+
+
     // ===== Cliente =====
     const cliente = {
       nombre: `${datosCliente.nombre} ${datosCliente.apellidos}`,
@@ -256,9 +295,9 @@ if (!FACTURACITY_API_KEY) {
     };
 
     const clienteResp = await retry(() => axios.post(
-      `${API_BASE}/clientes`,
+      `${apiBase}/clientes`,
       qs.stringify(cliente),
-      { headers: fcHeaders, timeout: AXIOS_TIMEOUT }
+      { headers: fcHeadersEff, timeout: AXIOS_TIMEOUT }
     ));
 
     const codcliente =
@@ -291,9 +330,9 @@ if (!codcliente) {
         email: datosCliente.email
       };
       await retry(() => axios.post(
-        `${API_BASE}/direccionescliente`,
+        `${apiBase}/direccionescliente`,
         qs.stringify(direccionFiscal),
-        { headers: fcHeaders, timeout: AXIOS_TIMEOUT }
+        { headers: fcHeadersEff, timeout: AXIOS_TIMEOUT }
       ));
 
       console.log(`🏠 Dirección fiscal añadida para codcliente=${codcliente} email=${redactEmail(datosCliente.email)}`);
@@ -305,25 +344,17 @@ if (!codcliente) {
 
     // ===== Referencia/Descripción =====
     const descripcion = datosCliente.descripcionProducto || datosCliente.descripcion || datosCliente.producto;
-    // Preferimos una referencia explícita recibida desde procesarCompra/catálogo
-    // (p.ej., "1" | "2" | "3" | "4" como en tu panel) y si no, mapeamos por tipo/nombre.
+    let referencia = 'OTRO001';
     const nombreNorm = (datosCliente.nombreProducto || '').toLowerCase().replace(/\s+/g,' ').trim();
-    let referencia =
-      (datosCliente.fcReferencia || datosCliente.referenciaProducto || datosCliente.referencia || '').toString().trim();
-    if (!referencia) {
-      if (/club laboroteca|cuota mensual club/.test(nombreNorm) || tp === 'club') referencia = '4';
-      else if (/entrada/.test(nombreNorm) || tp === 'entrada') referencia = '3';
-      else if (/adelanta tu jubil/.test(nombreNorm)) referencia = '2';
-      else if (/de cara a la jubil/.test(nombreNorm) || tp === 'libro') referencia = '1';
-      else referencia = 'OTRO001'; // fallback genérico si no hay match
-    }
+    const esClub = /club laboroteca/.test(nombreNorm) || tp === 'club';
+    if (esClub) referencia = 'CLUB001';
+    else if (tp === 'libro') referencia = 'LIBRO001';
+    else if (tp === 'curso') referencia = 'CURSO001';
+    else if (tp === 'guia') referencia = 'GUIA001';
 
 
     // ===== Cantidad y PRECIO UNITARIO NETO (SIN IVA) =====
-    // Cantidad prioriza valores explícitos (fcCantidad/cantidad), luego asistentes si es entrada.
-    let cantidad = Number.isFinite(Number(datosCliente.fcCantidad)) ? Number(datosCliente.fcCantidad)
-                : Number.isFinite(Number(datosCliente.cantidad))    ? Number(datosCliente.cantidad)
-                : (esEntrada ? parseInt(datosCliente.totalAsistentes || '1', 10) : 1);
+    let cantidad = esEntrada ? parseInt(datosCliente.totalAsistentes || '1', 10) : 1;
     if (!Number.isFinite(cantidad) || cantidad < 1) cantidad = 1;
 
 // Neto y bruto por unidad (4 decimales, string)
@@ -332,48 +363,12 @@ if (!codcliente) {
     if (!Number.isFinite(Number(pvpUnitarioNeto)))  throw new Error('pvpUnitarioNeto no es numérico');
     if (!Number.isFinite(Number(pvpUnitarioBruto))) throw new Error('pvpUnitarioBruto no es numérico');
 
-    // ── Variantes de línea para probar "producto predefinido" por referencia ──
-    // 1) Solo referencia + cantidad → que coja precio/IVA del producto (requiere actualizaprecios a nivel cabecera)
-    // 2) Referencia + cantidad + pvp NETO (por si exige precio)
-    // 3) Referencia + cantidad + pvp BRUTO (algunas instalaciones lo esperan así)
-    // 4) Neto + porcentaje (tu variante previa)
-    // 5) Neto + codimpuesto (tu variante previa)
-    const variantes = [
-      // 1) Producto por referencia con auto-actualización de precio/IVA (neto)
-      {
-        nombre: 'REF+QTY+NETO (auto)',
-        header: { actualizaprecios: 1, actualizarprecios: 1, recalcular: 1 },
-        line:   { referencia, descripcion, cantidad: parseInt(cantidad,10), pvpunitario: pvpUnitarioNeto, incluyeiva: 0 }
-      },
-      // 2) Igual pero pasando bruto
-      {
-        nombre: 'REF+QTY+BRUTO (auto)',
-        header: { actualizaprecios: 1, actualizarprecios: 1, recalcular: 1 },
-        line:   { referencia, descripcion, cantidad: parseInt(cantidad,10), pvpunitario: pvpUnitarioBruto, incluyeiva: 1 }
-      },
-      // 3) Solo referencia + cantidad (algunos setups lo aceptan)
-      {
-        nombre: 'REF+QTY (auto sin pvp)',
-        header: { actualizaprecios: 1, actualizarprecios: 1, recalcular: 1 },
-        line:   { referencia, descripcion, cantidad: parseInt(cantidad,10) }
-      },
-      // 4) Referencia con neto y codimpuesto en cabecera (por si el server lo exige)
-      {
-        nombre: 'REF+QTY+NETO (header codimpuesto)',
-        header: { codimpuesto: impuestoCode },
-        line:   { referencia, descripcion, cantidad: parseInt(cantidad,10), pvpunitario: pvpUnitarioNeto, incluyeiva: 0 }
-      },
-      // 5) Fallbacks originales
-      {
-        nombre: 'NETO+porcentaje',
-        header: {},
-        line:   { referencia, descripcion, cantidad: parseInt(cantidad,10), pvpunitario: pvpUnitarioNeto, incluyeiva: 0, porcentaje: ivaPct, recargo: 0 }
-      },
-      {
-        nombre: 'NETO+codimpuesto',
-        header: { codimpuesto: impuestoCode },
-        line:   { referencia, descripcion, cantidad: parseInt(cantidad,10), pvpunitario: pvpUnitarioNeto, incluyeiva: 0, codimpuesto: impuestoCode, recargo: 0 }
-      }
+    // Variantes de línea (sin BRUTO). FacturaCity acepta 'porcentaje' mejor que 'iva'
+    const variantesLinea = [
+      // A) NETO + incluyeiva=0 + porcentaje (preferido)
+      { referencia, descripcion, cantidad: parseInt(cantidad,10), pvpunitario: pvpUnitarioNeto,  incluyeiva: 0, porcentaje: ivaPct, recargo: 0 },
+      // B) NETO + incluyeiva=0 + codimpuesto (plan B)
+      { referencia, descripcion, cantidad: parseInt(cantidad,10), pvpunitario: pvpUnitarioNeto,  incluyeiva: 0, codimpuesto: impuestoCode, recargo: 0 },
     ];
 
 
@@ -383,7 +378,8 @@ if (!codcliente) {
       pagada: 1,
       fecha: obtenerFechaHoy(),
       codserie: 'A',
-      // No fijamos codimpuesto por defecto: cada variante puede añadirlo en header si procede
+      // Enviamos codimpuesto en cabecera para activar el cálculo cuando NO hay impuesto por defecto
+      codimpuesto: impuestoCode,
       nombrecliente: `${datosCliente.nombre} ${datosCliente.apellidos}`,
       cifnif: datosCliente.dni,
       direccion: datosCliente.direccion || '',
@@ -392,34 +388,27 @@ if (!codcliente) {
       codpostal: datosCliente.cp || ''
     };
 
-    // Intento secuencial con variantes (sin crear duplicados)
-    let facturaResp, lastErr;
-    for (const v of variantes) {
+    // Intento secuencial con variantes de línea SOLO si hay error de cálculo (sin crear duplicados)
+    let facturaResp;
+    for (const variante of variantesLinea) {
       try {
-        const factura = { ...facturaBase, ...(v.header || {}), lineas: JSON.stringify([v.line]) };
-        console.log(`🧪 Intento crearFacturaCliente variante="${v.nombre}" ref=${referencia} qty=${cantidad}`);
+        const factura = { ...facturaBase, lineas: JSON.stringify([variante]) };
         facturaResp = await axios.post(
-          `${API_BASE}/crearFacturaCliente`,
+          `${apiBase}/crearFacturaCliente`,
           qs.stringify(factura),
-          { headers: fcHeaders, timeout: AXIOS_TIMEOUT }
+          { headers: fcHeadersEff, timeout: AXIOS_TIMEOUT }
         );
         break; // éxito
       } catch (e) {
-        lastErr = e;
         if (isCalcError(e)) {
-          const st = e?.response?.status || '-';
-          let body = e?.response?.data;
-          try { body = typeof body === 'string' ? body.slice(0,300) : JSON.stringify(body).slice(0,300); } catch {}
-          console.warn(`↻ Error de cálculo (${v.nombre}) [${st}] → ${body || '(sin cuerpo)'} → siguiente…`);
+          console.warn('↻ Error de cálculo, probando siguiente variante de línea…');
           continue;
         }
         throw e; // otros errores → salimos
       }
     }
-    if (!facturaResp) {
-      const reason = lastErr?.response?.data?.message || lastErr?.message || 'todas las variantes fallaron';
-      throw new Error(`No se pudo crear la factura (${reason})`);
-    }
+    if (!facturaResp) throw new Error('No se pudo crear la factura (todas las variantes fallaron)');
+
 
     if (process.env.NODE_ENV !== 'production') {
       console.log('📩 Respuesta crearFacturaCliente:', JSON.stringify(facturaResp.data, null, 2));
@@ -473,10 +462,10 @@ if (!codcliente) {
     });
 
 
-    const pdfUrl = `${API_BASE}/exportarFacturaCliente/${idfactura}?lang=es_ES`;
+    const pdfUrl = `${apiBase}/exportarFacturaCliente/${idfactura}?lang=es_ES`;
     const pdfResponse = await retry(() => axios.get(
       pdfUrl,
-      { headers: { Token: FACTURACITY_API_KEY }, responseType: 'arraybuffer', timeout: AXIOS_TIMEOUT }
+      { headers: { Token: fcHeadersEff.Token }, responseType: 'arraybuffer', timeout: AXIOS_TIMEOUT }
     ));
 
 

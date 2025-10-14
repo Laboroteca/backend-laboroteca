@@ -226,7 +226,7 @@ if (!FACTURACITY_API_KEY) {
     const tp = (datosCliente.tipoProducto || '').toLowerCase();
     const esLibro   = tp === 'libro' || /libro/.test(String(datosCliente.producto || datosCliente.nombreProducto || '').toLowerCase());
     const esEntrada = tp === 'entrada';
-    const impuestoCode = esEntrada ? 'IVA10' : (esLibro ? 'IVA4' : 'IVA21');
+    const impuestoCode = esEntrada ? 'IVA10' : (esLibro ? 'IVA4' : 'IVA21'); // ajusta aquí si tus entradas van al 21%
     const divisorIVA   = impuestoCode === 'IVA10' ? 1.10 : (impuestoCode === 'IVA4' ? 1.04 : 1.21);
     const ivaPct       = (impuestoCode === 'IVA10') ? 10 : (impuestoCode === 'IVA4') ? 4 : 21;
 
@@ -319,13 +319,11 @@ if (!codcliente) {
     if (!Number.isFinite(Number(pvpUnitarioNeto)))  throw new Error('pvpUnitarioNeto no es numérico');
     if (!Number.isFinite(Number(pvpUnitarioBruto))) throw new Error('pvpUnitarioBruto no es numérico');
 
-    // Variantes de línea para robustez (evita conflictos iva/codimpuesto)
+    // Variantes de línea (sin BRUTO). FacturaCity acepta 'porcentaje' mejor que 'iva'
     const variantesLinea = [
-      // A) NETO + incluyeiva=0 + iva (recomendado)
-      { referencia, descripcion, cantidad: parseInt(cantidad,10), pvpunitario: pvpUnitarioNeto,  incluyeiva: 0, iva: ivaPct, recargo: 0 },
-      // B) BRUTO + incluyeiva=1 + iva (algunos setups lo requieren)
-      { referencia, descripcion, cantidad: parseInt(cantidad,10), pvpunitario: pvpUnitarioBruto, incluyeiva: 1, iva: ivaPct, recargo: 0 },
-      // C) NETO + incluyeiva=0 + codimpuesto (por código del impuesto)
+      // A) NETO + incluyeiva=0 + porcentaje (preferido)
+      { referencia, descripcion, cantidad: parseInt(cantidad,10), pvpunitario: pvpUnitarioNeto,  incluyeiva: 0, porcentaje: ivaPct, recargo: 0 },
+      // B) NETO + incluyeiva=0 + codimpuesto (plan B)
       { referencia, descripcion, cantidad: parseInt(cantidad,10), pvpunitario: pvpUnitarioNeto,  incluyeiva: 0, codimpuesto: impuestoCode, recargo: 0 },
     ];
 
@@ -336,7 +334,8 @@ if (!codcliente) {
       pagada: 1,
       fecha: obtenerFechaHoy(),
       codserie: 'A',
-      // ⚠️ No enviamos codimpuesto en cabecera para evitar conflictos con la línea
+      // Enviamos codimpuesto en cabecera para activar el cálculo cuando NO hay impuesto por defecto
+      codimpuesto: impuestoCode,
       nombrecliente: `${datosCliente.nombre} ${datosCliente.apellidos}`,
       cifnif: datosCliente.dni,
       direccion: datosCliente.direccion || '',

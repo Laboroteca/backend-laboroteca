@@ -335,6 +335,13 @@ if (!codcliente) {
       pagada: 1,
       fecha: obtenerFechaHoy(),
       codserie: 'A',
+      // 🔑 Igual que cuando lo pones en “Por defecto”:
+      codimpuesto: impuestoCode,   // 'IVA4' | 'IVA10' | 'IVA21'
+      ivaincluido: 0,              // precios NETOS
+      irpf: 0,
+      // (opcional pero ayuda a cuadrar): pistas de totales
+      neto: baseTotal.toFixed(2),
+      total: totalConIVA.toFixed(2),
       nombrecliente: `${datosCliente.nombre} ${datosCliente.apellidos}`,
       cifnif: datosCliente.dni,
       direccion: datosCliente.direccion || '',

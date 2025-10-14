@@ -310,6 +310,11 @@ if (!codcliente) {
     let cantidad = esEntrada ? parseInt(datosCliente.totalAsistentes || '1', 10) : 1;
     if (!Number.isFinite(cantidad) || cantidad < 1) cantidad = 1;
 
+    // ➕ Calcula el neto por unidad (4 decimales, string) para usarlo en la línea
+    const pvpUnitarioNeto = trunc4(baseTotal / cantidad).toFixed(4);
+    if (!Number.isFinite(Number(pvpUnitarioNeto))) {
+      throw new Error('pvpUnitarioNeto no es numérico');
+    }
 
     // Enviamos NETO + impuesto en la línea (crearFacturaCliente no autocompleta desde referencia)
     const lineas = [{

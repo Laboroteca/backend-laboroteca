@@ -313,17 +313,17 @@ if (!codcliente) {
       throw new Error('pvpUnitarioNeto no es numérico');
     }
 
-    // Enviar NETO + incluyeiva=0 + iva y codimpuesto
+    // Enviar NETO + incluyeiva=0 + iva y codimpuesto (según contrato de la API)
     const lineas = [
       {
         referencia,
         descripcion,
         cantidad: parseInt(cantidad, 10),
-        pvpunitario: pvpUnitarioNeto,    // Precio por unidad SIN IVA
-        iva: ivaPct,                     // 4 | 10 | 21
+        pvpunitario: pvpUnitarioNeto,     // "28.7500" (string, punto, 4 decimales)
+        iva: ivaPct,                      // 4 | 10 | 21 (entero)
         recargo: 0,
-        incluyeiva: 0,                   // número (sin comillas)
-        codimpuesto: impuestoCode        // 'IVA4' | 'IVA10' | 'IVA21'
+        incluyeiva: 0,                    // 0 = neto
+        codimpuesto: impuestoCode         // 'IVA4' | 'IVA10' | 'IVA21'
       }
     ];
 
@@ -335,10 +335,8 @@ if (!codcliente) {
       pagada: 1,
       fecha: obtenerFechaHoy(),
       codserie: 'A',
-      // ✅ impuesto en cabecera + pedir recálculo de totales
+      // ✅ impuesto en cabecera (opcional; la línea tiene prioridad)
       codimpuesto: impuestoCode,
-      recalcular: 1,               // <— clave para que el servidor calcule base/IVA/total
-      actualizaprecios: 1,         // ayuda a su motor a refrescar importes
       nombrecliente: `${datosCliente.nombre} ${datosCliente.apellidos}`,
       cifnif: datosCliente.dni,
       direccion: datosCliente.direccion || '',

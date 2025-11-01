@@ -51,6 +51,7 @@ const { URL } = require('url');
 const { google } = require('googleapis');
 const fetch   = require('node-fetch');
 const { alertAdminProxy: alertAdmin } = require('../utils/alertAdminProxy');
+const { registrarConsentimiento } = require('../utils/consentLogs');
 
 const router = express.Router();
 
@@ -843,6 +844,29 @@ router.post('/consent', async (req, res) => {
         console.warn('Sheets upsert warn:', e?.message || e);
         try { await alertAdmin({ area:'newsletter_sheets_warn', email, err: e, meta:{} }); } catch {}
       });
+
+    // Log PRIVACIDAD (best-effort, no bloquea)
+    (async () => {
+      try {
+        const acceptedPrivacy =
+          toBool(req.body?.acepto_privacidad) ||
+          toBool(req.body?.privacy) ||
+          toBool(req.body?.checkbox);
+        if (acceptedPrivacy) {
+          const idx = sha256Hex(`${email}.${tsISO}`).slice(0,16);
+          await registrarConsentimiento({
+            email, nombre,
+            formularioId, source: sourceForm,
+            userAgent: ua, ip: ipAddr,
+            acceptedAt: tsISO,
+            checkboxes: { privacy: true, terms: false },
+            privacyUrl: 'https://www.laboroteca.es/politica-de-privacidad-de-datos/',
+            privacyVersion: 'v1.1',
+            idx
+          });
+        }
+      } catch (_) {}
+    })();
 
     // Email de bienvenida (best-effort, no bloquea)
     (async () => {

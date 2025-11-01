@@ -14,7 +14,8 @@ const { alertAdminProxy: alertAdmin } = require('./alertAdminProxy');
 
 // ───────────────────────────── Config ─────────────────────────────
 const BUCKET_NAME =
-  (process.env.GCS_CONSENTS_BUCKET ||
+  (process.env.GOOGLE_CLOUD_BUCKET ||
+   process.env.GCS_CONSENTS_BUCKET ||
    process.env.GCS_BUCKET ||
    process.env.GCLOUD_STORAGE_BUCKET ||
    '').trim();
@@ -246,16 +247,12 @@ function isRegistrationFlow(data) {
 async function registrarConsentimiento(payload) {
   const data = normalizeInput(payload);
 
-  // 🚫 Ignorar newsletter / preferencias marketing (form 45)
-  if (payload?.skipConsentLogs === 1 || payload?.skipConsentLogs === '1' ||
-      String(data.formularioId) === '45' ||
-      (data.source || '').toLowerCase().includes('preferencias_marketing')) {
-    return {
-      docId: null,
-      privacyBlobPath: '',
-      termsBlobPath: '',
-      skipped: true
-    };
+  // 🚫 Ignorar newsletter (form 45) salvo si viene PRIVACIDAD
+  const isNews45 = String(data.formularioId) === '45' ||
+                   (data.source || '').toLowerCase().includes('preferencias_marketing');
+  if ((payload?.skipConsentLogs === 1 || payload?.skipConsentLogs === '1') ||
+      (isNews45 && !data.privacyUrl)) {
+    return { docId:null, privacyBlobPath:'', termsBlobPath:'', skipped:true };
   }
 
   // Política siempre; T&C sólo si NO es registro y hay datos.

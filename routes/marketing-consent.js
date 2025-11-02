@@ -852,20 +852,29 @@ router.post('/consent', async (req, res) => {
           toBool(req.body?.acepto_privacidad) ||
           toBool(req.body?.privacy) ||
           toBool(req.body?.checkbox);
-        if (acceptedPrivacy) {
-          const idx = sha256Hex(`${email}.${tsISO}`).slice(0,16);
-          await registrarConsentimiento({
-            email, nombre,
-            formularioId, source: sourceForm,
-            userAgent: ua, ip: ipAddr,
-            acceptedAt: tsISO,
-            checkboxes: { privacy: true, terms: false },
-            privacyUrl: 'https://www.laboroteca.es/politica-de-privacidad-de-datos/',
-            privacyVersion: 'v1.1',
-            idx
-          });
-        }
-      } catch (_) {}
+        if (!acceptedPrivacy) return;
+
+        // Tomar versión/URL desde el form 45 (hidden consentData / consentDataPrivacy / consentNewsletter)
+        let cdP = {};
+        try {
+          const raw = req.body?.consentDataPrivacy ?? req.body?.consentData ?? req.body?.consentNewsletter;
+          cdP = typeof raw === 'string' ? JSON.parse(raw) : (raw || {});
+        } catch { cdP = {}; }
+        const privUrl = s(cdP.privacyUrl, process.env.PRIVACY_URL_FALLBACK || 'https://www.laboroteca.es/politica-de-privacidad-de-datos/');
+        const privVer = s(cdP.privacyVersion, process.env.PRIVACY_VERSION_FALLBACK || '2025-08-27');
+
+        const idx = sha256Hex(`${email}.${tsISO}`).slice(0,16);
+        await registrarConsentimiento({
+          email, nombre,
+          formularioId, source: sourceForm,
+          userAgent: ua, ip: ipAddr,
+          acceptedAt: tsISO,
+          checkboxes: { privacy: true, terms: false },
+          privacyUrl: privUrl,
+          privacyVersion: privVer,
+          idx
+        });
+      } catch {}
     })();
 
     // Email de bienvenida (best-effort, no bloquea)

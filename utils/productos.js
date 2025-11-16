@@ -78,13 +78,13 @@ const PRODUCTOS = {
     activar_membresia: true,
     // Canónicos
     memberpressId: 11006,
-    priceId: 'price_1SD85rEe6Cd77jeneemDMvJb',
-    precio: 39.90,
+    priceId: 'price_1SUF4xEe6Cd77jenj0NdQNSo',
+    precio: 34.90,
     // Compat legacy
     membership_id: 11006,
-    price_id: 'price_1SD85rEe6Cd77jeneemDMvJb',
-    imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/06/adelantar-la-jubilacion-IGNACIO-SOLSONA-scaled.webp',
-    precio_cents: 3990, // informativo/compat
+    price_id: 'price_1SUF4xEe6Cd77jenj0NdQNSo',
+    imagen: 'https://www.laboroteca.es/wp-content/uploads/2025/11/portada-libro-adelanta-tu-jubilacion-ignacio-solsona-scaled.webp',
+    precio_cents: 3490, // informativo/compat
     descripcion_factura: 'Libro digital (acceso vitalicio): "Adelanta tu jubilación".',
     aliases: [
       'adelanta tu jubilacion',
@@ -98,7 +98,7 @@ const PRODUCTOS = {
       // mp_api_url: 'https://www.laboroteca.es/wp-json/laboroteca/v1/libro-membership'
     },
     // Enlace para reseñas (habilita envío del cron)
-    enlaceResenas: 'https://www.laboroteca.es/libro-adelanta-tu-jubilacion-ignacio-solsona/'
+    enlaceResenas: 'https://www.laboroteca.es/comprar-libro-adelanta-tu-jubilacion-ignacio-solsona/'
   },
 
 

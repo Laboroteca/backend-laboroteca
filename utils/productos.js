@@ -101,6 +101,46 @@ const PRODUCTOS = {
     enlaceResenas: 'https://www.laboroteca.es/comprar-libro-adelanta-tu-jubilacion-ignacio-solsona/'
   },
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // ✅ Nuevo: Libro "Subsidio mayores de 52" (pago único) con activación de membresía
+  // ─────────────────────────────────────────────────────────────────────────────
+  'libro-subsidio-mayores-de-52': {
+    slug: 'libro-subsidio-mayores-de-52',
+    nombre: 'Libro digital. Subsidio mayores de 52',
+    descripcion: 'Libro digital con acceso vitalicio. Subsidio mayores de 52.',
+    tipo: 'libro',
+    es_recurrente: false,
+    activar_membresia: true,
+    // Canónicos
+    memberpressId: 14763,
+    priceId: 'price_1TEDZFEe6Cd77jenoK3RwehV',
+    precio: 34.90,
+    // Compat legacy
+    membership_id: 14763,
+    price_id: 'price_1TEDZFEe6Cd77jenoK3RwehV',
+    imagen: 'https://www.laboroteca.es/wp-content/uploads/2026/03/libro-subsidio-ignacio-solsona-laboroteca-scaled.webp',
+    precio_cents: 3490,
+    descripcion_factura: 'Libro digital (acceso vitalicio): "Subsidio mayores de 52".',
+    aliases: [
+      'subsidio mayores de 52',
+      'subsidio mayor de 52',
+      'subsidio + 52',
+      'subsidio 52',
+      'libro subsidio mayores de 52',
+      'libro subsidio + 52',
+      'libro subsidio 52',
+      'libro digital subsidio mayores de 52',
+      'libro digital. subsidio mayores de 52',
+      'subsidio mayores de 52. libro digital con acceso vitalicio',
+      'subsidio + 52. libro digital con acceso vitalicio'
+    ],
+    caducidadDias: null,
+    meta: {
+      gcs_folder: 'facturas/libros/subsidio-mayores-de-52'
+    },
+    enlaceResenas: 'https://www.laboroteca.es/comprar-libro-subsidio-mayores-52-ignacio-solsona/'
+  },
+
 
   // ─────────────────────────────────────────────────────────────────────────────
   // ✅ Nuevo: Libro "Conoce y protege tus derechos laborales" (pago único)
@@ -364,6 +404,7 @@ const MEMBERPRESS_IDS = {
   'el-club-laboroteca': 10663,
   'de-cara-a-la-jubilacion': 7994,
   'adelanta-tu-jubilacion': 11006,
+  'libro-subsidio-mayores-de-52': 14763,
   'libro-conoce-y-protege-tus-derechos-laborales': 11418
 };
 

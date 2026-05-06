@@ -131,7 +131,9 @@ const PRODUCTOS = {
       'libro subsidio 52',
       'libro digital subsidio mayores de 52',
       'libro digital. subsidio mayores de 52',
+      'libro digital acceso vitalicio subsidio mayores de 52',
       'subsidio mayores de 52. libro digital con acceso vitalicio',
+      'libro subsidio mayores de 52. edición digital. membresía con acceso vitalicio',
       'subsidio + 52. libro digital con acceso vitalicio'
     ],
     caducidadDias: null,
@@ -312,6 +314,14 @@ function normalizarProducto(nombreProducto = '', tipoProducto = '') {
   if (nombre.includes('entrada')) return 'entrada-evento';
   if (nombre.includes('de cara a la jubilacion')) return 'de-cara-a-la-jubilacion';
   if (nombre.includes('adelanta tu jubilacion')) return 'adelanta-tu-jubilacion';
+  if (
+    nombre.includes('subsidio mayores de 52') ||
+    nombre.includes('subsidio mayor de 52') ||
+    nombre.includes('subsidio 52') ||
+    nombre.includes('subsidio + 52')
+  ) {
+    return 'libro-subsidio-mayores-de-52';
+  }
   if (nombre.includes('conoce y defiende tus derechos laborales')) return 'libro-conoce-y-protege-tus-derechos-laborales';
   if (nombre.includes('conoce y protege tus derechos laborales')) return 'libro-conoce-y-protege-tus-derechos-laborales';
   if (nombre.includes('tus derechos laborales')) return 'libro-conoce-y-protege-tus-derechos-laborales';
@@ -343,8 +353,20 @@ function resolverProducto(meta = {}, lineItems = []) {
     return PRODUCTOS[INDEX_BY_PRICE[liPrice]];
   }
 
-  // Intento por nombre/tipo
-  const slug = normalizarProducto(meta.nombreProducto, meta.tipoProducto);
+  // Intento por nombre/tipo y descripción.
+  // Importante: algunos formularios identifican mejor el producto en descripcionProducto.
+  const slug =
+    normalizarProducto(meta.nombreProducto, meta.tipoProducto) ||
+    normalizarProducto(meta.descripcionProducto, meta.tipoProducto) ||
+    normalizarProducto(
+      [
+        meta.nombreProducto,
+        meta.descripcionProducto,
+        meta.tipoProducto
+      ].filter(Boolean).join(' '),
+      meta.tipoProducto
+    );
+
   if (slug && PRODUCTOS[slug]) return PRODUCTOS[slug];
 
   return null; // sin match inequívoco

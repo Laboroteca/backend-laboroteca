@@ -227,19 +227,31 @@ async function trySendOnce({ email, nombre, producto, slug, subject, variant, so
     for (const row of ventas) {
       try {
         stats.ventas_checked++;
-        const win = inWindow(row.fecha);
-        if (!win.ok) {
-          if (win.diff === null) {
-            stats.invalid_dates++;
-            console.warn(`[ventas] Fecha inválida fila ${row._row}: "${row.fecha}"`);
-          } else {
-            // fuera de ventana
-          }
-          stats.omitidos++; continue;
-        }
-
         const slug = normalizarProducto(row.desc, 'libro');
-        const producto = slug ? getProducto(slug) : null;
+const producto = slug ? getProducto(slug) : null;
+
+// PARCHE TEMPORAL SUBSIDIO +52: enviar solo a compradores del 23/03/2026 al 30/04/2026
+if (slug !== 'libro-subsidio-mayores-de-52') {
+  stats.omitidos++;
+  continue;
+}
+
+const fechaCompra = parseSheetDate(row.fecha);
+
+if (!fechaCompra.isValid()) {
+  stats.invalid_dates++;
+  console.warn(`[ventas/subsidio] Fecha inválida fila ${row._row}: "${row.fecha}"`);
+  stats.omitidos++;
+  continue;
+}
+
+const inicioBackfill = dayjs.tz('23/03/2026', 'DD/MM/YYYY', TZ).startOf('day');
+const finBackfill = dayjs.tz('30/04/2026', 'DD/MM/YYYY', TZ).endOf('day');
+
+if (fechaCompra.isBefore(inicioBackfill) || fechaCompra.isAfter(finBackfill)) {
+  stats.omitidos++;
+  continue;
+}
 
         if (!producto) {
           stats.omapped++;

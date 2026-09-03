@@ -105,7 +105,7 @@ router.post('/registrar-consentimiento', async (req, res) => {
     const privacyUrl = pick(body, cd, ['privacyUrl'], process.env.PRIVACY_URL_FALLBACK || 'https://www.laboroteca.es/politica-de-privacidad-de-datos/');
 
     const termsVersion   = pick(body, cd, ['termsVersion'],   process.env.TERMS_VERSION_FALLBACK   || '2026-04-10');
-    const privacyVersion = pick(body, cd, ['privacyVersion'], process.env.PRIVACY_VERSION_FALLBACK || '2025-08-27');
+    const privacyVersion = pick(body, cd, ['privacyVersion'], process.env.PRIVACY_VERSION_FALLBACK || '2026-09-03');
 
     // Checkboxes (admite "checkbox" simple como privacy)
     const checkboxesIn = (body.checkboxes ?? cd.checkboxes ?? {});
